@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pbuild-ai"
+version = "0.1.0"
+description = "RPM packager helper with Ollama AI"
+requires-python = ">=3.10"
+
+[project.scripts]
+pbuild-ai = "pbuild_ai.pbuild_ai:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pbuild_ai", "pbuild_ai.skills"]
+
+[tool.setuptools.package-data]
+"pbuild_ai.skills" = ["*.md"]

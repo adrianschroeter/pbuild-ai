@@ -1,0 +1,6 @@
+#!/bin/bash
+
+# just for running directly from git
+# not for installation
+
+exec env PYTHONPATH="$(cd "$(dirname "$0")/src" && pwd)" python3 -m pbuild_ai.pbuild_ai "$@"
