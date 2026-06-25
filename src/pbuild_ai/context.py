@@ -26,7 +26,7 @@ class PbuildContext:
     root_dir: Optional[str] = None
     package_filter: Optional[str] = None
     fix_mode: bool = False
-    show_log: bool = False
+    show_buildlog: bool = False
     project_mode: bool = False
     do_clean: bool = False
     vm_type: Optional[str] = None
