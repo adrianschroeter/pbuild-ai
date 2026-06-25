@@ -82,7 +82,8 @@ class OllamaAnalyzer:
                 text = (message.get('content') or '').strip()
                 if text:
                     preview = text[:500].replace('\n', ' | ')
-                    print(f"[OLLAMA] No tool calls. Text response: {preview}", flush=True)
+                    if self.debug:
+                        print(f"[OLLAMA] No tool calls. Text response: {preview}", flush=True)
                 if all_results:
                     return all_results
                 return []
@@ -126,7 +127,8 @@ class OllamaAnalyzer:
 
             for name, tool_input in round_calls:
                 args_preview = json.dumps(tool_input)[:300]
-                print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
+                if self.debug:
+                    print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
 
             round_results = execute_tool_calls(round_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts)
             for r in round_results:

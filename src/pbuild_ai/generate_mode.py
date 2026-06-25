@@ -130,7 +130,8 @@ The specification for the package to create is in the system prompt above. Start
                 if name == "_skip":
                     continue
                 args_preview = json.dumps(tool_input)[:300]
-                print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
+                if ctx.debug:
+                    print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
             try:
                 round_results = execute_tool_calls([(n, i) for n, i in round_calls if n != "_skip"], ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts)
             except Exception as e:

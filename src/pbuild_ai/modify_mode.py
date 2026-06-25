@@ -108,7 +108,8 @@ User request: {ctx.modify_prompt}{hint}"""},
 
                 for name, tool_input in round_calls:
                     args_preview = json.dumps(tool_input)[:300]
-                    print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
+                    if ctx.debug:
+                        print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
                 try:
                     round_results = execute_tool_calls(round_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts)
                 except Exception as e:

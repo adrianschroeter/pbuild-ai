@@ -1,0 +1,212 @@
+.TH PBUILD-AI 1 "2026-06-25" "pbuild-ai 0.1.0" "User Commands"
+.SH NAME
+pbuild\-ai \- AI-powered RPM package builder and fixer for openSUSE
+.SH SYNOPSIS
+.B pbuild\-ai
+[\fI\,OPTIONS\/\fR] \fI\,workspace_dir\/\fR [\fI\,package_name\/\fR]
+.SH DESCRIPTION
+pbuild\-ai is an AI helper for the \fBpbuild\fR(1) tool.
+It works on single packages or entire package sets and is designed to
+work with all RPM package formats. It connects to an Ollama server to
+analyze spec files, diagnose build failures, and apply fixes.
+
+The main functionality is:
+.IP \(bu 4
+Analyze package sources
+.IP \(bu 4
+Run builds and fix possible build failures (\fB\-\-fix\fR)
+.IP \(bu 4
+Update sources to the latest upstream version and verify (\fB\-\-update\fR)
+.IP \(bu 4
+Modify sources from a natural-language prompt (\fB\-\-modify\fR)
+.IP \(bu 4
+Generate a new package from scratch (\fB\-\-generate\fR)
+
+pbuild\-ai is safe by default \(en it only allows modifications to local
+package sources. Reading files outside the working directory is blocked.
+Push operations are forbidden.
+
+The tool is designed around git-based projects or single packages, but
+does not depend on git. However, git is useful for reviewing and
+exchanging changes.
+
+Since the tool could run indefinitely, it is recommended to use AI
+servers with a fixed-cost plan \(en ideally a local instance on your own
+hardware.
+.SH OPTIONS
+.TP
+.B workspace_dir
+Path to the working directory containing the package sources.
+.TP
+.B package_name
+Package name to focus on (only in project mode when a \fI_manifest\fR file is present).
+.TP
+.B \-\-fix, \-f
+Apply suggested changes and run a test build to verify the fix.
+Repeats up to \fI\-\-fix-attempts\fR times per package.
+.TP
+.B \-\-update, \-u
+Update to the latest upstream version. Also enables \fB\-\-fix\fR.
+Use \fB\-\-update=VERSION\fR to specify a concrete version.
+Without \fI=VERSION\fR, the tool researches the upstream project via
+web fetch to discover the latest stable release.
+.TP
+.B \-\-modify PROMPT, \-m PROMPT
+Modify package sources by sending the prompt and current sources to
+Ollama, then apply the changes locally and quit (no build).
+Combine with \fB\-\-fix\fR to also test-build and fix after the modification.
+.TP
+.B \-\-generate PROMPT
+Create a new openSUSE RPM package from scratch. The given prompt
+describes what to package. pbuild\-ai researches upstream sources via
+web fetch, asks clarifying questions, writes spec files and supporting
+files into the workspace directory, then exits. No build is performed.
+.TP
+.B \-\-all, \-a
+Build all packages in a project (requires \fI_manifest\fR).
+Runs \fBpbuild \-\-abort\-on\-fail\fR, detects the failing package,
+applies fixes, and restarts the full build (up to 50 iterations).
+.TP
+.B \-\-deep\-analyze, \-d
+On build failure, open an interactive shell in the build environment
+for manual investigation. If a fix is applied, changes are exported as
+a patch file and the spec file is updated to include it.
+This mode may be triggered automatically when the AI is unsure about
+the cause of an error.
+.TP
+.B \-\-prompt HINT, \-p HINT
+Additional hint to include in all analysis prompts sent to Ollama.
+Used alongside \fB\-\-fix\fR or \fB\-\-modify\fR.
+.TP
+.B \-\-show\-buildlog, \-L
+Show the pbuild build log output on the console while building.
+.TP
+.B \-\-root ROOT
+Root directory for pbuild (passed as \fB\-\-root\fR to pbuild).
+.TP
+.B \-\-shell\-after\-build
+Open a shell in the build environment on failure for debugging.
+.TP
+.B \-\-vm\-type TYPE
+VM type for pbuild (e.g., \fBkvm\fR, \fBqemu\fR).
+.TP
+.B \-\-vm\-memory MEMORY
+VM memory for pbuild (e.g., \fB4096\fR).
+.TP
+.B \-\-preset PRESET
+Preset name to pass to pbuild.
+.TP
+.B \-\-allow\-tool\-scripts
+Allow execution of scripts from \fItool-scripts/\fR in the workspace.
+.TP
+.B \-\-fix\-attempts N
+Max fix retry attempts per package (default: 10). Use 0 for unlimited.
+.TP
+.B \-\-clean
+Clean build artifacts before building.
+.TP
+.B \-\-no\-clean
+Do not clean build artifacts (default).
+.TP
+.B \-\-interactive, \-i
+Ask the user to select which changes to apply when Ollama proposes
+multiple tool calls.
+.TP
+.B \-\-debug, \-D
+Print raw JSON responses from Ollama for debugging.
+.TP
+.B \-\-openai\-server URL
+OpenAI-compatible server URL. Overrides the \fBOLLAMA_HOST\fR environment variable.
+Defaults to \fBhttp://localhost:11434\fR.
+.TP
+.B \-\-model NAME
+Ollama model name. Overrides the \fBOLLAMA_MODEL\fR environment variable.
+Defaults to \fBgemma4\fR.
+.SH ENVIRONMENT
+.TP
+.B OLLAMA_HOST
+Ollama server URL. Overridden by \fB\-\-openai\-server\fR.
+Default: \fBhttp://localhost:11434\fR.
+.TP
+.B OLLAMA_MODEL
+Ollama model name. Overridden by \fB\-\-model\fR.
+Default: \fBgemma4\fR.
+.TP
+.B GITHUB_TOKEN
+GitHub personal access token. When set, all API requests to
+\fBapi.github.com\fR include a Bearer authorization header,
+increasing the rate limit from 60 to 5000 requests per hour.
+.TP
+.B GH_TOKEN
+Alternative to \fBGITHUB_TOKEN\fR for GitHub API authentication.
+.SH EXAMPLES
+.TP
+Analyze a single package:
+pbuild\-ai bc
+.TP
+Test-build and auto-fix:
+pbuild\-ai \-\-fix bc
+.TP
+Update to latest upstream version:
+pbuild\-ai \-\-update bc
+.TP
+Update to a specific version:
+pbuild\-ai \-\-update=1.2.3 bc
+.TP
+Modify sources with a prompt and test-build:
+pbuild\-ai \-\-modify "switch to systemd service" \-\-fix bc
+.TP
+Build all packages in a project:
+pbuild\-ai \-\-all .
+.TP
+Build with a custom Ollama model:
+pbuild\-ai \-\-model llama3 bc
+.SH AGENTS.md
+Your package or project may contain an \fIAGENTS.md\fR file to give hints
+on how to process or update. Packages listed there under a "skip" rule
+are excluded from the build loop.
+
+Example:
+.RS
+skip: package-a, package-b, package-c
+.RE
+
+Lines matching \fBskip\fR (case-insensitive) are parsed for a
+comma-separated list of package names to exclude from building.
+.SH FILES
+.TP
+.I _manifest
+Project manifest file. When present, enables project mode and all
+packages listed in it are built together.
+.TP
+.I _pbuild
+Repository configuration for project mode. Defines which repositories
+to build against.
+.TP
+.I AGENTS.md
+Optional hints file for build order, skip rules, and tool scripts.
+.TP
+.I tool-scripts/
+Optional directory with custom scripts that can be invoked by the AI.
+Requires \fB\-\-allow\-tool\-scripts\fR.
+.SH SECURITY
+pbuild\-ai enforces a defined set of rules that only allow local
+modifications of the package sources. By default, it only calls tools
+that are safe for your system. Reading any file outside the working
+directory is blocked.
+
+The following restrictions apply:
+.IP \(bu 4
+File reads and writes are confined to the workspace directory.
+.IP \(bu 4
+Only safe HTTPS URLs are allowed; \fBfile://\fR and private IPs are blocked.
+.IP \(bu 4
+Git push is forbidden; only local operations (clone, add, diff, log, status) are permitted.
+.IP \(bu 4
+\fItool-scripts/\fR execution requires \fB\-\-allow\-tool\-scripts\fR.
+.IP \(bu 4
+Copyright headers in spec files are preserved automatically.
+.SH BUGS
+Report bugs at https://github.com/anomalyco/opencode/issues
+.SH SEE ALSO
+.BR pbuild (1)
