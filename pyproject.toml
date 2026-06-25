@@ -17,3 +17,6 @@ include = ["pbuild_ai", "pbuild_ai.skills"]
 
 [tool.setuptools.package-data]
 "pbuild_ai.skills" = ["*.md"]
+
+[tool.setuptools.data-files]
+"share/man/man1" = ["man/pbuild-ai.1", "man/pai.1"]
