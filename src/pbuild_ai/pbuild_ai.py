@@ -762,18 +762,21 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     research_messages = [
                         {"role": "system", "content": f"""You are an RPM packager assistant. Find the latest upstream version for the spec file below.
 
-Steps:
+You MUST complete ALL steps before stopping.
+
+Steps (do them in order, never skip any):
 1. Examine the Source URLs in the spec to identify the upstream project
 2. Use web_fetch to find the latest stable version:
    - For GitHub projects, try the API first (https://api.github.com/repos/OWNER/REPO/releases/latest) — it returns JSON with the 'tag_name' field
    - For GitLab, try https://gitlab.com/api/v4/projects/OWNER%2FREPO/releases/permalink/latest
    - For PyPI, try https://pypi.org/pypi/PACKAGE/json
    - Fall back to fetching the releases page if no API is available
-3. Once found, update the spec with write_file:
-   - Update the Version tag
-   - Update any Source and Patch URLs that include the old version
-   - Add a %changelog entry
-4. Use download_file to download the new source tarball
+3. Update the spec with write_file — make ONLY these changes and nothing else:
+   - Change the Version tag to the new version number
+   - Update Source URLs ONLY if they contain the OLD version number literally (e.g., "1.0.19" in the URL); do NOT replace the %{{version}} macro
+   - Add a new %changelog entry at the bottom
+   - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
+4. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it
 
 Spec file ({spec}):
 {spec_content}"""},
