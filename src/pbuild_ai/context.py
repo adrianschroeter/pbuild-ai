@@ -43,7 +43,7 @@ class PbuildContext:
     debug: bool = False
     shell_after_build: bool = False
     interactive: bool = False
-    ollama_server: Optional[str] = None
+    ollama_server: Optional[str] = None  # --openai-server
     ollama_model_arg: Optional[str] = None
 
     # Derived at startup

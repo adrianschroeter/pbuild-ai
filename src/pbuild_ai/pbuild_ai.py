@@ -76,7 +76,7 @@ if __name__ == "__main__":
     parser.add_argument("--modify", "-m", default=None, help="Modify package sources: send prompt + sources to Ollama, apply changes locally, then quit (no build)")
     parser.add_argument("--generate", default=None, help="Generate a new package from scratch in workspace_dir based on the given prompt. The tool will research upstream, ask clarifying questions, and create spec files.")
     parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when Ollama proposes multiple tool calls")
-    parser.add_argument("--ollama-server", default=None, help="Ollama server URL (overrides OLLAMA_HOST env var, default http://localhost:11434)")
+    parser.add_argument("--openai-server", default=None, help="OpenAI-compatible server URL (overrides OLLAMA_HOST env var, default http://localhost:11434)")
     parser.add_argument("--model", default=None, help="Ollama model name (overrides OLLAMA_MODEL env var, default gemma4)")
     clean_group = parser.add_mutually_exclusive_group()
     clean_group.add_argument("--clean", action="store_true", default=False, help="Clean build artifacts before building")
@@ -102,7 +102,7 @@ if __name__ == "__main__":
         update_version=args.update_version or "" if args.update else None,
         modify_prompt=args.modify,
         generate_prompt=args.generate,
-        ollama_server=args.ollama_server,
+        ollama_server=args.openai_server,
         ollama_model_arg=args.model,
         shell_after_build=args.shell_after_build,
         interactive=args.interactive,
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     INTERACTIVE = ctx.interactive
     MODIFY_PROMPT = ctx.modify_prompt
     GENERATE_PROMPT = ctx.generate_prompt
-    OLLAMA_SERVER = ctx.ollama_server
+    OPENAI_SERVER = ctx.ollama_server
     OLLAMA_MODEL_ARG = ctx.ollama_model_arg
     MAX_ALL_ATTEMPTS = 50
     ROOT_DIR = ctx.root_dir
@@ -155,7 +155,7 @@ if __name__ == "__main__":
     else:
         full_context = agents_md_content
     
-    ollama = OllamaAnalyzer(host=OLLAMA_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "gemma4"), debug=DEBUG)
+    ollama = OllamaAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "gemma4"), debug=DEBUG)
     ctx.ollama = ollama
     ctx.full_context = full_context
 
