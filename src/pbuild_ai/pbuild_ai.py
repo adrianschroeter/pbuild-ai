@@ -686,10 +686,11 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             run_generate_mode(ctx)
             sys.exit(0)
 
-        # --modify mode: hand sources + prompt to Ollama, apply changes locally, quit
+        # --modify mode: hand sources + prompt to Ollama, apply changes locally
         if ctx.modify_prompt:
             run_modify_mode(ctx)
-            sys.exit(0)  # --modify only modifies sources, does not build
+            if not FIX_MODE:
+                sys.exit(0)  # --modify without --fix: only modifies sources, does not build
 
         # --all mode: build all packages, detect failure, fix, restart
         if ALL_MODE:
