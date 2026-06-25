@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -8,6 +9,26 @@ from pbuild_ai.diff_utils import show_diff
 from pbuild_ai.network import is_safe_url
 
 from pbuild_ai.utils import resolve_path
+
+
+def _strip_html(text):
+    """Remove HTML tags, decode common entities, and collapse whitespace."""
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+    text = text.replace('&quot;', '"').replace('&#39;', "'").replace('&nbsp;', ' ')
+    text = re.sub(r'&[#a-zA-Z0-9]+;', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def _auth_headers(url):
+    """Return auth headers for known APIs. Reads tokens from environment."""
+    headers = {}
+    if "api.github.com" in url:
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 def build_tools_list():
     """Return the standard Ollama tool definitions."""
@@ -81,6 +102,27 @@ def build_tools_list():
                         }
                     },
                     "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "download_file",
+                "description": "Download a file from a remote HTTPS URL and save it to the workspace directory. Only safe HTTPS URLs are allowed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The HTTPS URL to download"
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "Filename to save as (relative to workspace root)"
+                        }
+                    },
+                    "required": ["url", "filename"]
                 }
             }
         },
@@ -167,8 +209,33 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
     for tool_name, tool_input in tool_calls:
         if tool_name == "write_file":
             path = tool_input.get("path")
+            content = tool_input.get("content", "")
             if not path:
-                results.append("Error: write_file requires a 'path' argument")
+                # If content looks like a spec file, try to infer path from workspace
+                inferred = None
+                content_start = content.strip()[:200].lower()
+                if "spec file for package" in content_start or content_start.startswith("name:"):
+                    spec_files = sorted(workspace.glob("*.spec"))
+                    if len(spec_files) == 1:
+                        inferred = spec_files[0].name
+                    elif spec_files:
+                        # Try to match by package name from content header
+                        m = re.search(r'spec file for package\s+(\S+)', content) or re.search(r'^Name:\s*(\S+)', content, re.MULTILINE)
+                        if m:
+                            pkg = m.group(1)
+                            for sf in spec_files:
+                                if sf.stem == pkg or sf.stem == f"python-{pkg}":
+                                    inferred = sf.name
+                                    break
+                        if not inferred:
+                            inferred = spec_files[0].name
+                if inferred:
+                    path = inferred
+                    tool_input["path"] = inferred
+                    print(f"[TOOL] write_file: inferred path='{inferred}' from content")
+            if not path:
+                keys = list(tool_input.keys())
+                results.append(f"Error: write_file: missing 'path'. Got keys: {keys}. Must have 'path' (relative path) and 'content'.")
                 continue
             file_path = resolve_path(path, workspace_dir, for_write=True)
             if file_path is None or not manager._is_safe_path(file_path):
@@ -212,7 +279,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
         elif tool_name == "read_file":
             path = tool_input.get("path")
             if not path:
-                results.append("Error: read_file requires a 'path' argument")
+                results.append(f"Error: read_file: missing 'path'. Got keys: {list(tool_input.keys())}.")
                 continue
             file_path = resolve_path(path, workspace_dir)
             if file_path is None or not manager._is_safe_path(file_path):
@@ -229,7 +296,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
         elif tool_name == "list_files":
             path = tool_input.get("path")
             if not path:
-                results.append("Error: list_files requires a 'path' argument")
+                results.append(f"Error: list_files: missing 'path'. Got keys: {list(tool_input.keys())}.")
                 continue
             dir_path = resolve_path(path, workspace_dir)
             if dir_path is None or not manager._is_safe_path(dir_path):
@@ -257,12 +324,81 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 results.append(f"Error: {result}")
                 continue
             try:
-                with urllib.request.urlopen(url, timeout=30) as response:
+                req = urllib.request.Request(url, headers=_auth_headers(url))
+                with urllib.request.urlopen(req, timeout=30) as response:
                     content = response.read().decode("utf-8", errors="replace")
-                    print(f"[TOOL] web_fetch: {url} ({len(content)} bytes)")
-                    results.append(f"[Fetched {len(content)} bytes]\n{content[:100000]}")
+                    stripped = _strip_html(content)
+                    display = stripped[:100000] if len(stripped) < len(content) else content[:100000]
+                    print(f"[TOOL] web_fetch: {url} ({len(content)} bytes -> {len(stripped)} stripped)")
+                    results.append(f"[Fetched {len(content)} bytes]\n{display}")
             except Exception as e:
-                results.append(f"Error fetching {url}: {e}")
+                msg = f"Error fetching {url}: {e}"
+                if "api.github.com" in url and hasattr(e, 'code') and e.code == 403:
+                    if not os.environ.get("GITHUB_TOKEN") and not os.environ.get("GH_TOKEN"):
+                        msg += " [HINT] Set GITHUB_TOKEN env var to increase GitHub API rate limits."
+                results.append(msg)
+        elif tool_name == "download_file":
+            url = tool_input.get("url")
+            filename = tool_input.get("filename")
+            if not url:
+                results.append("Error: download_file requires a 'url' argument")
+                continue
+            if not filename:
+                results.append("Error: download_file requires a 'filename' argument")
+                continue
+
+            # Expand RPM macros (%{name}, %{version}, etc.) using workspace spec files
+            if "%{" in filename:
+                macros = {}
+                for spec_file in sorted(workspace.glob("*.spec")):
+                    spec_text = spec_file.read_text(encoding="utf-8", errors="replace")
+                    for m in re.finditer(r'^(Name|Version):\s*(\S+)', spec_text, re.MULTILINE):
+                        macros[m.group(1).lower()] = m.group(2)
+                expanded = filename
+                for key, val in macros.items():
+                    expanded = expanded.replace(f"%{{{key}}}", val)
+                expanded = expanded.replace(f"%{{version}}", macros.get("version", ""))
+                if expanded != filename:
+                    print(f"[TOOL] download_file: expanded RPM macros: '{filename}' -> '{expanded}'")
+                    filename = expanded
+                    tool_input["filename"] = expanded
+            safe, result = is_safe_url(url)
+            if not safe:
+                results.append(f"Error: {result}")
+                continue
+            file_path = resolve_path(filename, workspace_dir, for_write=True)
+            if file_path is None or not manager._is_safe_path(file_path):
+                results.append(f"Error: {filename} is outside the workspace directory.")
+                continue
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                req = urllib.request.Request(url, headers=_auth_headers(url))
+                with urllib.request.urlopen(req, timeout=120) as response:
+                    data = response.read()
+                with open(file_path, 'wb') as f:
+                    f.write(data)
+                size = file_path.stat().st_size
+                print(f"[TOOL] download_file: {url} -> {filename} ({size} bytes)")
+                results.append(f"OK: Downloaded {size} bytes to {filename}")
+                # Remove old archives matching the same pattern (different version)
+                saved_name = file_path.name
+                for ext in ('.tar.gz', '.tar.bz2', '.tar.xz', '.tar', '.zip', '.tgz', '.tar.Z'):
+                    if saved_name.endswith(ext):
+                        prefix = saved_name[:-len(ext)]
+                        m = re.search(r'[\d.]+$', prefix)
+                        if m:
+                            base = prefix[:m.start()]
+                            for old_file in sorted(file_path.parent.glob(f"{base}*{ext}")):
+                                if old_file.name != saved_name and old_file.is_file():
+                                    old_file.unlink()
+                                    print(f"[TOOL] download_file: removed old archive {old_file.name}")
+                        break
+            except Exception as e:
+                msg = f"Error downloading {url}: {e}"
+                if "api.github.com" in url and hasattr(e, 'code') and e.code == 403:
+                    if not os.environ.get("GITHUB_TOKEN") and not os.environ.get("GH_TOKEN"):
+                        msg += " [HINT] Set GITHUB_TOKEN env var to increase GitHub API rate limits."
+                results.append(msg)
         elif tool_name == "git_command":
             command = tool_input.get("command")
             if not command:

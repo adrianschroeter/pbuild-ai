@@ -53,7 +53,19 @@ if __name__ == "__main__":
     parser.add_argument("--shell-after-build", action="store_true", help="Open a shell in the build environment on failure for debugging")
     parser.add_argument("--vm-type", default=None, help="VM type for pbuild (e.g., kvm, qemu)")
     parser.add_argument("--vm-memory", default=None, help="VM memory for pbuild (e.g., 4096)")
-    parser.add_argument("--update", "-u", nargs="?", const="", default=None, help="Update to the latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
+    # Pre-process --update=VERSION into --update --update-version=VERSION
+    # to disallow the ambiguous space-separated --update VERSION syntax
+    update_version_value = None
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg.startswith("--update=") or arg.startswith("-u="):
+            prefix = arg.split("=", 1)[0]
+            update_version_value = arg.split("=", 1)[1]
+            sys.argv[i] = f"{prefix}"
+            sys.argv.insert(i + 1, f"--update-version={update_version_value}")
+            break
+
+    parser.add_argument("--update", "-u", action="store_true", help="Update to the latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
+    parser.add_argument("--update-version", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--preset", default=None, help="Preset name to pass to pbuild")
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
     parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from Ollama")
@@ -75,7 +87,7 @@ if __name__ == "__main__":
         workspace_dir=args.workspace_dir,
         root_dir=args.root,
         package_filter=args.package_name,
-        fix_mode=args.fix or args.update is not None or args.modify is not None,
+        fix_mode=args.fix or args.update or args.modify is not None,
         show_log=args.show_log,
         do_clean=args.clean,
         vm_type=args.vm_type,
@@ -87,7 +99,7 @@ if __name__ == "__main__":
         fix_attempts=args.fix_attempts,
         all_mode=args.all,
         prompt_hint=args.prompt,
-        update_version=args.update,
+        update_version=args.update_version or "" if args.update else None,
         modify_prompt=args.modify,
         generate_prompt=args.generate,
         ollama_server=args.ollama_server,
@@ -744,43 +756,72 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             if UPDATE_VERSION is not None:
                 target_version = UPDATE_VERSION
                 if not target_version:
-                    for source in (full_context or ""), manager.read_file_safe(spec):
-                        m = re.search(r'(?:require|needs?|target|update to)\s+version\s+([\w.~rc]+)', source, re.I)
-                        if m:
-                            target_version = m.group(1)
-                            print(f"[UPDATE] Found version hint in context: {target_version}")
-                            break
-                version_label = 'latest' if not target_version else target_version
-                print(f"\n[UPDATE] Updating {spec.name} to {version_label}...")
-                update_prompt = f"""You are an RPM packager assistant. The spec file below needs to be updated to version {version_label}.
-
-Update the spec file by calling write_file with the corrected content:
-- Update the Version tag
-- Update any Source tags that include version numbers
-- Update %changelog entry at the bottom
-
-Return ONLY the tool call, no other text."""
-                messages = [
-                    {"role": "system", "content": "You are an RPM packager assistant. Only use write_file and read_file tools."},
-                    {"role": "user", "content": f"Update this spec file to version {version_label}:\n\n{manager.read_file_safe(spec)}"}
-                ]
-
-                results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
-                if isinstance(results, str):
-                    print(f"[UPDATE ERROR] {results}")
-                elif results:
-                    for r in results:
-                        print(f"[UPDATE] {r}")
-
-                    # Reload the spec content after update
+                    # Auto-detect: research upstream via web_fetch
+                    print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
                     spec_content = manager.read_file_safe(spec)
-                    fix_func = getattr(skill, 'fix_content', default_fix) if skill else default_fix
+                    research_messages = [
+                        {"role": "system", "content": f"""You are an RPM packager assistant. Find the latest upstream version for the spec file below.
 
+Steps:
+1. Examine the Source URLs in the spec to identify the upstream project
+2. Use web_fetch to find the latest stable version:
+   - For GitHub projects, try the API first (https://api.github.com/repos/OWNER/REPO/releases/latest) — it returns JSON with the 'tag_name' field
+   - For GitLab, try https://gitlab.com/api/v4/projects/OWNER%2FREPO/releases/permalink/latest
+   - For PyPI, try https://pypi.org/pypi/PACKAGE/json
+   - Fall back to fetching the releases page if no API is available
+3. Once found, update the spec with write_file:
+   - Update the Version tag
+   - Update any Source and Patch URLs that include the old version
+   - Add a %changelog entry
+4. Use download_file to download the new source tarball
+
+Spec file ({spec}):
+{spec_content}"""},
+                    ]
+                    results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
+                    if isinstance(results, str):
+                        print(f"[UPDATE ERROR] {results}")
+                    elif results:
+                        for r in results:
+                            print(f"[UPDATE] {r}")
+                        spec_content = manager.read_file_safe(spec)
+                        for line in spec_content.split('\n'):
+                            m = re.match(r'^Version:\s*(\S+)', line)
+                            if m:
+                                target_version = m.group(1)
+                                print(f"[UPDATE] Updated to version {target_version}")
+                                break
+                    if not target_version:
+                        print("[UPDATE] Could not determine latest version.")
+                        target_version = 'latest'
+                    spec_content = manager.read_file_safe(spec)
                     def update_fix(content):
-                        return content  # Already updated by tool call
+                        return content
                     fix_func = update_fix
                 else:
-                    print("[UPDATE] No changes made.")
+                    # Explicit version: update spec + download source
+                    print(f"\n[UPDATE] Updating {spec.name} to {target_version}...")
+                    update_prompt = f"""Update the spec file to version {target_version}:
+- Update the Version tag
+- Update any Source and Patch URLs that include version numbers
+- Add a %changelog entry
+- Then download the new source tarball using download_file"""
+                    messages = [
+                        {"role": "system", "content": update_prompt},
+                        {"role": "user", "content": f"Update this spec file to version {target_version}:\n\n{manager.read_file_safe(spec)}"}
+                    ]
+                    results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
+                    if isinstance(results, str):
+                        print(f"[UPDATE ERROR] {results}")
+                    elif results:
+                        for r in results:
+                            print(f"[UPDATE] {r}")
+                        spec_content = manager.read_file_safe(spec)
+                        def update_fix(content):
+                            return content
+                        fix_func = update_fix
+                    else:
+                        print("[UPDATE] No changes made.")
             else:
                 # Normal flow: spec analysis and skill-based fix
                 # 2. Spec-File Analysis (with specific or default prompt)

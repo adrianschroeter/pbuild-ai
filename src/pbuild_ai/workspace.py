@@ -108,7 +108,7 @@ class RpmSourceManager:
             err += "\n".join(stdout.split('\n')[-100:]) if stdout else "No output"
             return False, err
 
-    def run_orphan_build(self, dist=None, stream_output=False, force_clean=False):
+    def run_orphan_build(self, dist="tumbleweed", stream_output=False, force_clean=False):
         cmd = ["pbuild", "--orphan", "--release", "0"]
         if self.root_dir:
             cmd.extend(["--root", self.root_dir])
