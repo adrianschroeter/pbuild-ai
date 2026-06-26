@@ -276,7 +276,7 @@ class RpmSourceManager:
             err += "\n".join(stdout.split('\n')[-100:]) if stdout else "No output"
             return False, err
 
-    def run_deep_analyze_shell(self, package_name=None, ollama=None, full_context=None, project_mode=False, debug=False):
+    def run_deep_analyze_shell(self, package_name=None, ollama=None, full_context=None, project_mode=False, debug=False, deep_analyze_prompt=""):
         cmd = ["pbuild"]
         if self.root_dir:
             cmd.extend(["--root", self.root_dir])
@@ -341,7 +341,7 @@ class RpmSourceManager:
 
             max_rounds = 48
             for round_i in range(max_rounds):
-                inquiry_prompt = f"""You have an interactive shell inside the failed RPM build environment at ~/rpmbuild/BUILD/. The build of {package_name} failed.
+                inquiry_prompt = f"""{deep_analyze_prompt + chr(10) if deep_analyze_prompt else ''}You have an interactive shell inside the failed RPM build environment at ~/rpmbuild/BUILD/. The build of {package_name} failed.
 
 Here is everything gathered so far from the shell:
 {collected[-15000:]}

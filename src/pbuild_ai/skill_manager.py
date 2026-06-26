@@ -23,6 +23,7 @@ class SkillManager:
         self.skills_dir = Path(skills_dir).resolve()
         self.skills = []
         self.base_skill_content = None
+        self.deep_analyze_prompts = []
         self._load_skills()
         self._load_base_skill()
 
@@ -45,7 +46,9 @@ class SkillManager:
                 spec.loader.exec_module(module)
                 if hasattr(module, 'TARGET_PATTERN'):
                     self.skills.append(module)
-                    print(f"[SKILL LOADED] {skill_file.name} (Pattern: {module.TARGET_PATTERN})")
+                    print(f"[SKILL LOADED] {skill_file.name} (auto loaded)")
+                if hasattr(module, 'DEEP_ANALYZE_PROMPT'):
+                    self.deep_analyze_prompts.append(module.DEEP_ANALYZE_PROMPT.strip())
             except Exception as e:
                 print(f"[WARNING] Could not load skill {skill_file.name}: {e}")
 
@@ -56,3 +59,6 @@ class SkillManager:
             if content is not None and hasattr(skill, 'CONTENT_PATTERN') and re.search(skill.CONTENT_PATTERN, content):
                 return skill
         return None
+
+    def get_deep_analyze_prompt(self):
+        return "\n\n".join(self.deep_analyze_prompts) if self.deep_analyze_prompts else ""

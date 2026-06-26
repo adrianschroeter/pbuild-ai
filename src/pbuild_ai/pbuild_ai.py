@@ -429,7 +429,7 @@ if __name__ == "__main__":
         build_success2 = False
         if DEEP_ANALYZE:
             print(f"\n[DEEP ANALYZE] Opening interactive shell for {spec.stem}...")
-            manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG)
+            manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
             print("[DEEP ANALYZE] Shell exited. Terminating pbuild and releasing build root...")
             time.sleep(3)
         while fix_attempt < MAX_ATTEMPTS:
@@ -457,7 +457,7 @@ if __name__ == "__main__":
             # Auto-trigger deep-analyze if Ollama requests it and we aren't already in that mode
             if "[DEEP_ANALYZE]" in error_analysis and not DEEP_ANALYZE:
                 print("\n[DEEP ANALYZE] Ollama requested interactive investigation. Opening shell...")
-                manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG)
+                manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
                 time.sleep(3)
                 print("[DEEP ANALYZE] Shell exited. Re-analyzing with collected data...")
                 deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
@@ -505,7 +505,7 @@ Call the tools to fix the build failure NOW."""}
 
 {error_context[:3000]}
 
-Try a different approach. Examine the new error carefully and apply a different fix using write_file."""})
+Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system prompt for the exact fix pattern — the solution is almost certainly described there. Apply the specific fix using write_file now."""})
                 MAX_HISTORY = 40
                 if len(fix_messages) > MAX_HISTORY:
                     fix_messages = [fix_messages[0]] + fix_messages[-(MAX_HISTORY - 1):]
@@ -625,7 +625,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     sys.exit(1)
                 break
 
-            print("[FIX MODE] Re-building to verify...")
+            print("[FIX MODE] Re-building to verify...", flush=True)
             build_success2, build_out2 = rebuild_func(package_name)
 
             if build_success2:
