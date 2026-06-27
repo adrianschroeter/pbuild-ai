@@ -83,7 +83,7 @@ class RpmSourceManager:
         content = self.read_file_safe(file_path)
         new_content = fix_function(content)
         if content != new_content:
-            show_diff(content, new_content, file_path)
+            show_diff(content, new_content, file_path, prefix="[SKILL]")
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
             print(f"[OK] File {file_path.name} was updated by a skill.")
@@ -338,6 +338,24 @@ class RpmSourceManager:
             pty_write("pwd && ls -la")
             time.sleep(2)
             pty_read(5)
+
+            # Auto-detect cd failure in %prep and inspect tarball
+            if package_name:
+                _, build_log_text = self.get_build_log(package_name)
+                cd_failure = build_log_text and re.search(r'cd:\s*\S+\s*:\s*No such file or directory', build_log_text, re.I)
+                prep_failure = build_log_text and '%prep' in build_log_text
+                if cd_failure and prep_failure:
+                    print(f"[DEEP] Detected cd failure in %prep. Inspecting tarball contents...")
+                    pty_write("echo '--- SOURCES ---' && ls -la ~/rpmbuild/SOURCES/")
+                    time.sleep(2)
+                    pty_read(5)
+                    pty_write("for f in ~/rpmbuild/SOURCES/*.tar.gz ~/rpmbuild/SOURCES/*.tar.bz2 ~/rpmbuild/SOURCES/*.tar.xz ~/rpmbuild/SOURCES/*.tar; do echo \"=== $f ===\"; tar -tf \"$f\" 2>/dev/null | head -20; done")
+                    time.sleep(3)
+                    pty_read(8)
+                    pty_write("echo '--- TOP-LEVEL DIRS ---' && for f in ~/rpmbuild/SOURCES/*.tar.gz ~/rpmbuild/SOURCES/*.tar.bz2 ~/rpmbuild/SOURCES/*.tar.xz ~/rpmbuild/SOURCES/*.tar; do echo \"=== $f ===\"; tar -tf \"$f\" 2>/dev/null | sed 's|/.*||' | sort -u; done")
+                    time.sleep(3)
+                    pty_read(8)
+                    print(f"[DEEP] Tarball inspection complete.")
 
             max_rounds = 48
             for round_i in range(max_rounds):

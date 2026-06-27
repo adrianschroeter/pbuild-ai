@@ -645,6 +645,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             if exit_on_exhaustion:
                 sys.exit(1)
 
+        ollama.print_stats()
         return build_success2
 
     try:
@@ -712,10 +713,15 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     sys.exit(1)
                 spec = spec_map[failed_pkg]
                 print(f"\n[ALL MODE] Package '{failed_pkg}' failed. Running fix loop...")
-                skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec))
+                ollama.reset_context()
+                ollama.reset_stats()
+                skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
                 if skill:
                     error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
                     fix_func = getattr(skill, 'fix_content', default_fix)
+                    skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
+                    if skill_ctx:
+                        full_context = f"{full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
                 else:
                     error_prompt = DEFAULT_ERROR_PROMPT
                     fix_func = default_fix
@@ -739,14 +745,20 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             sys.exit(0)
 
         for spec in spec_files:
+            ollama.reset_context()
+            ollama.reset_stats()
 
             # 1. Determine skill
-            skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec))
+            skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
             if skill:
                 print(f"[INFO] Using skill profile: {skill.__name__}")
                 spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', DEFAULT_SPEC_PROMPT)
                 error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
                 fix_func = getattr(skill, 'fix_content', default_fix)
+                # Inject skill instructions into full_context so the fix loop sees them
+                skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
+                if skill_ctx:
+                    full_context = f"{full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
             else:
                 print("[INFO] No specific skill found. Using default profile.")
                 spec_prompt = DEFAULT_SPEC_PROMPT

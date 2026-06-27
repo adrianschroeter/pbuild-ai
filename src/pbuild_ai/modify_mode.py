@@ -25,7 +25,7 @@ from pbuild_ai.tools import execute_tool_calls
 def run_modify_mode(ctx):
     """Hand sources + prompt to Ollama, apply changes locally, then exit (no build)."""
     for spec in ctx.spec_files:
-        skill = ctx.skill_manager.get_skill_for(spec.name, ctx.manager.read_file_safe(spec))
+        skill = ctx.skill_manager.get_skill_for(spec.name, ctx.manager.read_file_safe(spec), prompt=ctx.modify_prompt)
         spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', ctx.default_spec_prompt) if skill else ctx.default_spec_prompt
         print(f"\n[MODIFY] Sending {spec.name} sources to Ollama...")
         spec_content = ctx.manager.read_file_safe(spec)
@@ -39,7 +39,10 @@ You have these tools: write_file, read_file, web_fetch, git_command.
 
 To make changes, call write_file with the corrected spec file. If you are unsure or need to choose between options, ask the user by responding with your question — you will get their answer in the next round.
 
-User request: {ctx.modify_prompt}{hint}"""},
+User request: {ctx.modify_prompt}{hint}
+
+Skill instructions (follow these):
+{spec_prompt}"""},
             {"role": "user", "content": f"Spec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content:\n{spec_content[:5000]}"}
         ]
         modify_max_rounds = 20
@@ -111,7 +114,7 @@ User request: {ctx.modify_prompt}{hint}"""},
                     if ctx.debug:
                         print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
                 try:
-                    round_results = execute_tool_calls(round_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts)
+                    round_results = execute_tool_calls(round_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive)
                 except Exception as e:
                     round_results = [f"Error executing tool: {e}"]
                     print(f"[MODIFY TOOL ERROR] {e}")
@@ -132,7 +135,7 @@ User request: {ctx.modify_prompt}{hint}"""},
             if text:
                 text_clean = re.sub(r'<[^>]+>', '', text)
                 print(f"\n[MODIFY] Ollama:\n{text_clean}\n")
-                if '?' in text or re.search(r'(?:option\s*\d|choice|choose|which|either|alternative|instead|\b or \b)', text, re.I):
+                if ctx.interactive and ('?' in text or re.search(r'(?:option\s*\d|choice|choose|which|either|alternative|instead|\b or \b)', text, re.I)):
                     user_input = input("[MODIFY] Your response (or 'done' to accept, 'abort' to cancel): ").strip()
                     if user_input.lower() == 'abort':
                         print("[MODIFY] Aborted by user.")

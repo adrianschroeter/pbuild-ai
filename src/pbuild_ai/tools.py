@@ -181,6 +181,44 @@ def build_tools_list():
                     "required": ["question"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remove_file",
+                "description": "Remove/delete a file from the workspace directory. Only files within the workspace are allowed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file to remove (relative to workspace root)"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "rename_file",
+                "description": "Rename or move a file within the workspace directory. Both source and destination must be within the workspace.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source": {
+                            "type": "string",
+                            "description": "Current path of the file (relative to workspace root)"
+                        },
+                        "destination": {
+                            "type": "string",
+                            "description": "New path for the file (relative to workspace root)"
+                        }
+                    },
+                    "required": ["source", "destination"]
+                }
+            }
         }
     ]
 
@@ -202,7 +240,7 @@ def _extract_header(content):
     return '\n'.join(header_lines), '\n'.join(lines[rest_start:])
 
 
-def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False):
+def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False, interactive=False):
     """Execute tool calls returned by Ollama. Returns list of tool results."""
     results = []
     workspace = Path(workspace_dir).resolve()
@@ -258,7 +296,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 if old_header and new_header and old_header != new_header:
                     tool_input["content"] = old_header + '\n' + new_rest
                     print(f"[TOOL] Preserved copyright header in {tool_input['path']}")
-            show_diff(old, tool_input["content"], file_path)
+            show_diff(old, tool_input["content"], file_path, prefix="[TOOL]")
             file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(tool_input["content"])
@@ -272,7 +310,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     if fmt_result.returncode == 0:
                         formatted = file_path.read_text(encoding='utf-8')
                         if formatted != tool_input["content"]:
-                            show_diff(tool_input["content"], formatted, file_path)
+                            show_diff(tool_input["content"], formatted, file_path, prefix="[TOOL]")
                             print(f"[TOOL] format_spec_file: normalized {tool_input['path']}")
                 except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
                     pass
@@ -416,7 +454,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             else:
                 full_cmd = f"cd {workspace} && {command}"
                 try:
-                    result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True, cwd=workspace)
+                    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+                    result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True, cwd=workspace, env=env)
                     if result.returncode == 0:
                         print(f"[TOOL] git_command: {command}")
                         output = (result.stdout or "") + (result.stderr or "")
@@ -452,10 +491,67 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             except Exception as e:
                 results.append(f"Error executing script: {e}")
         elif tool_name == "ask_user":
+            if not interactive:
+                results.append("Error: Interactive questions disabled. Re-run with --interactive to enable.")
+                continue
             question = tool_input.get("question", "")
             print(f"\n[ASK USER] {question}")
             answer = input("[YOUR ANSWER]: ").strip()
             results.append(answer)
+        elif tool_name == "remove_file":
+            path = tool_input.get("path")
+            if not path:
+                results.append(f"Error: remove_file: missing 'path'. Got keys: {list(tool_input.keys())}.")
+                continue
+            file_path = resolve_path(path, workspace_dir)
+            if file_path is None or not manager._is_safe_path(file_path):
+                results.append(f"Error: {path} is outside the workspace directory.")
+                continue
+            if not file_path.exists():
+                results.append(f"Error: File not found: {path}")
+                continue
+            if file_path.is_dir():
+                results.append(f"Error: Cannot remove directory: {path} (remove_file only removes files)")
+                continue
+            try:
+                file_path.unlink()
+                print(f"[TOOL] remove_file: {path}")
+                results.append(f"OK: Removed {path}")
+            except Exception as e:
+                results.append(f"Error removing file: {e}")
+        elif tool_name == "rename_file":
+            source = tool_input.get("source")
+            destination = tool_input.get("destination")
+            if not source:
+                results.append(f"Error: rename_file: missing 'source'. Got keys: {list(tool_input.keys())}.")
+                continue
+            if not destination:
+                results.append(f"Error: rename_file: missing 'destination'. Got keys: {list(tool_input.keys())}.")
+                continue
+            src_path = resolve_path(source, workspace_dir)
+            dst_path = resolve_path(destination, workspace_dir, for_write=True)
+            if src_path is None or not manager._is_safe_path(src_path):
+                results.append(f"Error: {source} is outside the workspace directory.")
+                continue
+            if dst_path is None or not manager._is_safe_path(dst_path):
+                results.append(f"Error: {destination} is outside the workspace directory.")
+                continue
+            if not src_path.exists():
+                results.append(f"Error: Source not found: {source}")
+                continue
+            if not src_path.is_file():
+                results.append(f"Error: Cannot rename non-file: {source}")
+                continue
+            if dst_path.exists():
+                results.append(f"Error: Destination already exists: {destination}")
+                continue
+            try:
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                src_path.rename(dst_path)
+                print(f"[TOOL] rename_file: {source} -> {destination}")
+                results.append(f"OK: Renamed {source} to {destination}")
+            except Exception as e:
+                results.append(f"Error renaming file: {e}")
         else:
             results.append(f"Error: Unknown tool '{tool_name}'")
     return results

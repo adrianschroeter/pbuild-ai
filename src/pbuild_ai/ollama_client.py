@@ -15,6 +15,7 @@
 
 import json
 import os
+import time
 import urllib.request
 from pathlib import Path
 
@@ -28,8 +29,42 @@ class OllamaAnalyzer:
         self.debug = debug
         self.api_url = f"{self.host}/api/generate"
         self.chat_api_url = f"{self.host}/api/chat"
+        self._context = None
+        self._chat_context = None
+        self._opener = urllib.request.build_opener()
+        self._opener.addheaders = [('Connection', 'keep-alive')]
+        self.reset_stats()
 
     MAX_PROMPT_CHARS = 80000
+
+    def reset_context(self):
+        self._context = None
+        self._chat_context = None
+
+    def reset_stats(self):
+        self.ai_calls = 0
+        self.ai_time = 0.0
+
+    def print_stats(self):
+        print(f"\n[STATS] AI calls: {self.ai_calls}  |  AI time: {self.ai_time:.1f}s")
+
+    def _request(self, url, payload):
+        if payload.get("context") is None:
+            payload.pop("context", None)
+        t0 = time.time()
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+        with self._opener.open(req) as response:
+            raw = response.read().decode('utf-8')
+        elapsed = time.time() - t0
+        self.ai_calls += 1
+        self.ai_time += elapsed
+        if self.debug:
+            print(f"[DEBUG] Ollama raw response:\n{raw}", flush=True)
+        return json.loads(raw)
 
     def analyze(self, system_prompt, context_data, agents_md=None):
         context_data = (context_data or "")[:self.MAX_PROMPT_CHARS]
@@ -40,17 +75,12 @@ class OllamaAnalyzer:
             full_prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
         full_prompt = full_prompt[:self.MAX_PROMPT_CHARS]
         payload = {"model": self.model, "prompt": full_prompt, "stream": False}
-        req = urllib.request.Request(
-            self.api_url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
-        )
+        if self._context is not None:
+            payload["context"] = self._context
         try:
-            with urllib.request.urlopen(req) as response:
-                raw = response.read().decode('utf-8')
-                if self.debug:
-                    print(f"[DEBUG] Ollama raw response:\n{raw}", flush=True)
-                return json.loads(raw).get('response', '').strip()
+            result = self._request(self.api_url, payload)
+            self._context = result.get("context")
+            return result.get('response', '').strip()
         except Exception as e:
             return f"[OLLAMA ERROR] {e}"
 
@@ -63,17 +93,11 @@ class OllamaAnalyzer:
                 "tools": tools,
                 "stream": False
             }
-            req = urllib.request.Request(
-                self.chat_api_url,
-                data=json.dumps(payload).encode('utf-8'),
-                headers={'Content-Type': 'application/json'}
-            )
+            if self._chat_context is not None:
+                payload["context"] = self._chat_context
             try:
-                with urllib.request.urlopen(req) as response:
-                    raw = response.read().decode('utf-8')
-                    if self.debug:
-                        print(f"[DEBUG] Ollama raw response:\n{raw}", flush=True)
-                    result = json.loads(raw)
+                result = self._request(self.chat_api_url, payload)
+                self._chat_context = result.get("context")
             except Exception as e:
                 return f"[OLLAMA ERROR] {e}"
 
@@ -130,7 +154,7 @@ class OllamaAnalyzer:
                 if self.debug:
                     print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
 
-            round_results = execute_tool_calls(round_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts)
+            round_results = execute_tool_calls(round_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive)
             for r in round_results:
                 if r.startswith("[Fetched "):
                     display = r.split("\n", 1)[0]

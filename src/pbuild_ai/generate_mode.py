@@ -133,7 +133,7 @@ The specification for the package to create is in the system prompt above. Start
                 if ctx.debug:
                     print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
             try:
-                round_results = execute_tool_calls([(n, i) for n, i in round_calls if n != "_skip"], ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts)
+                round_results = execute_tool_calls([(n, i) for n, i in round_calls if n != "_skip"], ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive)
             except Exception as e:
                 round_results = [f"Error executing tool: {e}"]
                 print(f"[GENERATE TOOL ERROR] {e}")
@@ -167,7 +167,7 @@ The specification for the package to create is in the system prompt above. Start
         if text:
             text_clean = re.sub(r'<[^>]+>', '', text)
             print(f"\n[GENERATE] Ollama:\n{text_clean}\n")
-            if '?' in text or re.search(r'(?:option\s*\d|choice|choose|which|either|alternative|instead|\b or \b)', text, re.I):
+            if ctx.interactive and ('?' in text or re.search(r'(?:option\s*\d|choice|choose|which|either|alternative|instead|\b or \b)', text, re.I)):
                 user_input = input("[GENERATE] Your response (or 'done' to finish, 'abort' to cancel): ").strip()
                 if user_input.lower() == 'abort':
                     print("[GENERATE] Aborted by user.")

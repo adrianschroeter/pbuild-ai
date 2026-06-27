@@ -44,19 +44,26 @@ class SkillManager:
                 spec = importlib.util.spec_from_file_location(skill_file.stem, skill_file)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                if hasattr(module, 'TARGET_PATTERN'):
+                if hasattr(module, 'TARGET_PATTERN') or hasattr(module, 'PROMPT_PATTERN'):
                     self.skills.append(module)
-                    print(f"[SKILL LOADED] {skill_file.name} (auto loaded)")
                 if hasattr(module, 'DEEP_ANALYZE_PROMPT'):
                     self.deep_analyze_prompts.append(module.DEEP_ANALYZE_PROMPT.strip())
             except Exception as e:
                 print(f"[WARNING] Could not load skill {skill_file.name}: {e}")
 
-    def get_skill_for(self, filename, content=None):
+    def get_skill_for(self, filename, content=None, prompt=None):
         for skill in self.skills:
-            if re.search(skill.TARGET_PATTERN, filename):
+            if hasattr(skill, 'TARGET_PATTERN') and re.search(skill.TARGET_PATTERN, filename):
+                skill_name = Path(skill.__file__).name if hasattr(skill, '__file__') else "unknown"
+                print(f"[SKILL ACTIVE] {skill_name} for {filename}")
                 return skill
             if content is not None and hasattr(skill, 'CONTENT_PATTERN') and re.search(skill.CONTENT_PATTERN, content):
+                skill_name = Path(skill.__file__).name if hasattr(skill, '__file__') else "unknown"
+                print(f"[SKILL ACTIVE] {skill_name} for {filename}")
+                return skill
+            if prompt is not None and hasattr(skill, 'PROMPT_PATTERN') and re.search(skill.PROMPT_PATTERN, prompt):
+                skill_name = Path(skill.__file__).name if hasattr(skill, '__file__') else "unknown"
+                print(f"[SKILL ACTIVE] {skill_name} (prompt match)")
                 return skill
         return None
 

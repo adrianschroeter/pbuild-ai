@@ -6,4 +6,5 @@
 - **Only safe HTTPS URLs allowed.** file:// and private/local IP addresses are blocked by `is_safe_url()`.
 - **Git push is forbidden.** Only local git operations (clone, add, diff, log, submodule, status) are permitted. Push is blocked at the tool level.
 - **tool-scripts execution requires `--allow-tool-scripts`.** Without this flag, tool-scripts/ is never executed. If the directory doesn't exist, it's silently skipped.
+- **remove_file / rename_file** operate inside the workspace sandbox, same as read_file/write_file. `rename_file` creates parent directories if needed. `rename_file` refuses if destination already exists.
 
