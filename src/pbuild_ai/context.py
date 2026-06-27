@@ -35,7 +35,6 @@ class PbuildContext:
     allow_tool_scripts: bool = False
     deep_analyze: bool = False
     fix_attempts: int = 10
-    all_mode: bool = False
     prompt_hint: Optional[str] = None
     update_version: Optional[str] = None
     update_only: bool = False

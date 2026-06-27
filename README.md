@@ -169,9 +169,3 @@ web fetch, asks clarifying questions, and writes spec files and
 supporting files into the workspace directory. No build is performed
 after generation.
 
-### `--all`
-
-Build all packages in a project (requires `_manifest`). Runs
-`pbuild --abort-on-fail`, detects the failing package, applies fixes,
-and restarts the full build (up to 50 iterations).
-

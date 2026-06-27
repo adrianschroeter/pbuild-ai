@@ -77,7 +77,6 @@ if __name__ == "__main__":
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
     parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from Ollama")
     parser.add_argument("--fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, resets for each package)")
-    parser.add_argument("--all", "-a", action="store_true", help="Build all packages in project mode (runs pbuild --abort-on-fail, fixes failures, and restarts)")
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
     parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to Ollama")
     parser.add_argument("--modify", "-m", default=None, help="Modify package sources: send prompt + sources to Ollama, apply changes locally, then quit (no build)")
@@ -105,7 +104,6 @@ if __name__ == "__main__":
         debug=args.debug,
         deep_analyze=args.deep_analyze,
         fix_attempts=args.fix_attempts,
-        all_mode=args.all,
         prompt_hint=args.prompt,
         update_version=args.update_version or "" if (args.update or args.update_only) else None,
         update_only=args.update_only,
@@ -131,7 +129,6 @@ if __name__ == "__main__":
     EMAIL = ctx.email
     DEEP_ANALYZE = ctx.deep_analyze
     FIX_ATTEMPTS = ctx.fix_attempts
-    ALL_MODE = ctx.all_mode
     PROMPT_HINT = ctx.prompt_hint
     UPDATE_VERSION = ctx.update_version
     INTERACTIVE = ctx.interactive
@@ -139,16 +136,11 @@ if __name__ == "__main__":
     GENERATE_PROMPT = ctx.generate_prompt
     OPENAI_SERVER = ctx.ollama_server
     OLLAMA_MODEL_ARG = ctx.ollama_model_arg
-    MAX_ALL_ATTEMPTS = 50
     ROOT_DIR = ctx.root_dir
     SKILLS_DIR = Path(__file__).parent / "skills"
 
     Path(WORKSPACE_DIR).mkdir(exist_ok=True)
     ctx.project_mode = PROJECT_MODE
-
-    if ALL_MODE and not PROJECT_MODE:
-        print("[ERROR] --all requires a project directory with _manifest")
-        sys.exit(1)
 
     manager = RpmSourceManager(WORKSPACE_DIR, do_clean=DO_CLEAN, vm_type=ctx.vm_type, vm_memory=ctx.vm_memory, shell_after_build=ctx.shell_after_build, preset=PRESET, root_dir=ROOT_DIR)
     skill_manager = SkillManager(SKILLS_DIR)
@@ -667,6 +659,65 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
         ollama.print_stats()
         return build_success2
 
+    def run_project_fix_loop(spec_files, manager, ollama, skill_manager, base_fc):
+        """Run pbuild --abort-on-fail, detect failure, fix, and restart.
+        Returns True if all packages built successfully.
+        """
+        spec_map = {s.stem: s for s in spec_files}
+        max_attempts = 50
+
+        for attempt in range(1, max_attempts + 1):
+            print(f"\n[PROJECT BUILD] Full project build (attempt {attempt}/{max_attempts})...")
+            all_success, all_out = manager.run_full_project_build(stream_output=SHOW_BUILDLOG)
+            if all_success:
+                print("\n[OK] All packages built successfully.")
+                return True
+
+            if attempt >= max_attempts:
+                print(f"\n[ERROR] All {max_attempts} full build attempts exhausted.")
+                return False
+
+            failed_pkg = parse_failed_package(all_out)
+            if not failed_pkg or failed_pkg not in spec_map:
+                print(f"\n[ERROR] Could not identify failing package. Build output:\n{all_out[:2000]}")
+                return False
+
+            spec = spec_map[failed_pkg]
+            print(f"\n[PROJECT BUILD] Package '{failed_pkg}' failed. Running fix loop...")
+            ollama.reset_context()
+            ollama.reset_stats()
+
+            skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
+            if skill:
+                error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
+                fix_func = getattr(skill, 'fix_content', default_fix)
+                skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
+                local_fc = f"{base_fc}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}" if skill_ctx else base_fc
+            else:
+                error_prompt = DEFAULT_ERROR_PROMPT
+                fix_func = default_fix
+                local_fc = base_fc
+
+            if PROMPT_HINT:
+                local_fc = f"{local_fc}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
+
+            if not manager.build_phase_reached(package_name=failed_pkg):
+                print(f"[PROJECT BUILD] Build did not reach build phase. Retrying {failed_pkg} with --clean...")
+                build_ok, build_out2 = manager.run_project_build(failed_pkg, stream_output=SHOW_BUILDLOG, force_clean=True)
+                if build_ok:
+                    print(f"\n[OK] {failed_pkg} succeeded after --clean retry.")
+                    continue
+                else:
+                    all_out = build_out2
+                    print(f"[PROJECT BUILD] Clean build also failed. Proceeding with fix loop.")
+
+            if not run_fix_loop(spec, failed_pkg, all_out, error_prompt,
+                lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG),
+                exit_on_exhaustion=True):
+                return False
+
+        return True
+
     try:
         # Get project packages list (used for building with correct relative paths)
         packages = list_packages(WORKSPACE_DIR) if PROJECT_MODE else []
@@ -711,57 +762,6 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             run_modify_mode(ctx)
             if not FIX_MODE:
                 sys.exit(0)  # --modify without --fix: only modifies sources, does not build
-
-        # --all mode: build all packages, detect failure, fix, restart
-        if ALL_MODE:
-            spec_map = {s.stem: s for s in spec_files}
-            all_attempt = 0
-            while all_attempt < MAX_ALL_ATTEMPTS:
-                all_attempt += 1
-                print(f"\n[ALL MODE] Full project build (attempt {all_attempt}/{MAX_ALL_ATTEMPTS})...")
-                all_success, all_out = manager.run_full_project_build(stream_output=SHOW_BUILDLOG)
-                if all_success:
-                    print("\n[OK] All packages built successfully.")
-                    break
-                if all_attempt >= MAX_ALL_ATTEMPTS:
-                    print(f"[ALL ERROR] All {MAX_ALL_ATTEMPTS} full build attempts exhausted.")
-                    break
-                failed_pkg = parse_failed_package(all_out)
-                if not failed_pkg or failed_pkg not in spec_map:
-                    print(f"[ALL ERROR] Could not identify failing package. Falling back to individual builds.")
-                    sys.exit(1)
-                spec = spec_map[failed_pkg]
-                print(f"\n[ALL MODE] Package '{failed_pkg}' failed. Running fix loop...")
-                ollama.reset_context()
-                ollama.reset_stats()
-                skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
-                if skill:
-                    error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
-                    fix_func = getattr(skill, 'fix_content', default_fix)
-                    skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
-                    if skill_ctx:
-                        full_context = f"{full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
-                else:
-                    error_prompt = DEFAULT_ERROR_PROMPT
-                    fix_func = default_fix
-                spec_content = manager.read_file_safe(spec)
-                current_build_out = all_out
-                # Before entering fix loop: if build never reached build phase, retry with --clean
-                if not manager.build_phase_reached(package_name=failed_pkg):
-                    print(f"[ALL MODE] Build did not reach build phase. Retrying {failed_pkg} with --clean...")
-                    build_ok, build_out2 = manager.run_project_build(failed_pkg, stream_output=SHOW_BUILDLOG, force_clean=True)
-                    if build_ok:
-                        print(f"\n[OK] {failed_pkg} succeeded after --clean retry.")
-                        continue
-                    else:
-                        all_out = build_out2
-                        current_build_out = build_out2
-                        print(f"[ALL MODE] Clean build also failed. Proceeding with fix loop.")
-                if not run_fix_loop(spec, failed_pkg, current_build_out, error_prompt,
-                    lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG),
-                    exit_on_exhaustion=True):
-                    sys.exit(1)
-            sys.exit(0)
 
         # Phase 1: Update pass — update all packages first without building
         updated_packages = set()
@@ -907,100 +907,101 @@ Additional context (AGENTS.md + skill rules):
             print(f"\n[BUILD] All packages updated. Starting build phase...\n")
             full_context = base_full_context
 
-        for spec in spec_files:
-            ollama.reset_context()
-            ollama.reset_stats()
+        # Dispatch build strategy
+        if PROJECT_MODE and not PACKAGE_FILTER and FIX_MODE:
+            # Project-wide abort-on-fail + fix loop (merged --all behavior)
+            if not run_project_fix_loop(spec_files, manager, ollama, skill_manager, full_context):
+                sys.exit(1)
+        else:
+            for spec in spec_files:
+                ollama.reset_context()
+                ollama.reset_stats()
 
-            if UPDATE_VERSION is not None and spec not in updated_packages:
-                continue
+                if UPDATE_VERSION is not None and spec not in updated_packages:
+                    continue
 
-            # 1. Determine skill
-            skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
-            if skill:
-                print(f"[INFO] Using skill profile: {skill.__name__}")
-                spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', DEFAULT_SPEC_PROMPT)
-                error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
-                fix_func = getattr(skill, 'fix_content', default_fix)
-                skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
-                if skill_ctx:
-                    full_context = f"{full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
-            else:
-                print("[INFO] No specific skill found. Using default profile.")
-                spec_prompt = DEFAULT_SPEC_PROMPT
-                error_prompt = DEFAULT_ERROR_PROMPT
-                fix_func = default_fix
-
-            if UPDATE_VERSION is not None:
-                pass  # Update already done in Phase 1 — build directly
-            else:
-                # Normal flow: spec analysis and skill-based fix
-                if not ctx.modify_prompt:
-                    print(f"[OLLAMA] Analyzing Spec-file: {spec.name}...")
-                    analysis_context = full_context
-                    if PROMPT_HINT:
-                        analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
-                    spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
-                    print(f"-> Ollama says:\n{spec_analysis}\n")
-                    if not FIX_MODE or manager.has_prior_failed_build():
-                        manager.fix_file_content(spec, fix_func)
-
-            # 4. Determine build mode and execute (always from WORKSPACE_DIR, never cd)
-            if PACKAGE_FILTER:
-                package_name = spec.stem
-                print(f"[INFO] Building single package: {package_name}...")
-
-                build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
-            elif PROJECT_MODE:
-                package_name = spec.stem
-                print(f"[INFO] Building {package_name} from project directory...")
-
-                # FIXME: add flavor support
-                build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
-            else:
-                # Single package mode - WORKSPACE_DIR IS a single package, no iteration needed
-                print("[INFO] Single package mode (no _manifest found). Running orphan build...")
-                build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
-
-            # 4b. Retry with --clean if incomplete setup detected
-            INCOMPLETE_SETUP_MSG = "It seems that there was an incomplete setup of /"
-            if not build_success and INCOMPLETE_SETUP_MSG in build_out:
-                print(f"[RETRY] Incomplete setup detected. Retrying with --clean...")
-                if PACKAGE_FILTER or PROJECT_MODE:
-                    build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
+                # 1. Determine skill
+                skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
+                if skill:
+                    print(f"[INFO] Using skill profile: {skill.__name__}")
+                    spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', DEFAULT_SPEC_PROMPT)
+                    error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
+                    fix_func = getattr(skill, 'fix_content', default_fix)
+                    skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
+                    if skill_ctx:
+                        full_context = f"{full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
                 else:
-                    build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
-            
-            # 4c. If build failed without reaching build phase, retry with --clean instead of modifying sources
-            #     (runs before consulting Ollama to avoid unnecessary analysis)
-            if not build_success:
-                if not manager.build_phase_reached(package_name=spec.stem):
-                    print(f"[RETRY] Build did not reach build phase. Retrying with --clean...")
+                    print("[INFO] No specific skill found. Using default profile.")
+                    spec_prompt = DEFAULT_SPEC_PROMPT
+                    error_prompt = DEFAULT_ERROR_PROMPT
+                    fix_func = default_fix
+
+                if UPDATE_VERSION is not None:
+                    pass  # Update already done in Phase 1 — build directly
+                else:
+                    # Normal flow: spec analysis and skill-based fix
+                    if not ctx.modify_prompt:
+                        print(f"[OLLAMA] Analyzing Spec-file: {spec.name}...")
+                        analysis_context = full_context
+                        if PROMPT_HINT:
+                            analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
+                        spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
+                        print(f"-> Ollama says:\n{spec_analysis}\n")
+                        if not FIX_MODE or manager.has_prior_failed_build():
+                            manager.fix_file_content(spec, fix_func)
+
+                # 4. Determine build mode and execute (always from WORKSPACE_DIR, never cd)
+                if PACKAGE_FILTER:
+                    package_name = spec.stem
+                    print(f"[INFO] Building single package: {package_name}...")
+                    build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
+                elif PROJECT_MODE:
+                    package_name = spec.stem
+                    print(f"[INFO] Building {package_name} from project directory...")
+                    build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
+                else:
+                    print("[INFO] Single package mode (no _manifest found). Running orphan build...")
+                    build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
+
+                # 4b. Retry with --clean if incomplete setup detected
+                INCOMPLETE_SETUP_MSG = "It seems that there was an incomplete setup of /"
+                if not build_success and INCOMPLETE_SETUP_MSG in build_out:
+                    print(f"[RETRY] Incomplete setup detected. Retrying with --clean...")
                     if PACKAGE_FILTER or PROJECT_MODE:
                         build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
                     else:
                         build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
-                    if build_success:
-                        print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
-                    else:
-                        print(f"[RETRY] Clean build also failed. Proceeding with fix mode.")
 
-            # 5. Ollama Error Analysis
-            if build_success:
-                print(f"\n[OK] Build for {spec.name} succeeded.")
-                ollama.print_stats()
-            else:
-                print(f"\n[ERROR] Build for {spec.name} failed. Consulting Ollama...")
-                error_analysis = ollama.analyze(error_prompt, build_out, full_context)
-                print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
+                # 4c. If build failed without reaching build phase, retry with --clean instead of modifying sources
+                if not build_success:
+                    if not manager.build_phase_reached(package_name=spec.stem):
+                        print(f"[RETRY] Build did not reach build phase. Retrying with --clean...")
+                        if PACKAGE_FILTER or PROJECT_MODE:
+                            build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
+                        else:
+                            build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
+                        if build_success:
+                            print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
+                        else:
+                            print(f"[RETRY] Clean build also failed. Proceeding with fix mode.")
 
-            # 6. Fix mode: diagnose, apply changes via tool calling, and re-build (with retries)
-            if FIX_MODE and not build_success:
-                pkg_name = package_name if 'package_name' in dir() else spec.stem
-                if PROJECT_MODE:
-                    rebuild_func = lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG)
+                # 5. Ollama Error Analysis
+                if build_success:
+                    print(f"\n[OK] Build for {spec.name} succeeded.")
+                    ollama.print_stats()
                 else:
-                    rebuild_func = lambda p: manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
-                run_fix_loop(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
+                    print(f"\n[ERROR] Build for {spec.name} failed. Consulting Ollama...")
+                    error_analysis = ollama.analyze(error_prompt, build_out, full_context)
+                    print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
+
+                # 6. Fix mode: diagnose, apply changes via tool calling, and re-build (with retries)
+                if FIX_MODE and not build_success:
+                    pkg_name = package_name if 'package_name' in dir() else spec.stem
+                    if PROJECT_MODE:
+                        rebuild_func = lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG)
+                    else:
+                        rebuild_func = lambda p: manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
+                    run_fix_loop(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
                 
     except Exception as e:
         try:
