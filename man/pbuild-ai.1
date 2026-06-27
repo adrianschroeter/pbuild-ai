@@ -18,6 +18,8 @@ Run builds and fix possible build failures (\fB\-\-fix\fR)
 .IP \(bu 4
 Update sources to the latest upstream version and verify (\fB\-\-update\fR)
 .IP \(bu 4
+Update sources only, without building (\fB\-\-update\-only\fR)
+.IP \(bu 4
 Modify sources from a natural-language prompt (\fB\-\-modify\fR)
 .IP \(bu 4
 Generate a new package from scratch (\fB\-\-generate\fR)
@@ -50,6 +52,11 @@ Update to the latest upstream version. Also enables \fB\-\-fix\fR.
 Use \fB\-\-update=VERSION\fR to specify a concrete version.
 Without \fI=VERSION\fR, the tool researches the upstream project via
 web fetch to discover the latest stable release.
+.TP
+.B \-\-update\-only
+Update sources to the latest upstream version, then exit without
+building. Use \fB\-\-update\-only=VERSION\fR to specify a concrete
+version. Does not enable \fB\-\-fix\fR.
 .TP
 .B \-\-modify PROMPT, \-m PROMPT
 Modify package sources by sending the prompt and current sources to
@@ -152,6 +159,12 @@ pbuild\-ai \-\-update bc
 .TP
 Update to a specific version:
 pbuild\-ai \-\-update=1.2.3 bc
+.TP
+Update sources to latest version without building:
+pbuild\-ai \-\-update\-only bc
+.TP
+Update sources to a specific version without building:
+pbuild\-ai \-\-update\-only=1.2.3 bc
 .TP
 Modify sources with a prompt and test-build:
 pbuild\-ai \-\-modify "switch to systemd service" \-\-fix bc

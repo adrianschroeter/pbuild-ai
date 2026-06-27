@@ -369,6 +369,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 results.append(f"Error: edit_file: old_string found {count} times in {path}. Provide more context to make the match unique.")
                 continue
             new_content = content.replace(old_string, new_string, 1)
+            if content == new_content:
+                results.append(f"OK: No change (old_string == new_string in {path})")
+                continue
             show_diff(content, new_content, file_path, prefix="[TOOL]")
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)

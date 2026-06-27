@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument("--shell-after-build", action="store_true", help="Open a shell in the build environment on failure for debugging")
     parser.add_argument("--vm-type", default=None, help="VM type for pbuild (e.g., kvm, qemu)")
     parser.add_argument("--vm-memory", default=None, help="VM memory for pbuild (e.g., 4096)")
-    # Pre-process --update=VERSION into --update --update-version=VERSION
+    # Pre-process --update=VERSION and --update-only=VERSION into flag + --update-version=VERSION
     # to disallow the ambiguous space-separated --update VERSION syntax
     update_version_value = None
     for i, arg in enumerate(sys.argv[1:], 1):
@@ -63,8 +63,15 @@ if __name__ == "__main__":
             sys.argv[i] = f"{prefix}"
             sys.argv.insert(i + 1, f"--update-version={update_version_value}")
             break
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg.startswith("--update-only="):
+            update_version_value = arg.split("=", 1)[1]
+            sys.argv[i] = "--update-only"
+            sys.argv.insert(i + 1, f"--update-version={update_version_value}")
+            break
 
     parser.add_argument("--update", "-u", action="store_true", help="Update to the latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
+    parser.add_argument("--update-only", action="store_true", help="Update sources to the latest upstream version, then exit (no test build). Use --update-only=VERSION for a specific version.")
     parser.add_argument("--update-version", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--preset", default=None, help="Preset name to pass to pbuild")
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
@@ -78,6 +85,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when Ollama proposes multiple tool calls")
     parser.add_argument("--openai-server", default=None, help="OpenAI-compatible server URL (overrides OLLAMA_HOST env var, default http://localhost:11434)")
     parser.add_argument("--model", default=None, help="Ollama model name (overrides OLLAMA_MODEL env var, default gemma4)")
+    parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries (e.g., 'adrian@suse.de' or 'Adrian Schröter <adrian@suse.de>'). Falls back to EMAIL env var.")
     clean_group = parser.add_mutually_exclusive_group()
     clean_group.add_argument("--clean", action="store_true", default=False, help="Clean build artifacts before building")
     clean_group.add_argument("--no-clean", action="store_true", default=True, help="Do not clean build artifacts (default)")
@@ -99,13 +107,15 @@ if __name__ == "__main__":
         fix_attempts=args.fix_attempts,
         all_mode=args.all,
         prompt_hint=args.prompt,
-        update_version=args.update_version or "" if args.update else None,
+        update_version=args.update_version or "" if (args.update or args.update_only) else None,
+        update_only=args.update_only,
         modify_prompt=args.modify,
         generate_prompt=args.generate,
         ollama_server=args.openai_server,
         ollama_model_arg=args.model,
         shell_after_build=args.shell_after_build,
         interactive=args.interactive,
+        email=args.email or os.environ.get("EMAIL", ""),
     )
 
     # Local aliases for backward compatibility with remaining inline code
@@ -118,6 +128,7 @@ if __name__ == "__main__":
     DO_CLEAN = ctx.do_clean
     ALLOW_TOOL_SCRIPTS = ctx.allow_tool_scripts
     DEBUG = ctx.debug
+    EMAIL = ctx.email
     DEEP_ANALYZE = ctx.deep_analyze
     FIX_ATTEMPTS = ctx.fix_attempts
     ALL_MODE = ctx.all_mode
@@ -752,32 +763,27 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     sys.exit(1)
             sys.exit(0)
 
-        for spec in spec_files:
-            ollama.reset_context()
-            ollama.reset_stats()
+        # Phase 1: Update pass — update all packages first without building
+        updated_packages = set()
+        if UPDATE_VERSION is not None:
+            base_full_context = full_context
+            email_author = EMAIL if EMAIL else "<Your Name> <your@email>"
+            for spec in spec_files:
+                ollama.reset_context()
+                ollama.reset_stats()
 
-            # 1. Determine skill
-            skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
-            if skill:
-                print(f"[INFO] Using skill profile: {skill.__name__}")
-                spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', DEFAULT_SPEC_PROMPT)
-                error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
-                fix_func = getattr(skill, 'fix_content', default_fix)
-                # Inject skill instructions into full_context so the fix loop sees them
-                skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
-                if skill_ctx:
-                    full_context = f"{full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
-            else:
-                print("[INFO] No specific skill found. Using default profile.")
-                spec_prompt = DEFAULT_SPEC_PROMPT
-                error_prompt = DEFAULT_ERROR_PROMPT
-                fix_func = default_fix
+                skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
+                if skill:
+                    print(f"[INFO] Using skill profile: {skill.__name__}")
+                    skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
+                    if skill_ctx:
+                        full_context = f"{base_full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
+                else:
+                    print("[INFO] No specific skill found. Using default profile.")
 
-            # 1b. Update mode: update to latest/specific upstream version
-            if UPDATE_VERSION is not None:
+                spec_before_update = manager.read_file_safe(spec)
                 target_version = UPDATE_VERSION
                 if not target_version:
-                    # Auto-detect: research upstream via web_fetch
                     print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
                     spec_content = manager.read_file_safe(spec)
                     research_messages = [
@@ -792,23 +798,47 @@ Steps (do them in order, never skip any):
    - For GitLab, try https://gitlab.com/api/v4/projects/OWNER%2FREPO/releases/permalink/latest
    - For PyPI, try https://pypi.org/pypi/PACKAGE/json
    - Fall back to fetching the releases page if no API is available
-3. Update the spec — make ONLY these changes and nothing else:
+3. Fetch the release notes / changelog from the upstream release page using web_fetch:
+   - For GitHub, fetch the release page (e.g., https://github.com/OWNER/REPO/releases/tag/vVERSION) or use the API tag endpoint
+   - For GitLab, fetch the repository release page
+   - For PyPI, fetch https://pypi.org/pypi/PACKAGE/VERSION/json and look for the description or release_url field
+   - Extract the changelog entries for this version from the fetched content
+4. Update the spec — make ONLY these changes and nothing else:
    - Prefer edit_file for targeted changes (it preserves all other lines)
    - Change the Version tag to the new version number
    - Update Source URLs ONLY if they contain the OLD version number literally (e.g., "1.0.19" in the URL); do NOT replace the %{{version}} macro
-   - Add a new %changelog entry at the bottom
    - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
-4. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it
+5. Update the .changes file (same name as the .spec but with .changes extension):
+   - Use list_files to find the .changes file if unsure of its name
+    - Prepend a new changelog entry in openSUSE format using edit_file:
+      * <Day> <Month> <Date> <Year> {email_author} - NEWVERSION
+     - Updated to version NEWVERSION
+     - <changelog details from the upstream release notes>
+     - Update generated using pbuild-ai
+   - If the .changes file does not exist, create it with write_file
+6. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
+
+Also consult the AGENTS.md / skill rules below for project-specific update steps (e.g., tarball updates, _service file changes, additional files to update).
 
 Spec file ({spec}):
-{spec_content}"""},
+{spec_content}
+
+Additional context (AGENTS.md + skill rules):
+{full_context}"""},
                     ]
-                    results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
+                    results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=15)
                     if isinstance(results, str):
                         print(f"[UPDATE ERROR] {results}")
                     elif results:
                         for r in results:
-                            print(f"[UPDATE] {r}")
+                            if DEBUG:
+                                print(f"[UPDATE] {r}")
+                            elif r.startswith("web_fetch: [Fetched "):
+                                display = r.split("\n", 1)[0]
+                                print(f"[UPDATE] {display}")
+                            else:
+                                display = r[:500] + "..." if len(r) > 500 else r
+                                print(f"[UPDATE] {display}")
                         spec_content = manager.read_file_safe(spec)
                         for line in spec_content.split('\n'):
                             m = re.match(r'^Version:\s*(\S+)', line)
@@ -819,47 +849,95 @@ Spec file ({spec}):
                     if not target_version:
                         print("[UPDATE] Could not determine latest version.")
                         target_version = 'latest'
-                    spec_content = manager.read_file_safe(spec)
-                    def update_fix(content):
-                        return content
-                    fix_func = update_fix
                 else:
-                    # Explicit version: update spec + download source
                     print(f"\n[UPDATE] Updating {spec.name} to {target_version}...")
                     update_prompt = f"""Update the spec file to version {target_version}:
+- Use web_fetch to get the release notes for version {target_version} from the upstream project page (GitHub releases, GitLab releases, PyPI, etc.)
 - Update the Version tag
 - Update any Source and Patch URLs that include version numbers
-- Add a %changelog entry
-- Then download the new source tarball using download_file"""
+- PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
+- Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes — use list_files to find it if needed. Use "{email_author}" as the author in the entry header. Append "  - Update generated using pbuild-ai" as the last line of the entry
+- Then download the new source tarball using download_file — construct the URL from the spec's Source tag (substituting %{{version}} and the old version), not from the release page assets which are often precompiled binaries
+
+Also consult the AGENTS.md / skill rules below for version specific update steps (e.g., tarball updates, service file changes, additional files to update).
+
+Additional context (AGENTS.md + skill rules):
+{full_context}"""
                     messages = [
                         {"role": "system", "content": update_prompt},
                         {"role": "user", "content": f"Update this spec file to version {target_version}:\n\n{manager.read_file_safe(spec)}"}
                     ]
-                    results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
+                    results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=15)
                     if isinstance(results, str):
                         print(f"[UPDATE ERROR] {results}")
                     elif results:
                         for r in results:
-                            print(f"[UPDATE] {r}")
-                        spec_content = manager.read_file_safe(spec)
-                        def update_fix(content):
-                            return content
-                        fix_func = update_fix
+                            if DEBUG:
+                                print(f"[UPDATE] {r}")
+                            elif r.startswith("web_fetch: [Fetched "):
+                                display = r.split("\n", 1)[0]
+                                print(f"[UPDATE] {display}")
+                            else:
+                                display = r[:500] + "..." if len(r) > 500 else r
+                                print(f"[UPDATE] {display}")
                     else:
                         print("[UPDATE] No changes made.")
+
+                spec_after = manager.read_file_safe(spec)
+                if spec_after != spec_before_update:
+                    updated_packages.add(spec)
+                    print(f"[UPDATE] Updated {spec.name}.")
+                else:
+                    print(f"[UPDATE] No changes for {spec.name}.")
+
+            if ctx.update_only:
+                if not updated_packages:
+                    print("[UPDATE] No changes found. Exiting (--update-only).")
+                else:
+                    print(f"[UPDATE] Sources updated for {len(updated_packages)} packages. Exiting (--update-only, no build).")
+                sys.exit(0)
+
+            if not updated_packages:
+                print("[UPDATE] No packages were updated. Exiting.")
+                sys.exit(0)
+
+            print(f"\n[BUILD] All packages updated. Starting build phase...\n")
+            full_context = base_full_context
+
+        for spec in spec_files:
+            ollama.reset_context()
+            ollama.reset_stats()
+
+            if UPDATE_VERSION is not None and spec not in updated_packages:
+                continue
+
+            # 1. Determine skill
+            skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
+            if skill:
+                print(f"[INFO] Using skill profile: {skill.__name__}")
+                spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', DEFAULT_SPEC_PROMPT)
+                error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
+                fix_func = getattr(skill, 'fix_content', default_fix)
+                skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
+                if skill_ctx:
+                    full_context = f"{full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
+            else:
+                print("[INFO] No specific skill found. Using default profile.")
+                spec_prompt = DEFAULT_SPEC_PROMPT
+                error_prompt = DEFAULT_ERROR_PROMPT
+                fix_func = default_fix
+
+            if UPDATE_VERSION is not None:
+                pass  # Update already done in Phase 1 — build directly
             else:
                 # Normal flow: spec analysis and skill-based fix
                 if not ctx.modify_prompt:
-                    # Skip analysis when --modify --fix just applied the changes — build directly
-                    # 2. Spec-File Analysis (with specific or default prompt)
                     print(f"[OLLAMA] Analyzing Spec-file: {spec.name}...")
                     analysis_context = full_context
                     if PROMPT_HINT:
                         analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
                     spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
                     print(f"-> Ollama says:\n{spec_analysis}\n")
-
-                    # 3. Fix sources with skill logic (in --fix mode, only apply if there's a prior failed build)
                     if not FIX_MODE or manager.has_prior_failed_build():
                         manager.fix_file_content(spec, fix_func)
 
@@ -906,6 +984,7 @@ Spec file ({spec}):
             # 5. Ollama Error Analysis
             if build_success:
                 print(f"\n[OK] Build for {spec.name} succeeded.")
+                ollama.print_stats()
             else:
                 print(f"\n[ERROR] Build for {spec.name} failed. Consulting Ollama...")
                 error_analysis = ollama.analyze(error_prompt, build_out, full_context)

@@ -38,6 +38,7 @@ class PbuildContext:
     all_mode: bool = False
     prompt_hint: Optional[str] = None
     update_version: Optional[str] = None
+    update_only: bool = False
     generate_prompt: Optional[str] = None
     modify_prompt: Optional[str] = None
     debug: bool = False
@@ -45,6 +46,7 @@ class PbuildContext:
     interactive: bool = False
     ollama_server: Optional[str] = None  # --openai-server
     ollama_model_arg: Optional[str] = None
+    email: str = ""
 
     # Derived at startup
     full_context: str = ""
