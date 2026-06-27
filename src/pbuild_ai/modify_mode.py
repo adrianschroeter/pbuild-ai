@@ -85,7 +85,7 @@ Skill instructions (follow these):
                             tool_input['path'] = correct
                     round_calls.append((tool_name, tool_input))
 
-                if ctx.interactive and sum(1 for name, _ in round_calls if name in ("write_file", "run_tool_script")) > 1:
+                if ctx.interactive and sum(1 for name, _ in round_calls if name in ("write_file", "edit_file", "remove_file", "rename_file", "run_tool_script")) > 1:
                     print(f"\n--- Ollama proposes {len(round_calls)} tool calls ---")
                     for idx, (name, inp) in enumerate(round_calls, 1):
                         args_preview = json.dumps(inp)[:300]
@@ -124,7 +124,7 @@ Skill instructions (follow these):
                     else:
                         display = r[:500] + "..." if len(r) > 500 else r
                     print(f"[MODIFY] {display}", flush=True)
-                    if r.startswith("OK: Wrote ") and spec.name in r:
+                    if spec.name in r and (r.startswith("OK: Wrote ") or r.startswith("OK: Edited ") or r.startswith("OK: Removed ") or r.startswith("OK: Renamed ")):
                         changes_made = True
                 messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
                 for (name, _), content in zip(round_calls, round_results):

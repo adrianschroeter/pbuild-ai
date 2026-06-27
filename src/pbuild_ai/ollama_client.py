@@ -123,7 +123,7 @@ class OllamaAnalyzer:
                 round_calls.append((tool_name, tool_input))
 
             # Interactive mode: let user select which tool calls to execute (only for modification ops)
-            MODIFICATION_TOOLS = {"write_file", "run_tool_script"}
+            MODIFICATION_TOOLS = {"write_file", "edit_file", "remove_file", "rename_file", "run_tool_script"}
             mod_count = sum(1 for name, _ in round_calls if name in MODIFICATION_TOOLS)
             if interactive and mod_count > 1:
                 print(f"\n--- Ollama proposes {len(round_calls)} tool calls ---")

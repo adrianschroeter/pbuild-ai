@@ -103,7 +103,7 @@ The specification for the package to create is in the system prompt above. Start
                     continue
                 round_calls.append((tool_name, tool_input))
 
-            if ctx.interactive and sum(1 for c in round_calls if c[0] in ("write_file", "run_tool_script")) > 1:
+            if ctx.interactive and sum(1 for c in round_calls if c[0] in ("write_file", "edit_file", "remove_file", "rename_file", "run_tool_script")) > 1:
                 print(f"\n--- Ollama proposes {len(round_calls)} tool calls ---")
                 for idx, (name, inp) in enumerate(round_calls, 1):
                     args_preview = json.dumps(inp)[:300]

@@ -849,17 +849,19 @@ Spec file ({spec}):
                         print("[UPDATE] No changes made.")
             else:
                 # Normal flow: spec analysis and skill-based fix
-                # 2. Spec-File Analysis (with specific or default prompt)
-                print(f"[OLLAMA] Analyzing Spec-file: {spec.name}...")
-                analysis_context = full_context
-                if PROMPT_HINT:
-                    analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
-                spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
-                print(f"-> Ollama says:\n{spec_analysis}\n")
+                if not ctx.modify_prompt:
+                    # Skip analysis when --modify --fix just applied the changes — build directly
+                    # 2. Spec-File Analysis (with specific or default prompt)
+                    print(f"[OLLAMA] Analyzing Spec-file: {spec.name}...")
+                    analysis_context = full_context
+                    if PROMPT_HINT:
+                        analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
+                    spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
+                    print(f"-> Ollama says:\n{spec_analysis}\n")
 
-                # 3. Fix sources with skill logic (in --fix mode, only apply if there's a prior failed build)
-                if not FIX_MODE or manager.has_prior_failed_build():
-                    manager.fix_file_content(spec, fix_func)
+                    # 3. Fix sources with skill logic (in --fix mode, only apply if there's a prior failed build)
+                    if not FIX_MODE or manager.has_prior_failed_build():
+                        manager.fix_file_content(spec, fix_func)
 
             # 4. Determine build mode and execute (always from WORKSPACE_DIR, never cd)
             if PACKAGE_FILTER:
