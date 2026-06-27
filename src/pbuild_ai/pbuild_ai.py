@@ -816,7 +816,9 @@ Steps (do them in order, never skip any):
      - <changelog details from the upstream release notes>
      - Update generated using pbuild-ai
    - If the .changes file does not exist, create it with write_file
-6. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
+6. Check for a _service file next to the spec (use list_files). If present, read it with read_file and update all <revision> tags to match the new version using edit_file.
+7. Avoid using files with .obscpio suffix. eg from "obs_scm" service calls. Try to convert these to remote assets instead.
+8. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Include the package subdirectory in the filename argument (e.g., "libopenshot/libopenshot-0.4.0.tar.xz" not just "libopenshot-0.4.0.tar.xz") — use list_files output to find the correct relative path from the workspace root. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
 
 Also consult the AGENTS.md / skill rules below for project-specific update steps (e.g., tarball updates, _service file changes, additional files to update).
 
@@ -857,7 +859,8 @@ Additional context (AGENTS.md + skill rules):
 - Update any Source and Patch URLs that include version numbers
 - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 - Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes — use list_files to find it if needed. Use "{email_author}" as the author in the entry header. Append "  - Update generated using pbuild-ai" as the last line of the entry
-- Then download the new source tarball using download_file — construct the URL from the spec's Source tag (substituting %{{version}} and the old version), not from the release page assets which are often precompiled binaries
+- Check for a _service file next to the spec (use list_files). If present, update all <revision> tags to match the new version.
+- Then download the new source tarball using download_file — include the package subdirectory in the filename (check list_files output for the correct relative path from workspace root). Construct the URL from the spec's Source tag (substituting %{{version}} and the old version), not from the release page assets which are often precompiled binaries
 
 Also consult the AGENTS.md / skill rules below for version specific update steps (e.g., tarball updates, service file changes, additional files to update).
 
