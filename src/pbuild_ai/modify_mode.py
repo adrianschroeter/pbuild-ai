@@ -27,7 +27,7 @@ def run_modify_mode(ctx):
     for spec in ctx.spec_files:
         skill = ctx.skill_manager.get_skill_for(spec.name, ctx.manager.read_file_safe(spec), prompt=ctx.modify_prompt)
         spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', ctx.default_spec_prompt) if skill else ctx.default_spec_prompt
-        print(f"\n[MODIFY] Sending {spec.name} sources to Ollama...")
+        print(f"\n[MODIFY] Sending {spec.name} sources to {ctx.ollama.model}...")
         spec_content = ctx.manager.read_file_safe(spec)
         hint = f"\n\n--- User Hint (prefer this over generic analysis) ---\n{ctx.prompt_hint}" if ctx.prompt_hint else ""
         messages = [
@@ -35,9 +35,9 @@ def run_modify_mode(ctx):
 
 The spec file content is ALREADY provided below in the user message. Do NOT call read_file — the content is right here.
 
-You have these tools: write_file, read_file, web_fetch, git_command.
+You have these tools: edit_file, write_file, read_file, web_fetch, git_command.
 
-To make changes, call write_file with the corrected spec file. If you are unsure or need to choose between options, ask the user by responding with your question — you will get their answer in the next round.
+To make changes, prefer edit_file for small targeted changes — it replaces only the matching text and preserves all other lines. Use write_file only for large rewrites or new files. IMPORTANT: write_file writes the ENTIRE file — you must include ALL lines. PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM; do not add, remove, or modify anything beyond the specific change. Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise. If you are unsure or need to choose between options, ask the user by responding with your question — you will get their answer in the next round.
 
 User request: {ctx.modify_prompt}{hint}
 

@@ -54,6 +54,7 @@ Source:        %{name}-%{version}.tar.xz
 - The `Source:` defines the tar ball to be created now.
 - All three statements must be in an own line.
 - If there is no `_service` file, just add the two prefix lines to the `Source:` line.
+- Avoid any other change.
 
 Make the changes using write_file. Write both the spec file and the _service file if needed.
 """

@@ -37,7 +37,7 @@ def build_tools_list():
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Write or overwrite a file in the workspace directory. Only files within the workspace are allowed.",
+                "description": "Write or overwrite a file in the workspace directory. Use ONLY for large/wholesale rewrites or new files. For targeted changes, prefer edit_file to avoid accidentally dropping lines.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -51,6 +51,31 @@ def build_tools_list():
                         }
                     },
                     "required": ["path", "content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "edit_file",
+                "description": "Apply a targeted search-and-replace edit to an existing file in the workspace. PREFER this over write_file for small, specific changes — it preserves all lines not being modified. The old_string must match exactly one location in the file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file (relative to workspace root)"
+                        },
+                        "old_string": {
+                            "type": "string",
+                            "description": "Exact text to search for (must match exactly one location)"
+                        },
+                        "new_string": {
+                            "type": "string",
+                            "description": "Replacement text"
+                        }
+                    },
+                    "required": ["path", "old_string", "new_string"]
                 }
             }
         },
@@ -312,6 +337,53 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                         if formatted != tool_input["content"]:
                             show_diff(tool_input["content"], formatted, file_path, prefix="[TOOL]")
                             print(f"[TOOL] format_spec_file: normalized {tool_input['path']}")
+                except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
+                    pass
+        elif tool_name == "edit_file":
+            path = tool_input.get("path")
+            old_string = tool_input.get("old_string")
+            new_string = tool_input.get("new_string", "")
+            if not path:
+                results.append(f"Error: edit_file: missing 'path'. Got keys: {list(tool_input.keys())}.")
+                continue
+            if not old_string:
+                results.append(f"Error: edit_file: missing 'old_string'. Got keys: {list(tool_input.keys())}.")
+                continue
+            file_path = resolve_path(path, workspace_dir)
+            if file_path is None or not manager._is_safe_path(file_path):
+                results.append(f"Error: {path} is outside the workspace directory.")
+                continue
+            if not file_path.exists():
+                results.append(f"Error: File not found: {path}")
+                continue
+            try:
+                content = manager.read_file_safe(file_path)
+            except Exception as e:
+                results.append(f"Error reading file: {e}")
+                continue
+            count = content.count(old_string)
+            if count == 0:
+                results.append(f"Error: edit_file: old_string not found in {path}")
+                continue
+            if count > 1:
+                results.append(f"Error: edit_file: old_string found {count} times in {path}. Provide more context to make the match unique.")
+                continue
+            new_content = content.replace(old_string, new_string, 1)
+            show_diff(content, new_content, file_path, prefix="[TOOL]")
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            print(f"[TOOL] edit_file: {path} (1 match replaced)")
+            results.append(f"OK: Edited {path}")
+            # Run format_spec_file on .spec files
+            if file_path.suffix == '.spec':
+                fmt_cmd = ["/usr/lib/obs/service/format_spec_file", str(file_path.parent)]
+                try:
+                    fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
+                    if fmt_result.returncode == 0:
+                        formatted = file_path.read_text(encoding='utf-8')
+                        if formatted != new_content:
+                            show_diff(new_content, formatted, file_path, prefix="[TOOL]")
+                            print(f"[TOOL] format_spec_file: normalized {path}")
                 except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
                     pass
         elif tool_name == "read_file":

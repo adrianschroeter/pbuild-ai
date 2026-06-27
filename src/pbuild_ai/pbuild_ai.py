@@ -476,13 +476,18 @@ if __name__ == "__main__":
                     {"role": "system", "content": f"""You are an RPM packager assistant. Fix build failures by using tools.
 
 You MUST call one or more of these tools NOW to make changes:
-- write_file(path, content): write a file
+- edit_file(path, old_string, new_string): targeted search-and-replace (PREFER this for small changes)
+- write_file(path, content): write a file (use only for large rewrites or new files)
 - read_file(path): read a file
 - web_fetch(url): fetch an HTTPS URL
 - git_command(command): run a git command
 - run_tool_script(script_name, args): run a script from tool-scripts/
 
-Call the tools to make changes. You may need to read files first, then call write_file.
+Call the tools to make changes. You may need to read files first, then call edit_file or write_file.
+Prefer edit_file for small targeted changes — it replaces only the matching text and preserves all other lines.
+IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
+PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM — do not add, remove, or modify anything beyond the specific fix.
+Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise.
 Make all necessary changes now, then stop.
 
 AGENTS.md instructions (follow these):
@@ -520,10 +525,13 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
             else:
                 print("[FIX] No tool calls. Retrying with forceful tool demand...")
                 fix_messages.append({"role": "assistant", "content": error_analysis})
-                fix_messages.append({"role": "user", "content": f"""Your analysis above is correct. Now call write_file to APPLY these changes to the spec file.
+                fix_messages.append({"role": "user", "content": f"""Your analysis above is correct. Now apply these changes to the spec file.
 
 Do NOT explain again. Do NOT summarize. Do NOT ask questions.
-Call write_file with the corrected spec content NOW."""})
+Prefer edit_file for targeted changes — it preserves all other lines.
+IMPORTANT: write_file writes the ENTIRE file. Include EVERY line verbatim — preserve all lines except the specific fix.
+Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise.
+Apply the corrected spec content NOW."""})
                 tool_results = ollama.call_with_tools(fix_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
                 if isinstance(tool_results, str):
                     print(f"[FIX ERROR] {tool_results}")
@@ -784,7 +792,8 @@ Steps (do them in order, never skip any):
    - For GitLab, try https://gitlab.com/api/v4/projects/OWNER%2FREPO/releases/permalink/latest
    - For PyPI, try https://pypi.org/pypi/PACKAGE/json
    - Fall back to fetching the releases page if no API is available
-3. Update the spec with write_file — make ONLY these changes and nothing else:
+3. Update the spec — make ONLY these changes and nothing else:
+   - Prefer edit_file for targeted changes (it preserves all other lines)
    - Change the Version tag to the new version number
    - Update Source URLs ONLY if they contain the OLD version number literally (e.g., "1.0.19" in the URL); do NOT replace the %{{version}} macro
    - Add a new %changelog entry at the bottom
