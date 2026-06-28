@@ -26,13 +26,13 @@ class TestSkillManager(unittest.TestCase):
         self.assertEqual(skill.__name__, "python_skill")
 
     def test_first_match_by_content(self):
-        skill = self.sm.get_skill_for(
+        skills = self.sm.get_skills_for(
             "foo.spec",
             content="BuildRequires: pkgconfig(Qt5Core)\nBuildRequires: ffmpeg-devel",
         )
-        self.assertIsNotNone(skill)
-        # qt5_skill comes before ffmpeg_skill alphabetically in the skills list
-        self.assertEqual(skill.__name__, "qt5_skill")
+        names = {s.__name__ for s in skills}
+        self.assertIn("qt5_skill", names)
+        self.assertIn("ffmpeg_skill", names)
 
     def test_first_match_by_prompt(self):
         skill = self.sm.get_skill_for("foo.spec", prompt="clean up this spec")
