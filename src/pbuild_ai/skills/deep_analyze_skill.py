@@ -29,6 +29,16 @@ Common build failure patterns to check:
 - Missing pkg-config: "Package xyz was not found in pkg-config search path"
 - Undefined references at link time
 - Test suite failures in %check section
+- Out-of-memory (OOM): if processes are being killed (signal 9), 'Killed', 'Cannot allocate memory', or 'out of memory' appears in the log, the VM needs more memory or fewer parallel jobs
+
+OOM troubleshooting:
+Check available memory:
+    free -m
+Check available swap:
+    swapon --show
+If OOM is confirmed, suggest the user:
+    pbuild --vm-memory 8192     (increase from default 4096)
+    pbuild --jobs 1              (reduce parallel jobs to 1)
 
 Be thorough: run commands to verify your hypotheses before concluding.
 """

@@ -62,4 +62,4 @@ class PbuildContext:
 
     # Prompt templates
     default_spec_prompt: str = "Check this RPM Spec-file for errors or missing best practices. Keep it brief:"
-    default_error_prompt: str = "The RPM build failed. Analyze the log and explain the error precisely. Provide a solution. If you are unsure about the root cause and need to investigate interactively inside the build environment, include [DEEP_ANALYZE] in your response."
+    default_error_prompt: str = "The RPM build failed. Analyze the log and explain the error precisely. Provide a solution. If you are unsure about the root cause and need to investigate interactively inside the build environment, include [DEEP_ANALYZE] in your response.\n\nIf you detect an out-of-memory (OOM) error (e.g., 'Killed', 'signal 9', 'Out of memory', 'Cannot allocate memory', 'vm.max_map_count'): suggest increasing VM memory via 'pbuild --vm-memory 4096' or higher, or setting parallel jobs to 1 via 'pbuild --jobs 1'."
