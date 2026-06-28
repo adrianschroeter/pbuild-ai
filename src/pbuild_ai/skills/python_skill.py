@@ -10,7 +10,7 @@ OLLAMA_SPEC_PROMPT = """
 You are an expert in Python RPM packaging for openSUSE.
 Check the following Spec-file. Pay special attention to:
 1. Do NOT use %pyproject_buildrequires, %pyproject_files, or %pyproject_save_files macros — avoid them entirely.
-2. Use %pyproject_wheel and %pyproject_install instead.
+2. Use %pyproject_wheel and %pyproject_install instead when the source uses a pyproject.toml.
 3. Generate new spec files by using "py2pack generate MODULE VERSION" command
 4. Use the BuildRequires macros %{python_module MODLE_NAME}
 5. Are there any obvious missing BuildRequires like for devel or for pip? or python-rpm-macros?
@@ -23,6 +23,7 @@ You are a Python developer. The RPM build for this Python package failed.
 Check the log for typical errors such as:
 - Missing Python modules (ModuleNotFoundError)
 - Errors in setup.py or pyproject.toml
+- You may need to convert to %pyproject_wheel and %pyproject_install macros when the project switched to pyproject.toml.
 Explain the cause and suggest the missing RPM package name for BuildRequires.
 
 Include the exact BuildRequires line in your analysis, for example:
