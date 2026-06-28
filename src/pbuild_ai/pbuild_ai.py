@@ -79,6 +79,7 @@ if __name__ == "__main__":
     parser.add_argument("--fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, resets for each package)")
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
     parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to Ollama")
+    parser.add_argument("--fresh", action="store_true", help="Discard saved .pai.context and start fresh")
     parser.add_argument("--modify", "-m", default=None, help="Modify package sources: send prompt + sources to Ollama, apply changes locally, then quit (no build)")
     parser.add_argument("--generate", default=None, help="Generate a new package from scratch in workspace_dir based on the given prompt. The tool will research upstream, ask clarifying questions, and create spec files.")
     parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when Ollama proposes multiple tool calls")
@@ -141,6 +142,11 @@ if __name__ == "__main__":
 
     Path(WORKSPACE_DIR).mkdir(exist_ok=True)
     ctx.project_mode = PROJECT_MODE
+
+    context_file_path = Path(WORKSPACE_DIR) / ".pai.context"
+    if args.fresh and context_file_path.exists():
+        context_file_path.unlink()
+        print("[INFO] Discarded saved .pai.context (--fresh).")
 
     manager = RpmSourceManager(WORKSPACE_DIR, do_clean=DO_CLEAN, vm_type=ctx.vm_type, vm_memory=ctx.vm_memory, shell_after_build=ctx.shell_after_build, preset=PRESET, root_dir=ROOT_DIR)
     skill_manager = SkillManager(SKILLS_DIR)
@@ -434,6 +440,26 @@ if __name__ == "__main__":
         current_build_out = initial_build_out
         fix_messages = None
         build_success2 = False
+        _latest_analysis = ""
+        _ctx_file = Path(WORKSPACE_DIR) / ".pai.context"
+
+        # Load saved context (if any) for the same spec
+        if _ctx_file.exists():
+            try:
+                _saved = json.loads(_ctx_file.read_text())
+                if _saved.get("spec_path") == str(spec.relative_to(WORKSPACE_DIR)):
+                    print(f"[FIX] Loaded saved context from {_ctx_file.name}")
+                    fix_messages = _saved["fix_messages"]
+                    if PROMPT_HINT:
+                        fix_messages.append({"role": "user", "content": f"--- User Hint ---\n{PROMPT_HINT}"})
+                else:
+                    print(f"[FIX] Stale context (for {_saved.get('spec_path')}), discarding.")
+                    _ctx_file.unlink()
+            except Exception as e:
+                print(f"[FIX] Corrupt context file: {e}")
+                _ctx_file.unlink()
+        elif PROMPT_HINT:
+            print(f"[FIX] No saved context found, but --prompt will be included in the fix context.")
         if DEEP_ANALYZE:
             print(f"\n[DEEP ANALYZE] Opening interactive shell for {spec.stem}...")
             manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
@@ -460,6 +486,7 @@ if __name__ == "__main__":
                         sys.exit(1)
                     error_context = current_build_out
             error_analysis = ollama.analyze(error_prompt, error_context, full_context)
+            _latest_analysis = error_analysis
             print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
             # Auto-trigger deep-analyze if Ollama requests it and we aren't already in that mode
             if "[DEEP_ANALYZE]" in error_analysis and not DEEP_ANALYZE:
@@ -470,6 +497,7 @@ if __name__ == "__main__":
                 deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
                 error_analysis = ollama.analyze(error_prompt, error_context, deep_context)
                 error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
+                _latest_analysis = error_analysis
                 print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
             if spec_files:
                 build_suggested_dependency(error_analysis, spec_files, manager, ollama, full_context)
@@ -620,6 +648,9 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             current_spec = manager.read_file_safe(spec)
             changed = current_spec != spec_content
             if not changed and not tool_results:
+                if fix_messages:
+                    _ctx_file.write_text(json.dumps({"version": 1, "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "fix_messages": fix_messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
+                    print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart with --prompt")
                 print("[FIX ERROR] No source changes were made. Aborting rebuild.", flush=True)
                 if exit_on_no_changes:
                     sys.exit(1)
@@ -632,14 +663,21 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 print(f"\n[OK] Fix verified: Build for {spec.name} succeeded after applying changes.")
                 if DEEP_ANALYZE:
                     export_deep_fix_patch(WORKSPACE_DIR, spec, spec.stem)
+                if _ctx_file.exists():
+                    _ctx_file.unlink()
+                    print(f"[FIX] Removed saved context ({_ctx_file.name}) after successful build.")
                 break
             else:
                 print(f"\n[WARN] Fix attempt {fix_attempt} still failing.")
                 error_analysis2 = ollama.analyze(error_prompt, build_out2, full_context)
+                _latest_analysis = error_analysis2
                 print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n{error_analysis2}\n------------------------------------------\n")
                 current_build_out = build_out2
 
         if not build_success2:
+            if fix_messages:
+                _ctx_file.write_text(json.dumps({"version": 1, "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "fix_messages": fix_messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
+                print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart with --prompt")
             label = MAX_ATTEMPTS if not unlimited else "unlimited"
             print(f"[FIX ERROR] All {label} fix attempts exhausted. Build still failing.")
             if exit_on_exhaustion:
@@ -921,6 +959,37 @@ Additional context (AGENTS.md + skill rules):
                                 print(f"[UPDATE] {display}")
                     else:
                         print("[UPDATE] No changes made.")
+
+                # Deterministic source tarball download (not relying on Ollama tool calls)
+                if target_version and target_version not in ('latest',):
+                    try:
+                        _spec_content = manager.read_file_safe(spec)
+                        if not (spec.parent / "_service").exists():
+                            _source_url = None
+                            for _line in _spec_content.split('\n'):
+                                _m = re.match(r'^Source\d*:\s*(.+)', _line, re.I)
+                                if _m:
+                                    _source_url = _m.group(1).strip()
+                                    break
+                            if _source_url:
+                                _expanded = _source_url.replace('%{version}', target_version)
+                                _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                                if _old_v and _old_v.group(1) != target_version:
+                                    _expanded = _expanded.replace(_old_v.group(1), target_version)
+                                from urllib.parse import urlparse
+                                _fname = Path(urlparse(_expanded).path).name or Path(_expanded).name
+                                _rel = Path(spec).relative_to(Path(WORKSPACE_DIR))
+                                if _rel.parent != Path('.'):
+                                    _fname = str(_rel.parent / _fname)
+                                print(f"[UPDATE] Downloading {_fname}...")
+                                for _r in execute_tool_calls(
+                                    [("download_file", {"url": _expanded, "filename": _fname})],
+                                    manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE
+                                ):
+                                    _d = _r[:500] + "..." if len(_r) > 500 else _r
+                                    print(f"[UPDATE] {_d}")
+                    except Exception as e:
+                        print(f"[UPDATE] Source download failed: {e}")
 
                 spec_after = manager.read_file_safe(spec)
                 if spec_after != spec_before_update:
