@@ -54,21 +54,39 @@ class SkillManager:
             except Exception as e:
                 print(f"[WARNING] Could not load skill {skill_file.name}: {e}")
 
+    def _print_skill_active(self, skill, filename, match_type):
+        """Print a consistent [SKILL ACTIVE] message."""
+        skill_name = Path(skill.__file__).name if hasattr(skill, '__file__') else "unknown"
+        if match_type == "prompt":
+            print(f"[SKILL ACTIVE] {skill_name} (prompt match)")
+        else:
+            print(f"[SKILL ACTIVE] {skill_name} for {filename}")
+
+    def _matches_skill(self, skill, filename, content, prompt):
+        """Check if a skill matches the given filename, content, or prompt."""
+        if hasattr(skill, 'TARGET_PATTERN') and re.search(skill.TARGET_PATTERN, filename):
+            return True
+        if content is not None and hasattr(skill, 'CONTENT_PATTERN') and re.search(skill.CONTENT_PATTERN, content):
+            return True
+        if prompt is not None and hasattr(skill, 'PROMPT_PATTERN') and re.search(skill.PROMPT_PATTERN, prompt):
+            return True
+        return False
+
     def get_skill_for(self, filename, content=None, prompt=None):
         for skill in self.skills:
-            if hasattr(skill, 'TARGET_PATTERN') and re.search(skill.TARGET_PATTERN, filename):
-                skill_name = Path(skill.__file__).name if hasattr(skill, '__file__') else "unknown"
-                print(f"[SKILL ACTIVE] {skill_name} for {filename}")
-                return skill
-            if content is not None and hasattr(skill, 'CONTENT_PATTERN') and re.search(skill.CONTENT_PATTERN, content):
-                skill_name = Path(skill.__file__).name if hasattr(skill, '__file__') else "unknown"
-                print(f"[SKILL ACTIVE] {skill_name} for {filename}")
-                return skill
-            if prompt is not None and hasattr(skill, 'PROMPT_PATTERN') and re.search(skill.PROMPT_PATTERN, prompt):
-                skill_name = Path(skill.__file__).name if hasattr(skill, '__file__') else "unknown"
-                print(f"[SKILL ACTIVE] {skill_name} (prompt match)")
+            if self._matches_skill(skill, filename, content, prompt):
+                self._print_skill_active(skill, filename, "prompt" if prompt and hasattr(skill, 'PROMPT_PATTERN') and re.search(skill.PROMPT_PATTERN, prompt) else "content")
                 return skill
         return None
+
+    def get_skills_for(self, filename, content=None, prompt=None):
+        """Return ALL skills matching the given filename, content, or prompt."""
+        matches = []
+        for skill in self.skills:
+            if self._matches_skill(skill, filename, content, prompt):
+                self._print_skill_active(skill, filename, "prompt" if prompt and hasattr(skill, 'PROMPT_PATTERN') and re.search(skill.PROMPT_PATTERN, prompt) else "content")
+                matches.append(skill)
+        return matches
 
     def get_skill_by_name(self, name):
         return self._named_skills.get(name)

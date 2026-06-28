@@ -409,8 +409,12 @@ if __name__ == "__main__":
                 if suggested in spec_map:
                     print(f"\n[DEP] Ollama suggests building '{suggested}' first. Building it now...")
                     dep_spec = spec_map[suggested]
-                    dep_skill = skill_manager.get_skill_for(dep_spec.name, manager.read_file_safe(dep_spec))
-                    dep_prompt = getattr(dep_skill, 'OLLAMA_SPEC_PROMPT', DEFAULT_SPEC_PROMPT) if dep_skill else DEFAULT_SPEC_PROMPT
+                    dep_skills = skill_manager.get_skills_for(dep_spec.name, manager.read_file_safe(dep_spec))
+                    if dep_skills:
+                        dep_prompt_parts = [getattr(s, 'OLLAMA_SPEC_PROMPT', '') for s in dep_skills if getattr(s, 'OLLAMA_SPEC_PROMPT', '')]
+                        dep_prompt = "\n\n".join(dep_prompt_parts) if dep_prompt_parts else DEFAULT_SPEC_PROMPT
+                    else:
+                        dep_prompt = DEFAULT_SPEC_PROMPT
                     dep_spec_analysis = ollama.analyze(dep_prompt, manager.read_file_safe(dep_spec), full_context)
                     print(f"-> Ollama says about {dep_spec.name}:\n{dep_spec_analysis}\n")
                     dep_success, dep_out = manager.run_project_build(suggested, stream_output=SHOW_BUILDLOG)
@@ -687,12 +691,33 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             ollama.reset_context()
             ollama.reset_stats()
 
-            skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
-            if skill:
-                error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
-                fix_func = getattr(skill, 'fix_content', default_fix)
-                skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
-                local_fc = f"{base_fc}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}" if skill_ctx else base_fc
+            skills = skill_manager.get_skills_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
+            if skills:
+                for s in skills:
+                    print(f"[INFO] Using skill profile: {s.__name__}")
+                error_prompt_parts = []
+                fix_funcs = []
+                skill_ctx_parts = []
+                for s in skills:
+                    ep = getattr(s, 'OLLAMA_ERROR_PROMPT', '')
+                    if ep:
+                        error_prompt_parts.append(ep)
+                    ff = getattr(s, 'fix_content', None)
+                    if ff:
+                        fix_funcs.append(ff)
+                    sc = getattr(s, 'OLLAMA_SPEC_PROMPT', '')
+                    if sc:
+                        skill_ctx_parts.append(f"--- Skill: {s.__name__} ---\n{sc}")
+                error_prompt = "\n\n".join(error_prompt_parts) if error_prompt_parts else DEFAULT_ERROR_PROMPT
+                if fix_funcs:
+                    def chained_fix(content):
+                        for f in fix_funcs:
+                            content = f(content)
+                        return content
+                    fix_func = chained_fix
+                else:
+                    fix_func = default_fix
+                local_fc = f"{base_fc}\n\n" + "\n\n".join(skill_ctx_parts) if skill_ctx_parts else base_fc
             else:
                 error_prompt = DEFAULT_ERROR_PROMPT
                 fix_func = default_fix
@@ -772,12 +797,17 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 ollama.reset_context()
                 ollama.reset_stats()
 
-                skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
-                if skill:
-                    print(f"[INFO] Using skill profile: {skill.__name__}")
-                    skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
-                    if skill_ctx:
-                        full_context = f"{base_full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
+                skills = skill_manager.get_skills_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
+                if skills:
+                    for s in skills:
+                        print(f"[INFO] Using skill profile: {s.__name__}")
+                    skill_ctx_parts = []
+                    for s in skills:
+                        ctx = getattr(s, 'OLLAMA_SPEC_PROMPT', '')
+                        if ctx:
+                            skill_ctx_parts.append(f"--- Skill: {s.__name__} ---\n{ctx}")
+                    if skill_ctx_parts:
+                        full_context = f"{base_full_context}\n\n" + "\n\n".join(skill_ctx_parts)
                 else:
                     print("[INFO] No specific skill found. Using default profile.")
 
@@ -941,16 +971,38 @@ Additional context (AGENTS.md + skill rules):
                 if UPDATE_VERSION is not None and spec not in updated_packages:
                     continue
 
-                # 1. Determine skill
-                skill = skill_manager.get_skill_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
-                if skill:
-                    print(f"[INFO] Using skill profile: {skill.__name__}")
-                    spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', DEFAULT_SPEC_PROMPT)
-                    error_prompt = getattr(skill, 'OLLAMA_ERROR_PROMPT', DEFAULT_ERROR_PROMPT)
-                    fix_func = getattr(skill, 'fix_content', default_fix)
-                    skill_ctx = getattr(skill, 'OLLAMA_SPEC_PROMPT', '')
-                    if skill_ctx:
-                        full_context = f"{full_context}\n\n--- Skill: {skill.__name__} ---\n{skill_ctx}"
+                # 1. Determine skills
+                skills = skill_manager.get_skills_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
+                if skills:
+                    for s in skills:
+                        print(f"[INFO] Using skill profile: {s.__name__}")
+                    spec_prompt_parts = []
+                    error_prompt_parts = []
+                    fix_funcs = []
+                    skill_ctx_parts = []
+                    for s in skills:
+                        sp = getattr(s, 'OLLAMA_SPEC_PROMPT', '')
+                        if sp:
+                            spec_prompt_parts.append(f"--- Skill: {s.__name__} ---\n{sp}")
+                            skill_ctx_parts.append(f"--- Skill: {s.__name__} ---\n{sp}")
+                        ep = getattr(s, 'OLLAMA_ERROR_PROMPT', '')
+                        if ep:
+                            error_prompt_parts.append(ep)
+                        ff = getattr(s, 'fix_content', None)
+                        if ff:
+                            fix_funcs.append(ff)
+                    spec_prompt = "\n\n".join(spec_prompt_parts) if spec_prompt_parts else DEFAULT_SPEC_PROMPT
+                    error_prompt = "\n\n".join(error_prompt_parts) if error_prompt_parts else DEFAULT_ERROR_PROMPT
+                    if fix_funcs:
+                        def chained_fix(content):
+                            for f in fix_funcs:
+                                content = f(content)
+                            return content
+                        fix_func = chained_fix
+                    else:
+                        fix_func = default_fix
+                    if skill_ctx_parts:
+                        full_context = f"{full_context}\n\n" + "\n\n".join(skill_ctx_parts)
                 else:
                     print("[INFO] No specific skill found. Using default profile.")
                     spec_prompt = DEFAULT_SPEC_PROMPT

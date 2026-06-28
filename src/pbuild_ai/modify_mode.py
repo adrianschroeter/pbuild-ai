@@ -25,8 +25,14 @@ from pbuild_ai.tools import execute_tool_calls
 def run_modify_mode(ctx):
     """Hand sources + prompt to Ollama, apply changes locally, then exit (no build)."""
     for spec in ctx.spec_files:
-        skill = ctx.skill_manager.get_skill_for(spec.name, ctx.manager.read_file_safe(spec), prompt=ctx.modify_prompt)
-        spec_prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', ctx.default_spec_prompt) if skill else ctx.default_spec_prompt
+        skills = ctx.skill_manager.get_skills_for(spec.name, ctx.manager.read_file_safe(spec), prompt=ctx.modify_prompt)
+        if skills:
+            for s in skills:
+                print(f"[INFO] Using skill profile: {s.__name__}")
+            prompt_parts = [getattr(s, 'OLLAMA_SPEC_PROMPT', '') for s in skills if getattr(s, 'OLLAMA_SPEC_PROMPT', '')]
+            spec_prompt = "\n\n".join(prompt_parts) if prompt_parts else ctx.default_spec_prompt
+        else:
+            spec_prompt = ctx.default_spec_prompt
         print(f"\n[MODIFY] Sending {spec.name} sources to {ctx.ollama.model}...")
         spec_content = ctx.manager.read_file_safe(spec)
         hint = f"\n\n--- User Hint (prefer this over generic analysis) ---\n{ctx.prompt_hint}" if ctx.prompt_hint else ""
