@@ -478,7 +478,7 @@ if __name__ == "__main__":
         unlimited = FIX_ATTEMPTS == 0
         fix_attempt = 0
         current_build_out = initial_build_out
-        fix_messages = None
+        messages = None
         build_success2 = False
         _latest_analysis = ""
         _ctx_file = Path(WORKSPACE_DIR) / ".pai.context"
@@ -489,9 +489,9 @@ if __name__ == "__main__":
                 _saved = json.loads(_ctx_file.read_text())
                 if _saved.get("spec_path") == str(spec.relative_to(WORKSPACE_DIR)):
                     print(f"[FIX] Loaded saved context from {_ctx_file.name}")
-                    fix_messages = _saved["fix_messages"]
+                    messages = _saved.get("messages") or _saved.get("fix_messages", [])
                     if PROMPT_HINT:
-                        fix_messages.append({"role": "user", "content": f"--- User Hint ---\n{PROMPT_HINT}"})
+                        messages.append({"role": "user", "content": f"--- User Hint ---\n{PROMPT_HINT}"})
                 else:
                     print(f"[FIX] Stale context (for {_saved.get('spec_path')}), discarding.")
                     _ctx_file.unlink()
@@ -546,8 +546,8 @@ if __name__ == "__main__":
             fix_context = full_context or 'No AGENTS.md'
             if PROMPT_HINT:
                 fix_context = f"{fix_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
-            if fix_messages is None:
-                fix_messages = [
+            if messages is None:
+                messages = [
                     {"role": "system", "content": f"""You are an RPM packager assistant. Fix build failures by using tools.
 
 You MUST call one or more of these tools NOW to make changes:
@@ -583,16 +583,37 @@ IMPORTANT: write_file writes the ENTIRE file. Include EVERY line verbatim.
 Keep changes minimal unless stated otherwise."""}
                 ]
             else:
-                fix_messages.append({"role": "assistant", "content": (error_analysis or "")[:2000]})
-                fix_messages.append({"role": "user", "content": f"""The previous fix attempt did not resolve the build for {package_name}. Here is the new error context:
+                # Refresh system prompt (cross-mode compat: loaded from --modify or old --fix)
+                if messages and messages[0].get("role") == "system":
+                    messages[0] = {"role": "system", "content": f"""You are an RPM packager assistant. Fix build failures by using tools.
+
+You MUST call one or more of these tools NOW to make changes:
+- edit_file(path, old_string, new_string): targeted search-and-replace (PREFER this for small changes)
+- write_file(path, content): write a file (use only for large rewrites or new files)
+- read_file(path): read a file
+- web_fetch(url): fetch an HTTPS URL
+- git_command(command): run a git command
+- run_tool_script(script_name, args): run a script from tool-scripts/
+
+Call the tools to make changes. You may need to read files first, then call edit_file or write_file.
+Prefer edit_file for small targeted changes — it replaces only the matching text and preserves all other lines.
+IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
+PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM — do not add, remove, or modify anything beyond the specific fix.
+Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise.
+Make all necessary changes now, then stop.
+
+AGENTS.md instructions (follow these):
+{fix_context}"""}
+                messages.append({"role": "assistant", "content": (error_analysis or "")[:2000]})
+                messages.append({"role": "user", "content": f"""The previous fix attempt did not resolve the build for {package_name}. Here is the new error context:
 
 {error_context[:3000]}
 
 Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system prompt for the exact fix pattern — the solution is almost certainly described there. Apply the specific fix using write_file now."""})
                 MAX_HISTORY = 40
-                if len(fix_messages) > MAX_HISTORY:
-                    fix_messages = [fix_messages[0]] + fix_messages[-(MAX_HISTORY - 1):]
-            tool_results = ollama.call_with_tools(fix_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
+                if len(messages) > MAX_HISTORY:
+                    messages = [messages[0]] + messages[-(MAX_HISTORY - 1):]
+            tool_results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
             if isinstance(tool_results, str):
                 print(f"[FIX ERROR] {tool_results}")
             elif tool_results:
@@ -688,8 +709,8 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             current_spec = manager.read_file_safe(spec)
             changed = current_spec != spec_content
             if not changed and not tool_results:
-                if fix_messages:
-                    _ctx_file.write_text(json.dumps({"version": 1, "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "fix_messages": fix_messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
+                if messages:
+                    _ctx_file.write_text(json.dumps({"version": 1, "mode": "fix", "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "messages": messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
                     print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart with --prompt")
                 print("[FIX ERROR] No source changes were made. Aborting rebuild.", flush=True)
                 if exit_on_no_changes:
@@ -715,8 +736,8 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 current_build_out = build_out2
 
         if not build_success2:
-            if fix_messages:
-                _ctx_file.write_text(json.dumps({"version": 1, "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "fix_messages": fix_messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
+            if messages:
+                _ctx_file.write_text(json.dumps({"version": 1, "mode": "fix", "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "messages": messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
                 print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart with --prompt")
             label = MAX_ATTEMPTS if not unlimited else "unlimited"
             print(f"[FIX ERROR] All {label} fix attempts exhausted. Build still failing.")

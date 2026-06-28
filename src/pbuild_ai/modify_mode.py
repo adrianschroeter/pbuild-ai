@@ -14,8 +14,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import json
+import os
 import re
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -25,6 +27,23 @@ from pbuild_ai.tools import execute_tool_calls
 def run_modify_mode(ctx):
     """Hand sources + prompt to Ollama, apply changes locally, then exit (no build)."""
     for spec in ctx.spec_files:
+        _ctx_file = Path(ctx.workspace_dir) / ".pai.context"
+
+        # Load saved context for the same spec
+        saved_messages = None
+        if _ctx_file.exists():
+            try:
+                _saved = json.loads(_ctx_file.read_text())
+                if _saved.get("spec_path") == str(spec.relative_to(ctx.workspace_dir)):
+                    print(f"[MODIFY] Loaded saved context from {_ctx_file.name}")
+                    saved_messages = _saved.get("messages", [])
+                else:
+                    print(f"[MODIFY] Stale context (for {_saved.get('spec_path')}), discarding.")
+                    _ctx_file.unlink()
+            except Exception as e:
+                print(f"[MODIFY] Corrupt context file: {e}")
+                _ctx_file.unlink()
+
         skills = ctx.skill_manager.get_skills_for(spec.name, ctx.manager.read_file_safe(spec), prompt=ctx.modify_prompt)
         if skills:
             for s in skills:
@@ -36,8 +55,7 @@ def run_modify_mode(ctx):
         print(f"\n[MODIFY] Sending {spec.name} sources to {ctx.ollama.model}...")
         spec_content = ctx.manager.read_file_safe(spec)
         hint = f"\n\n--- User Hint (prefer this over generic analysis) ---\n{ctx.prompt_hint}" if ctx.prompt_hint else ""
-        messages = [
-            {"role": "system", "content": f"""You are an RPM packager assistant. The user wants you to modify a spec file based on their request.
+        system_content = f"""You are an RPM packager assistant. The user wants you to modify a spec file based on their request.
 
 The spec file content is ALREADY provided below in the user message. Do NOT call read_file — the content is right here.
 
@@ -48,9 +66,16 @@ To make changes, prefer edit_file for small targeted changes — it replaces onl
 User request: {ctx.modify_prompt}{hint}
 
 Skill instructions (follow these):
-{spec_prompt}"""},
-            {"role": "user", "content": f"Spec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content:\n{spec_content[:5000]}\n\nDo NOT explain. Do NOT ask questions. Apply the changes using write_file or edit_file NOW."}
-        ]
+{spec_prompt}"""
+
+        if saved_messages:
+            messages = [{"role": "system", "content": system_content}] + (saved_messages[1:] if len(saved_messages) > 1 else [])
+            messages.append({"role": "user", "content": f"Continuing from previous session. Current spec content:\n{spec_content[:5000]}\n\nApply remaining changes."})
+        else:
+            messages = [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": f"Spec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content:\n{spec_content[:5000]}\n\nDo NOT explain. Do NOT ask questions. Apply the changes using write_file or edit_file NOW."}
+            ]
         modify_max_rounds = 20
         changes_made = False
         for round_idx in range(modify_max_rounds):
@@ -160,3 +185,21 @@ Skill instructions (follow these):
             else:
                 print("[MODIFY] No response from Ollama.")
                 break
+
+        # Save context on exhaustion, delete on success
+        if changes_made:
+            if _ctx_file.exists():
+                _ctx_file.unlink()
+                print(f"[MODIFY] Removed saved context ({_ctx_file.name}) after successful changes.")
+        elif len(messages) > 1:
+            save_data = {
+                "version": 1,
+                "mode": "modify",
+                "spec_path": str(spec.relative_to(ctx.workspace_dir)),
+                "messages": messages,
+                "spec_content": spec_content,
+                "modify_prompt": ctx.modify_prompt,
+                "timestamp": time.time(),
+            }
+            _ctx_file.write_text(json.dumps(save_data, indent=2))
+            print(f"[MODIFY] Saved conversation context to {_ctx_file.name} for restart with --modify")
