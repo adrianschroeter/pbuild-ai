@@ -19,6 +19,47 @@ import subprocess
 import time
 from pathlib import Path
 
+
+def _extract_shell_command(text: str) -> str | None:
+    """Strip markdown and natural language from Ollama output, return first shell command."""
+    if not text:
+        return None
+    lines = text.split("\n")
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Strip surrounding backticks
+        line = line.strip("`").strip()
+        if not line:
+            continue
+        # Strip markdown formatting
+        line = re.sub(r'^\*{1,2}(.+?)\*{1,2}(?:\s|$)', r'\1 ', line, count=1)
+        line = re.sub(r'^#+\s+', '', line)
+        line = re.sub(r'^[-*+]\s+', '', line)
+        line = line.strip()
+        if not line:
+            continue
+        # Skip lines that are exclusively markdown separators
+        if re.match(r'^[-*=_#]{3,}\s*$', line):
+            continue
+        # Skip natural language: starts with a capital letter followed by lowercase
+        if re.match(r'^[A-Z]([a-z]|\s)', line):
+            continue
+        # Skip lines that end with English sentence punctuation (period after word,
+        # not period as a shell argument like `find .`)
+        if re.match(r'^[A-Za-z]', line) and re.search(r'\w[.:?]$', line.rstrip()):
+            continue
+        # Skip lines that are too long for a single shell command
+        if len(line) > 500:
+            continue
+        # Validate it looks like a shell command
+        if not re.match(r'^[a-z./$\'"#0-9%_]', line) and not re.match(r'^[A-Z_][A-Z_0-9]*=', line):
+            continue
+        return line
+    return None
+
+
 from pbuild_ai.diff_utils import show_diff
 
 
@@ -364,12 +405,21 @@ class RpmSourceManager:
 Here is everything gathered so far from the shell:
 {collected[-15000:]}
 
-Suggest ONE shell command to run next to investigate the failure. Output ONLY the raw command, no explanation, no markdown."""
+Suggest ONE shell command to run next to investigate the failure.
+
+RULES:
+- Output a SINGLE raw shell command only.
+- NO markdown, NO backticks, NO explanation, NO analysis.
+- NO **bold**, NO --- separators, NO headers.
+- Just the command itself, nothing else."""
                 print(f"\n[DEEP] Asking Ollama for command (round {round_i+1}/{max_rounds})...")
                 if debug:
                     print(f"[DEEP PROMPT]\n{inquiry_prompt}\n[/DEEP PROMPT]")
-                command = ollama.analyze("You are investigating a failed RPM build interactively.", inquiry_prompt, full_context).strip()
-                command = command.strip("`").strip()
+                raw = ollama.analyze("You are investigating a failed RPM build interactively.", inquiry_prompt, full_context).strip()
+                command = _extract_shell_command(raw)
+                if command is None:
+                    print(f"[DEEP] No valid command found in response, skipping round.")
+                    continue
                 if command.lower().startswith("exit") or not command:
                     print(f"[DEEP] Ollama finished investigation.")
                     break
