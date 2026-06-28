@@ -23,6 +23,7 @@ import argparse
 import threading
 import time
 import shutil
+import datetime
 from pathlib import Path
 
 if __name__ == "__main__" and not __package__:
@@ -836,9 +837,39 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
 
                 spec_before_update = manager.read_file_safe(spec)
                 target_version = UPDATE_VERSION
+                _changes_before = None
                 if not target_version:
                     print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
                     spec_content = manager.read_file_safe(spec)
+
+                    # Pre-check: try GitHub API directly before involving Ollama
+                    _current_v_match = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                    _current_version = _current_v_match.group(1) if _current_v_match else None
+                    _source_url = None
+                    for _line in spec_content.split('\n'):
+                        _m = re.match(r'^Source\d*:\s*(.+)', _line, re.I)
+                        if _m:
+                            _source_url = _m.group(1).strip()
+                            break
+                    _github_api_url = None
+                    if _source_url and 'github.com' in _source_url:
+                        _gh_m = re.search(r'github\.com[/:]([^/]+/[^/]+?)(?:\.git|/|$)', _source_url)
+                        if _gh_m:
+                            _repo = _gh_m.group(1).rstrip('/')
+                            _github_api_url = f'https://api.github.com/repos/{_repo}/releases/latest'
+                    if _github_api_url and _current_version:
+                        try:
+                            _req = urllib.request.Request(_github_api_url, headers={"User-Agent": "pbuild-ai/1.0", "Accept": "application/vnd.github.v3+json"})
+                            _resp = urllib.request.urlopen(_req, timeout=10)
+                            _data = json.loads(_resp.read())
+                            _tag = _data.get('tag_name', '')
+                            _latest = _tag.lstrip('v') if _tag else ''
+                            if _latest and _latest == _current_version:
+                                print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
+                                continue
+                        except Exception as _e:
+                            pass
+
                     research_skill = skill_manager.get_skill_by_name("version_research")
                     if research_skill:
                         research_system_content = research_skill.VERSION_RESEARCH_SYSTEM_PROMPT.format(
@@ -851,7 +882,9 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                         print("[INFO] version_research skill not found, using inline fallback.")
                         research_system_content = f"""You are an RPM packager assistant. Find the latest upstream version for the spec file below.
 
-You MUST complete ALL steps before stopping.
+CRITICAL: FIRST determine the current version from the Version tag in the spec. Then find the latest upstream version. If the spec's version is already the latest upstream version, make NO changes to any files and respond with "already-at-latest". Do NOT edit any files when the version hasn't changed.
+
+If a newer version exists, you MUST complete ALL steps before stopping.
 
 Steps (do them in order, never skip any):
 1. Examine the Source URLs in the spec to identify the upstream project
@@ -868,7 +901,7 @@ Steps (do them in order, never skip any):
 4. Update the spec — make ONLY these changes and nothing else:
    - Prefer edit_file for targeted changes (it preserves all other lines)
    - Change the Version tag to the new version number
-   - Update Source URLs ONLY if they contain the OLD version number literally (e.g., "1.0.19" in the URL); do NOT replace the %{{version}} macro
+   - When updating Source/Patch URLs, keep all RPM macros (%{{version}}, %{{name}}, etc.) intact — never expand them to literal values. Only replace literal OLD version numbers that appear in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if 1.0.19 was the old version).
    - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 5. Update the .changes file (same name as the .spec but with .changes extension):
    - Use list_files to find the .changes file if unsure of its name
@@ -876,12 +909,17 @@ Steps (do them in order, never skip any):
       -------------------------------------------------------------------
       <Day> <Month> <Date> <Time> UTC <Year> - {email_author}
      - Updated to version NEWVERSION
-     - <changelog details from the upstream release notes>
+       * <changelog details from the upstream release notes>
      - Update generated using pbuild-ai
    - If the .changes file does not exist, create it with write_file
-6. Check for a _service file next to the spec (use list_files). If present, read it with read_file and update all <revision> tags to match the new version using edit_file.
-7. Avoid using files with .obscpio suffix. eg from "obs_scm" service calls. Try to convert these to remote assets instead.
-8. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Include the package subdirectory in the filename argument (e.g., "libopenshot/libopenshot-0.4.0.tar.xz" not just "libopenshot-0.4.0.tar.xz") — use list_files output to find the correct relative path from the workspace root. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
+6. If a _service file with obs_scm exists: read the git URL and revision tag from the `<param name="url">` and `<param name="revision">` in _service, remove the _service file via remove_file, then insert these EXACT THREE LINES right before the Source: line in the spec using edit_file or write_file:
+   ```
+   #!RemoteAsset: git+<GIT_URL>#<REVISION_TAG>
+   #!CreateArchive
+   Source:        
+   ```
+   Make sure each `#!` line is on its OWN line (one per line). Do NOT rename `Source:` to `Source0:` — keep the existing Source tag name exactly as-is. Do NOT merge `#!RemoteAsset` and `#!CreateArchive` onto one line. Read the actual revision tag from _service's `<param name="revision">` and use it as `<REVISION_TAG>` (e.g., if revision is "v0.4.2", use `#v0.4.2`). The git URL from _service's `<param name="url">` is the same URL to use in `#!RemoteAsset: git+URL#TAG`. Otherwise just update <revision> tags in _service.
+7. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Include the package subdirectory in the filename argument (e.g., "libopenshot/libopenshot-0.4.0.tar.xz" not just "libopenshot-0.4.0.tar.xz") — use list_files output to find the correct relative path from the workspace root. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
 
 Also consult the AGENTS.md / skill rules below for project-specific update steps (e.g., tarball updates, _service file changes, additional files to update).
 
@@ -893,6 +931,8 @@ Additional context (AGENTS.md + skill rules):
                     research_messages = [
                         {"role": "system", "content": research_system_content},
                     ]
+                    _changes_file = spec.parent / (spec.stem + '.changes')
+                    _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
                     results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=15)
                     if isinstance(results, str):
                         print(f"[UPDATE ERROR] {results}")
@@ -930,10 +970,14 @@ Additional context (AGENTS.md + skill rules):
                         update_prompt = f"""Update the spec file to version {target_version}:
 - Use web_fetch to get the release notes for version {target_version} from the upstream project page (GitHub releases, GitLab releases, PyPI, etc.)
 - Update the Version tag
-- Update any Source and Patch URLs that include version numbers
+- Update Source and Patch URLs: keep all RPM macros (%{version}, %{name}) intact — never expand them to literal values. Only replace literal old version numbers in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if present).
 - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 - Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes — use list_files to find it if needed. Use "{email_author}" as the author in the entry header. Append "  - Update generated using pbuild-ai" as the last line of the entry
-- Check for a _service file next to the spec (use list_files). If present, update all <revision> tags to match the new version.
+- If a _service file with obs_scm exists: read the git URL from `<param name="url">` and revision tag from `<param name="revision">`, remove _service via remove_file, then insert these EXACT THREE LINES right before Source: in the spec (each `#!` on its OWN line):
+  #!RemoteAsset: git+<GIT_URL>#<REVISION_TAG>
+  #!CreateArchive
+  Source:        
+  Do NOT rename Source: to Source0:. Do NOT merge lines. Otherwise just update <revision> tags in _service.
 - Then download the new source tarball using download_file — include the package subdirectory in the filename (check list_files output for the correct relative path from workspace root). Construct the URL from the spec's Source tag (substituting %{{version}} and the old version), not from the release page assets which are often precompiled binaries
 
 Also consult the AGENTS.md / skill rules below for version specific update steps (e.g., tarball updates, service file changes, additional files to update).
@@ -944,6 +988,8 @@ Additional context (AGENTS.md + skill rules):
                         {"role": "system", "content": update_prompt},
                         {"role": "user", "content": f"Update this spec file to version {target_version}:\n\n{manager.read_file_safe(spec)}"}
                     ]
+                    _changes_file = spec.parent / (spec.stem + '.changes')
+                    _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
                     results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=15)
                     if isinstance(results, str):
                         print(f"[UPDATE ERROR] {results}")
@@ -960,42 +1006,175 @@ Additional context (AGENTS.md + skill rules):
                     else:
                         print("[UPDATE] No changes made.")
 
+                # If version didn't change, restore any corrupted files and skip download
+                _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                if _old_v and target_version == _old_v.group(1):
+                    _changes_file = spec.parent / (spec.stem + '.changes')
+                    if _changes_file.exists() and _changes_before is not None:
+                        _current_changes = manager.read_file_safe(_changes_file)
+                        if _current_changes != _changes_before:
+                            print(f"[UPDATE] Version unchanged, restoring changes file.")
+                            _changes_file.write_text(_changes_before)
+                    target_version = None  # prevent download and update tracking
+
+                # Post-format fix: repair mangled RemoteAsset/CreateArchive lines
+                _spec_current = manager.read_file_safe(spec)
+                _fixed = False
+                # Case 1: #!RemoteAsset inline on a Source: line — extract to its own line before Source:
+                _m_src = re.search(r'^(Source\d*:\s*)(#!RemoteAsset:[^\n]+\s*)(.*)$', _spec_current, re.M)
+                if _m_src:
+                    _replacement = f'  {_m_src.group(2).strip()}\n{_m_src.group(1)}{_m_src.group(3).strip()}'
+                    _spec_current = _spec_current.replace(_m_src.group(0), _replacement)
+                    _fixed = True
+                # Case 2: merged onto one line — "!#!CreateArchive" or "#!RemoteAsset: ... #!CreateArchive"
+                _m_merged = re.search(r'(#!RemoteAsset:[^\n]+)\s+#?!?CreateArchive[^\n]*', _spec_current)
+                if _m_merged:
+                    _spec_current = _spec_current.replace(_m_merged.group(0), _m_merged.group(1))
+                    _fixed = True
+                # Case 3: #!CreateArchive on a continuation line or after Source:
+                _m_ca = re.search(r'^(\s+.*)?#!CreateArchive[^\n]*', _spec_current, re.M)
+                if _m_ca and not re.search(r'^#!CreateArchive$', _m_ca.group(0), re.M):
+                    _spec_current = _spec_current.replace(_m_ca.group(0), '')
+                    _fixed = True
+                # Case 4: Source: renamed to Source0: when RemoteAsset is present
+                if '#!RemoteAsset:' in _spec_current and 'Source0:' in _spec_current and 'Source:' not in _spec_current:
+                    _spec_current = _spec_current.replace('Source0:', 'Source:')
+                    _fixed = True
+                # Ensure #!CreateArchive exists after #!RemoteAsset:
+                if '#!RemoteAsset:' in _spec_current and '#!CreateArchive' not in _spec_current:
+                    _spec_current = re.sub(
+                        r'(#!RemoteAsset:[^\n]+)\n',
+                        r'\1\n#!CreateArchive\n',
+                        _spec_current,
+                        count=1
+                    )
+                    _fixed = True
+                if _fixed:
+                    spec.write_text(_spec_current)
+                    print("[UPDATE] Fixed RemoteAsset/CreateArchive formatting.")
+
                 # Deterministic source tarball download (not relying on Ollama tool calls)
                 if target_version and target_version not in ('latest',):
                     try:
                         _spec_content = manager.read_file_safe(spec)
-                        if not (spec.parent / "_service").exists():
+                        _skip_dl = False
+                        if '#!CreateArchive' in _spec_content:
+                            print(f"[UPDATE] #!CreateArchive found — source from git. Skipping download.")
+                            _skip_dl = True
+                        elif re.search(r'#!RemoteAsset:\s+(?!git\+)', _spec_content):
+                            print(f"[UPDATE] RemoteAsset (non-git) handles source. Skipping download.")
+                            _skip_dl = True
+                        if not _skip_dl and not (spec.parent / "_service").exists():
+                            # Resolve Source URL via Build::Rpm (proper macro expansion)
+                            _perl_script = Path(__file__).parent / 'query_source_url.pl'
                             _source_url = None
-                            for _line in _spec_content.split('\n'):
-                                _m = re.match(r'^Source\d*:\s*(.+)', _line, re.I)
-                                if _m:
-                                    _source_url = _m.group(1).strip()
-                                    break
+                            try:
+                                _r = subprocess.run(['perl', str(_perl_script), str(spec)],
+                                    capture_output=True, text=True, timeout=30)
+                                if _r.returncode == 0:
+                                    for _line in _r.stdout.strip().split('\n'):
+                                        if ': ' in _line:
+                                            _val = _line.split(': ', 1)[1]
+                                            if not _val.startswith('git+') and _source_url is None:
+                                                _source_url = _val
+                                            elif _val.startswith('git+') and _source_url is None:
+                                                _source_url = _val.replace('git+', '', 1)
+                            except Exception:
+                                pass
+                            # Fallback: regex-based Source parsing (macros unexpanded)
+                            if not _source_url:
+                                for _line in _spec_content.split('\n'):
+                                    _m = re.match(r'^Source\d*:\s*(.+)', _line, re.I)
+                                    if _m:
+                                        _source_url = _m.group(1).strip()
+                                        break
+                                # Best-effort manual macro expansion for fallback
+                                _macros = {}
+                                for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', _spec_content, re.M):
+                                    _macros[_kv.group(1).lower()] = _kv.group(2)
+                                if _macros:
+                                    _expanded = _source_url
+                                    for _key, _val in _macros.items():
+                                        _expanded = _expanded.replace(f'%{{{_key}}}', _val)
+                                    _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                                    if _old_v and _old_v.group(1) != target_version:
+                                        _expanded = _expanded.replace(_old_v.group(1), target_version)
+                                    _source_url = _expanded
                             if _source_url:
-                                _expanded = _source_url.replace('%{version}', target_version)
-                                _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
-                                if _old_v and _old_v.group(1) != target_version:
-                                    _expanded = _expanded.replace(_old_v.group(1), target_version)
                                 from urllib.parse import urlparse
-                                _fname = Path(urlparse(_expanded).path).name or Path(_expanded).name
+                                _fname = Path(urlparse(_source_url).path).name or Path(_source_url).name
                                 _rel = Path(spec).relative_to(Path(WORKSPACE_DIR))
                                 if _rel.parent != Path('.'):
                                     _fname = str(_rel.parent / _fname)
                                 print(f"[UPDATE] Downloading {_fname}...")
                                 for _r in execute_tool_calls(
-                                    [("download_file", {"url": _expanded, "filename": _fname})],
+                                    [("download_file", {"url": _source_url, "filename": _fname})],
                                     manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE
                                 ):
                                     _d = _r[:500] + "..." if len(_r) > 500 else _r
                                     print(f"[UPDATE] {_d}")
+                                # Remove old source tarball if it exists and differs
+                                _old_source_url = None
+                                for _oline in spec_before_update.split('\n'):
+                                    _om = re.match(r'^Source\d*:\s*(.+)', _oline, re.I)
+                                    if _om:
+                                        _old_source_url = _om.group(1).strip()
+                                        break
+                                if _old_source_url:
+                                    _macros = {}
+                                    for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', spec_before_update, re.M):
+                                        _macros[_kv.group(1).lower()] = _kv.group(2)
+                                    _old_expanded = _old_source_url
+                                    for _key, _val in _macros.items():
+                                        _old_expanded = _old_expanded.replace(f'%{{{_key}}}', _val)
+                                    _old_fname = Path(urlparse(_old_expanded).path).name or Path(_old_expanded).name
+                                    _old_rel = Path(spec).relative_to(Path(WORKSPACE_DIR))
+                                    if _old_rel.parent != Path('.'):
+                                        _old_fname = str(_old_rel.parent / _old_fname)
+                                    _old_path = Path(WORKSPACE_DIR) / _old_fname
+                                    _new_path = Path(WORKSPACE_DIR) / _fname
+                                    if _old_path.exists() and _old_path != _new_path:
+                                        _old_path.unlink()
+                                        print(f"[UPDATE] Removed old source: {_old_fname}")
+                                # Remove _service file — tarball replaces obs_scm
+                                _svc = spec.parent / "_service"
+                                if _svc.exists():
+                                    _svc.unlink()
+                                    print(f"[UPDATE] Removed _service file (tarball replaces obs_scm).")
                     except Exception as e:
                         print(f"[UPDATE] Source download failed: {e}")
 
                 spec_after = manager.read_file_safe(spec)
-                if spec_after != spec_before_update:
+                _new_v = re.search(r'^Version:\s*(\S+)', spec_after, re.M)
+                _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                if spec_after != spec_before_update and _new_v and _old_v and _new_v.group(1) != _old_v.group(1):
+                    # Deterministic changes file update if Ollama didn't handle it
+                    _changes_file = spec.parent / (spec.stem + '.changes')
+                    _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
+                    if _changes_after == (_changes_before or ''):
+                        _now = datetime.datetime.now(datetime.timezone.utc)
+                        _mon = _now.strftime('%b')
+                        _day = _now.strftime('%a')
+                        _email_match = re.search(r'<([^>]+)>', email_author)
+                        _changelog_author = f"pbuild-ai <{_email_match.group(1)}>" if _email_match else f"pbuild-ai <{email_author}>"
+                        _entry = (
+                            '-------------------------------------------------------------------\n'
+                            f'{_day} {_mon} {_now.day:2d} {_now.hour:02d}:{_now.minute:02d}:{_now.second:02d} UTC {_now.year} - {_changelog_author}\n'
+                            '\n'
+                            f'- Updated to version {_new_v.group(1)}\n'
+                            '- Update generated using pbuild-ai\n'
+                            '\n'
+                        )
+                        if _changes_file.exists():
+                            _content = manager.read_file_safe(_changes_file)
+                            _new_content = _entry + _content
+                        else:
+                            _new_content = _entry
+                        _changes_file.write_text(_new_content)
+                        print(f"[UPDATE] Added changelog entry for {_old_v.group(1)} -> {_new_v.group(1)}.")
                     updated_packages.add(spec)
                     print(f"[UPDATE] Updated {spec.name}.")
-                else:
+                elif spec_after != spec_before_update:
                     print(f"[UPDATE] No changes for {spec.name}.")
 
             if ctx.update_only:
