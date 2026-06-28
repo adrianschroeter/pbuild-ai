@@ -1,5 +1,7 @@
 SKILL_NAME = "version_research"
 
+from pbuild_ai.skills.changelog_skill import CHANGELOG_PROMPT
+
 VERSION_RESEARCH_SYSTEM_PROMPT = """You are an RPM packager assistant. Find the latest upstream version for the spec file below.
 
 CRITICAL: FIRST determine the current version from the Version tag in the spec. Then find the latest upstream version. If the spec's version is already the latest upstream version, make NO changes to any files and respond with "already-at-latest". Do NOT edit any files when the version hasn't changed.
@@ -25,15 +27,9 @@ Steps (do them in order, never skip any):
    - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 5. Update the .changes file (same name as the .spec but with .changes extension):
    - Use list_files to find the .changes file if unsure of its name
-    - Prepend a new changelog entry in openSUSE format using edit_file:
-      -------------------------------------------------------------------
-      <Day> <Month> <Date> <Time> UTC <Year> - {email_author}
-
-     - Updated to version NEWVERSION
-       * <changelog details from the upstream release notes>
-     - Update generated using pbuild-ai
-
-   - If the .changes file does not exist, create it with write_file
+   - Prepend a new changelog entry using edit_file (or write_file if new file)
+   - Follow the format below — this is the canonical openSUSE .changes format:
+{changelog_prompt}
 6. If a _service file with obs_scm exists: read the git URL and revision tag from the `<param name="url">` and `<param name="revision">` in _service, remove the _service file via remove_file, then insert these EXACT THREE LINES right before the Source: line in the spec using edit_file or write_file:
    ```
    #!RemoteAsset: git+<GIT_URL>#<REVISION_TAG>
@@ -57,7 +53,9 @@ VERSION_UPDATE_PROMPT = """Update the spec file to version {target_version}:
 - Update the Version tag
 - Update Source and Patch URLs: keep all RPM macros (%{version}, %{name}) intact — never expand them to literal values. Only replace literal old version numbers in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if present).
 - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
-- Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes — use list_files to find it if needed. Use "{email_author}" as the author in the entry header. Append "  - Update generated using pbuild-ai" as the last line of the entry
+- Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes.
+  Follow the canonical openSUSE .changes format:
+{changelog_prompt}
 - If a _service file with obs_scm exists: read the git URL from `<param name="url">` and revision tag from `<param name="revision">`, remove _service via remove_file, then insert these EXACT THREE LINES right before Source: in the spec (each `#!` on its OWN line):
   #!RemoteAsset: git+<GIT_URL>#<REVISION_TAG>
   #!CreateArchive

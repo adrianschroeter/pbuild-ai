@@ -38,6 +38,7 @@ from pbuild_ai.ollama_client import OllamaAnalyzer
 from pbuild_ai.workspace import RpmSourceManager
 from pbuild_ai.parsing import parse_agents_md_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions
 from pbuild_ai.context import PbuildContext
+from pbuild_ai.skills.changelog_skill import CHANGELOG_PROMPT, write_changelog_entry
 from pbuild_ai.generate_mode import run_generate_mode
 from pbuild_ai.modify_mode import run_modify_mode
 
@@ -941,6 +942,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                             spec=spec,
                             spec_content=spec_content,
                             full_context=full_context,
+                            changelog_prompt=research_skill.CHANGELOG_PROMPT,
                         )
                     else:
                         print("[INFO] version_research skill not found, using inline fallback.")
@@ -969,13 +971,9 @@ Steps (do them in order, never skip any):
    - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 5. Update the .changes file (same name as the .spec but with .changes extension):
    - Use list_files to find the .changes file if unsure of its name
-    - Prepend a new changelog entry in openSUSE format using edit_file:
-      -------------------------------------------------------------------
-      <Day> <Month> <Date> <Time> UTC <Year> - {email_author}
-     - Updated to version NEWVERSION
-       * <changelog details from the upstream release notes>
-     - Update generated using pbuild-ai
-   - If the .changes file does not exist, create it with write_file
+   - Prepend a new changelog entry using edit_file (or write_file if new file)
+   - Follow the canonical openSUSE .changes format:
+{CHANGELOG_PROMPT}
 6. If a _service file with obs_scm exists: read the git URL and revision tag from the `<param name="url">` and `<param name="revision">` in _service, remove the _service file via remove_file, then insert these EXACT THREE LINES right before the Source: line in the spec using edit_file or write_file:
    ```
    #!RemoteAsset: git+<GIT_URL>#<REVISION_TAG>
@@ -1028,6 +1026,7 @@ Additional context (AGENTS.md + skill rules):
                             target_version=target_version,
                             email_author=email_author,
                             full_context=full_context,
+                            changelog_prompt=research_skill.CHANGELOG_PROMPT,
                         )
                     else:
                         print("[INFO] version_research skill not found for update, using inline fallback.")
@@ -1036,7 +1035,9 @@ Additional context (AGENTS.md + skill rules):
 - Update the Version tag
 - Update Source and Patch URLs: keep all RPM macros (%{version}, %{name}) intact — never expand them to literal values. Only replace literal old version numbers in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if present).
 - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
-- Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes — use list_files to find it if needed. Use "{email_author}" as the author in the entry header. Append "  - Update generated using pbuild-ai" as the last line of the entry
+- Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes.
+  Follow the canonical openSUSE .changes format:
+{CHANGELOG_PROMPT}
 - If a _service file with obs_scm exists: read the git URL from `<param name="url">` and revision tag from `<param name="revision">`, remove _service via remove_file, then insert these EXACT THREE LINES right before Source: in the spec (each `#!` on its OWN line):
   #!RemoteAsset: git+<GIT_URL>#<REVISION_TAG>
   #!CreateArchive
@@ -1216,26 +1217,8 @@ Additional context (AGENTS.md + skill rules):
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
                     if _changes_after == (_changes_before or ''):
-                        _now = datetime.datetime.now(datetime.timezone.utc)
-                        _mon = _now.strftime('%b')
-                        _day = _now.strftime('%a')
-                        _email_match = re.search(r'<([^>]+)>', email_author)
-                        _changelog_author = f"pbuild-ai <{_email_match.group(1)}>" if _email_match else f"pbuild-ai <{email_author}>"
-                        _entry = (
-                            '-------------------------------------------------------------------\n'
-                            f'{_day} {_mon} {_now.day:2d} {_now.hour:02d}:{_now.minute:02d}:{_now.second:02d} UTC {_now.year} - {_changelog_author}\n'
-                            '\n'
-                            f'- Updated to version {_new_v.group(1)}\n'
-                            '- Update generated using pbuild-ai\n'
-                            '\n'
-                        )
-                        if _changes_file.exists():
-                            _content = manager.read_file_safe(_changes_file)
-                            _new_content = _entry + _content
-                        else:
-                            _new_content = _entry
-                        _changes_file.write_text(_new_content)
-                        print(f"[UPDATE] Added changelog entry for {_old_v.group(1)} -> {_new_v.group(1)}.")
+                        if write_changelog_entry(_changes_file, _old_v.group(1), _new_v.group(1), email_author):
+                            print(f"[UPDATE] Added changelog entry for {_old_v.group(1)} -> {_new_v.group(1)}.")
                     updated_packages.add(spec)
                     print(f"[UPDATE] Updated {spec.name}.")
                 elif spec_after != spec_before_update:
