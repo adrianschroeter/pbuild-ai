@@ -353,6 +353,12 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             if file_path is None or not manager._is_safe_path(file_path):
                 results.append(f"Error: {path} is outside the workspace directory.")
                 continue
+            try:
+                if file_path.resolve().is_relative_to(workspace / "tool-scripts"):
+                    results.append(f"Error: Cannot edit files in tool-scripts/ directory: {path}")
+                    continue
+            except ValueError:
+                pass
             if not file_path.exists():
                 results.append(f"Error: File not found: {path}")
                 continue
@@ -484,6 +490,12 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 results.append(f"Error: {filename} is outside the workspace directory.")
                 continue
             try:
+                if file_path.resolve().is_relative_to(workspace / "tool-scripts"):
+                    results.append(f"Error: Cannot download to tool-scripts/ directory: {filename}")
+                    continue
+            except ValueError:
+                pass
+            try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 req = urllib.request.Request(url, headers=_auth_headers(url))
                 with urllib.request.urlopen(req, timeout=120) as response:
@@ -582,6 +594,12 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             if file_path is None or not manager._is_safe_path(file_path):
                 results.append(f"Error: {path} is outside the workspace directory.")
                 continue
+            try:
+                if file_path.resolve().is_relative_to(workspace / "tool-scripts"):
+                    results.append(f"Error: Cannot remove files from tool-scripts/ directory: {path}")
+                    continue
+            except ValueError:
+                pass
             if not file_path.exists():
                 results.append(f"Error: File not found: {path}")
                 continue
@@ -611,6 +629,18 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             if dst_path is None or not manager._is_safe_path(dst_path):
                 results.append(f"Error: {destination} is outside the workspace directory.")
                 continue
+            try:
+                if src_path.resolve().is_relative_to(workspace / "tool-scripts"):
+                    results.append(f"Error: Cannot rename files in tool-scripts/ directory: {source}")
+                    continue
+            except ValueError:
+                pass
+            try:
+                if dst_path.resolve().is_relative_to(workspace / "tool-scripts"):
+                    results.append(f"Error: Cannot rename files into tool-scripts/ directory: {destination}")
+                    continue
+            except ValueError:
+                pass
             if not src_path.exists():
                 results.append(f"Error: Source not found: {source}")
                 continue

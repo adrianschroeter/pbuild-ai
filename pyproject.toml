@@ -13,7 +13,7 @@ pbuild-ai = "pbuild_ai.pbuild_ai:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["pbuild_ai", "pbuild_ai.skills"]
+include = ["pbuild_ai", "pbuild_ai.skills", "pbuild_ai.tests"]
 
 [tool.setuptools.package-data]
 "pbuild_ai.skills" = ["*.md"]
