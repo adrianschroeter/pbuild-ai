@@ -24,8 +24,18 @@ from pbuild_ai.tools import execute_tool_calls
 def run_generate_mode(ctx):
     """Create a new openSUSE RPM package from scratch via Ollama + tools (up to 50 rounds)."""
     print(f"[GENERATE] Creating new package from prompt: {ctx.generate_prompt}")
-    messages = [
-        {"role": "system", "content": f"""You are an RPM packager assistant. Your task is to create a new openSUSE RPM package from scratch based on the user's specification below.
+    generate_skill = ctx.skill_manager.get_skill_by_name("generate_mode")
+    if generate_skill:
+        system_content = generate_skill.GENERATE_SYSTEM_PROMPT.format(
+            generate_prompt=ctx.generate_prompt,
+            full_context=ctx.full_context or 'No AGENTS.md',
+        )
+        user_content = generate_skill.GENERATE_USER_PROMPT.format(
+            workspace_dir=ctx.workspace_dir,
+        )
+    else:
+        print("[INFO] generate_mode skill not found, using inline fallback.")
+        system_content = f"""You are an RPM packager assistant. Your task is to create a new openSUSE RPM package from scratch based on the user's specification below.
 
 THE USER'S SPECIFICATION (this is the complete request, not a conversation starter):
 {ctx.generate_prompt}
@@ -60,10 +70,14 @@ Follow these rules:
 8. Do NOT use HTML or markdown formatting in your text responses — use plain text only. No <b>, <a>, <pre>, or any other tags.
 
 AGENTS.md instructions (follow these):
-{ctx.full_context or 'No AGENTS.md'}"""},
-        {"role": "user", "content": f"""Workspace directory: {ctx.workspace_dir}
+{ctx.full_context or 'No AGENTS.md'}"""
+        user_content = f"""Workspace directory: {ctx.workspace_dir}
 
-The specification for the package to create is in the system prompt above. Start researching and building — do NOT ask me what to package, I already told you."""}
+The specification for the package to create is in the system prompt above. Start researching and building — do NOT ask me what to package, I already told you."""
+
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
     ]
     generate_max_rounds = 50
     fetch_cache = {}

@@ -22,6 +22,7 @@ class SkillManager:
     def __init__(self, skills_dir):
         self.skills_dir = Path(skills_dir).resolve()
         self.skills = []
+        self._named_skills = {}
         self.base_skill_content = None
         self.deep_analyze_prompts = []
         self._load_skills()
@@ -44,7 +45,9 @@ class SkillManager:
                 spec = importlib.util.spec_from_file_location(skill_file.stem, skill_file)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                if hasattr(module, 'TARGET_PATTERN') or hasattr(module, 'PROMPT_PATTERN'):
+                if hasattr(module, 'SKILL_NAME'):
+                    self._named_skills[module.SKILL_NAME] = module
+                if hasattr(module, 'TARGET_PATTERN') or hasattr(module, 'CONTENT_PATTERN') or hasattr(module, 'PROMPT_PATTERN'):
                     self.skills.append(module)
                 if hasattr(module, 'DEEP_ANALYZE_PROMPT'):
                     self.deep_analyze_prompts.append(module.DEEP_ANALYZE_PROMPT.strip())
@@ -66,6 +69,9 @@ class SkillManager:
                 print(f"[SKILL ACTIVE] {skill_name} (prompt match)")
                 return skill
         return None
+
+    def get_skill_by_name(self, name):
+        return self._named_skills.get(name)
 
     def get_deep_analyze_prompt(self):
         return "\n\n".join(self.deep_analyze_prompts) if self.deep_analyze_prompts else ""

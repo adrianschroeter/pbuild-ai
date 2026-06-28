@@ -786,8 +786,17 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 if not target_version:
                     print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
                     spec_content = manager.read_file_safe(spec)
-                    research_messages = [
-                        {"role": "system", "content": f"""You are an RPM packager assistant. Find the latest upstream version for the spec file below.
+                    research_skill = skill_manager.get_skill_by_name("version_research")
+                    if research_skill:
+                        research_system_content = research_skill.VERSION_RESEARCH_SYSTEM_PROMPT.format(
+                            email_author=email_author,
+                            spec=spec,
+                            spec_content=spec_content,
+                            full_context=full_context,
+                        )
+                    else:
+                        print("[INFO] version_research skill not found, using inline fallback.")
+                        research_system_content = f"""You are an RPM packager assistant. Find the latest upstream version for the spec file below.
 
 You MUST complete ALL steps before stopping.
 
@@ -811,7 +820,8 @@ Steps (do them in order, never skip any):
 5. Update the .changes file (same name as the .spec but with .changes extension):
    - Use list_files to find the .changes file if unsure of its name
     - Prepend a new changelog entry in openSUSE format using edit_file:
-      * <Day> <Month> <Date> <Year> {email_author} - NEWVERSION
+      -------------------------------------------------------------------
+      <Day> <Month> <Date> <Time> UTC <Year> - {email_author}
      - Updated to version NEWVERSION
      - <changelog details from the upstream release notes>
      - Update generated using pbuild-ai
@@ -826,7 +836,9 @@ Spec file ({spec}):
 {spec_content}
 
 Additional context (AGENTS.md + skill rules):
-{full_context}"""},
+{full_context}"""
+                    research_messages = [
+                        {"role": "system", "content": research_system_content},
                     ]
                     results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=15)
                     if isinstance(results, str):
@@ -853,7 +865,16 @@ Additional context (AGENTS.md + skill rules):
                         target_version = 'latest'
                 else:
                     print(f"\n[UPDATE] Updating {spec.name} to {target_version}...")
-                    update_prompt = f"""Update the spec file to version {target_version}:
+                    research_skill = skill_manager.get_skill_by_name("version_research")
+                    if research_skill:
+                        update_prompt = research_skill.VERSION_UPDATE_PROMPT.format(
+                            target_version=target_version,
+                            email_author=email_author,
+                            full_context=full_context,
+                        )
+                    else:
+                        print("[INFO] version_research skill not found for update, using inline fallback.")
+                        update_prompt = f"""Update the spec file to version {target_version}:
 - Use web_fetch to get the release notes for version {target_version} from the upstream project page (GitHub releases, GitLab releases, PyPI, etc.)
 - Update the Version tag
 - Update any Source and Patch URLs that include version numbers
@@ -990,7 +1011,7 @@ Additional context (AGENTS.md + skill rules):
                     print(f"\n[OK] Build for {spec.name} succeeded.")
                     ollama.print_stats()
                 else:
-                    print(f"\n[ERROR] Build for {spec.name} failed. Consulting Ollama...")
+                    print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ctx.ollama.model}...")
                     error_analysis = ollama.analyze(error_prompt, build_out, full_context)
                     print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
 

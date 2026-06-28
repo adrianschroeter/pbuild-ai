@@ -7,7 +7,7 @@ CONTENT_PATTERN = r"BuildRequires:\s*%\{python_module\b"
 
 # Specific instruction to the LLM for Python packages before the build
 OLLAMA_SPEC_PROMPT = """
-You are an expert in Python RPM packaging (especially for openSUSE).
+You are an expert in Python RPM packaging for openSUSE.
 Check the following Spec-file. Pay special attention to:
 1. Do NOT use %pyproject_buildrequires, %pyproject_files, or %pyproject_save_files macros — avoid them entirely.
 2. Use %pyproject_wheel and %pyproject_install instead.
