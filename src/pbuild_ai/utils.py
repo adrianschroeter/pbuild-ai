@@ -5,6 +5,8 @@ def resolve_path(path_str, workspace_dir, for_write=False):
     """Resolve a path from the model relative to workspace_dir.
     Tries: exact path, basename only, and stripped package prefix.
     Returns None if path escapes workspace_dir."""
+    if "\x00" in str(path_str):
+        return None
     workspace = Path(workspace_dir).resolve()
     candidates = [
         workspace / path_str,
