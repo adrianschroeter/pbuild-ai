@@ -9,6 +9,12 @@ CONTENT_PATTERN = r"(?i)BuildRequires:\s*(libosmesa|OpenGL|nvidia)"
 OLLAMA_ERROR_PROMPT = """
 You are debugging an unresolved RPM dependency error for openSUSE.
 
+IMPORTANT: Do NOT use web_fetch to look up package names or files on external
+websites yourself. The package lookup results (from gitexplorer.opensuse.org)
+are already injected into this prompt automatically by the build system below.
+Rely on those results — they show exactly which packages provide missing files
+or match unresolved package names.
+
 ## Common resolution patterns
 
 ### 1. Case-sensitive package names
