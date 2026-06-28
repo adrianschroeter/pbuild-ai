@@ -49,10 +49,9 @@ User request: {ctx.modify_prompt}{hint}
 
 Skill instructions (follow these):
 {spec_prompt}"""},
-            {"role": "user", "content": f"Spec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content:\n{spec_content[:5000]}"}
+            {"role": "user", "content": f"Spec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content:\n{spec_content[:5000]}\n\nDo NOT explain. Do NOT ask questions. Apply the changes using write_file or edit_file NOW."}
         ]
         modify_max_rounds = 20
-        tool_retried = False
         changes_made = False
         for round_idx in range(modify_max_rounds):
             payload = {
@@ -156,15 +155,8 @@ Skill instructions (follow these):
                     if changes_made:
                         print("[MODIFY] Changes confirmed.")
                         break
-                    if not tool_retried:
-                        print("[MODIFY] No tool calls. Retrying with forceful tool demand...")
-                        tool_retried = True
-                        messages.append({"role": "assistant", "content": text})
-                        messages.append({"role": "user", "content": "Your analysis above is correct. Now call write_file to APPLY these changes to the spec file. Do NOT explain again. Do NOT ask questions. Call write_file with the corrected content NOW."})
-                        continue
-                    else:
-                        print("[MODIFY] No tool calls after retry. Changes not applied.")
-                        break
+                    print("[MODIFY] No tool calls. Changes not applied.")
+                    break
             else:
                 print("[MODIFY] No response from Ollama.")
                 break

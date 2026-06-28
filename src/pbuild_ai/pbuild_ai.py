@@ -499,7 +499,7 @@ Make all necessary changes now, then stop.
 
 AGENTS.md instructions (follow these):
 {fix_context}"""},
-                    {"role": "user", "content": f"""The build for {spec.name} failed.
+                     {"role": "user", "content": f"""The build for {spec.name} failed.
 Package: {package_name}
 Spec file path: {spec.relative_to(WORKSPACE_DIR)}
 
@@ -509,7 +509,10 @@ Error context:
 Current spec content:
 {spec_content[:5000]}
 
-Call the tools to fix the build failure NOW."""}
+Do NOT explain. Do NOT ask questions. Apply the fix using edit_file or write_file NOW.
+Prefer edit_file for targeted changes — it preserves all other lines.
+IMPORTANT: write_file writes the ENTIRE file. Include EVERY line verbatim.
+Keep changes minimal unless stated otherwise."""}
                 ]
             else:
                 fix_messages.append({"role": "assistant", "content": (error_analysis or "")[:2000]})
@@ -530,24 +533,6 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                     print(f"[FIX] {display}")
                 relocate_patches(tool_results, spec)
             else:
-                print("[FIX] No tool calls. Retrying with forceful tool demand...")
-                fix_messages.append({"role": "assistant", "content": error_analysis})
-                fix_messages.append({"role": "user", "content": f"""Your analysis above is correct. Now apply these changes to the spec file.
-
-Do NOT explain again. Do NOT summarize. Do NOT ask questions.
-Prefer edit_file for targeted changes — it preserves all other lines.
-IMPORTANT: write_file writes the ENTIRE file. Include EVERY line verbatim — preserve all lines except the specific fix.
-Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise.
-Apply the corrected spec content NOW."""})
-                tool_results = ollama.call_with_tools(fix_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
-                if isinstance(tool_results, str):
-                    print(f"[FIX ERROR] {tool_results}")
-                elif tool_results:
-                    for r in tool_results:
-                        display = r.split("\n", 1)[0] if r.startswith("[Fetched ") else (r[:500] + "..." if len(r) > 500 else r)
-                        print(f"[FIX] {display}")
-                    relocate_patches(tool_results, spec)
-                else:
                     print("[FIX] No tool calls received. Asking Ollama to rewrite the spec file...")
 
                     def try_rewrite():
