@@ -1,3 +1,5 @@
+import re
+
 # Triggered when the build log shows dependency resolution failures
 PROMPT_PATTERN = r"(?i)(nothing provides|unresolvable|no provider|has no possibility|nothing provides.*devel|choice.*requires|solver.*fail|dependency.*error)"
 
@@ -25,13 +27,8 @@ Fix by requiring a CONCRETE package name instead of the virtual/alias one.
 
 ### 3. "nothing provides" errors
 If the build log says "nothing provides PACKAGE", then the package truly does
-not exist in the repo. Alternatives:
-  - Search for the correct name via factory lists:
-    https://download.opensuse.org/tumbleweed/repo/oss/x86_64/
-    https://download.opensuse.org/tumbleweed/repo/oss/noarch/
-  - Alterntive, use via the gitexplorer for a package providing a concrete file:
-    https://gitexplorer.opensuse.org/api/products/files?q=FILENAME
-    The filename can include an absolute path optional, but it needs to match exact.
+not exist in the repo. Check the package lookup results below for alternative
+package names or matching packages.
 
 ### 4. Conditional BuildRequires
 If a BuildRequires is only needed on certain architectures or distro versions,
@@ -42,3 +39,32 @@ wrap it in a conditional:
   %endif
   ```
 """
+
+
+def parse_missing_filename_from_log(log: str) -> str | None:
+    """Extract a missing filename from compiler/linker errors in the build log."""
+    if not log:
+        return None
+    # fatal error: FILENAME: No such file or directory
+    m = re.search(r"fatal error:\s*(\S+?):\s*No such file or directory", log, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # FILENAME: No such file or directory (generic)
+    m = re.search(r"(\S+):\s*No such file or directory", log)
+    if m:
+        return m.group(1)
+    # cannot find -lNAME  (linker)
+    m = re.search(r"cannot find\s+-l(\S+)", log, re.IGNORECASE)
+    if m:
+        return f"lib{m.group(1)}.so"
+    return None
+
+
+def parse_unresolved_package_from_log(log: str) -> str | None:
+    """Extract the unresolvable package name from 'nothing provides' errors."""
+    if not log:
+        return None
+    m = re.search(r"nothing provides\s+(\S+)", log, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return None

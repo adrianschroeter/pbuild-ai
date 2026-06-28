@@ -41,6 +41,45 @@ from pbuild_ai.context import PbuildContext
 from pbuild_ai.generate_mode import run_generate_mode
 from pbuild_ai.modify_mode import run_modify_mode
 
+
+def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
+    """Enrich error_prompt with package lookup results from gitexplorer API.
+    Extracts missing filenames and unresolvable package names from build_out,
+    queries the API, and appends compact results to the prompt.
+    """
+    try:
+        from pbuild_ai.query_gitexplorer import query_package_by_file, query_package_by_name, format_results
+        from pbuild_ai.skills.unresolvable_skill import parse_missing_filename_from_log, parse_unresolved_package_from_log
+
+        if not parse_missing_filename_from_log(build_out) and not parse_unresolved_package_from_log(build_out):
+            return error_prompt
+
+        lines = []
+
+        filename = parse_missing_filename_from_log(build_out)
+        if filename:
+            print(f"[GITEXPLORER] Querying files endpoint for: {filename}")
+            results = query_package_by_file(filename)
+            if results:
+                lines.append(f"Packages providing '{filename}':")
+                lines.append(format_results(results))
+
+        pkg = parse_unresolved_package_from_log(build_out)
+        if pkg:
+            print(f"[GITEXPLORER] Querying packages endpoint for: {pkg}")
+            results = query_package_by_name(pkg)
+            if results:
+                lines.append(f"Packages matching '{pkg}':")
+                lines.append(format_results(results))
+
+        if lines:
+            enriched = error_prompt + "\n\n" + "\n".join(lines)
+            return enriched
+    except Exception:
+        pass
+    return error_prompt
+
+
 # ==========================================
 # Main Application Logic
 # ==========================================
@@ -750,6 +789,10 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             if PROMPT_HINT:
                 local_fc = f"{local_fc}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
 
+            # Enrich error_prompt with gitexplorer API results
+            if all_out:
+                error_prompt = _inject_gitexplorer_results(error_prompt, all_out)
+
             if not manager.build_phase_reached(package_name=failed_pkg):
                 print(f"[PROJECT BUILD] Build did not reach build phase. Retrying {failed_pkg} with --clean...")
                 build_ok, build_out2 = manager.run_project_build(failed_pkg, stream_output=SHOW_BUILDLOG, force_clean=True)
@@ -1290,6 +1333,10 @@ Additional context (AGENTS.md + skill rules):
                             print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
                         else:
                             print(f"[RETRY] Clean build also failed. Proceeding with fix mode.")
+
+                # Enrich error_prompt with gitexplorer API results when build failed
+                if not build_success and build_out:
+                    error_prompt = _inject_gitexplorer_results(error_prompt, build_out)
 
                 # 5. Ollama Error Analysis
                 if build_success:
