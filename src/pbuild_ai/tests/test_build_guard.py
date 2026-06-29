@@ -18,7 +18,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from pbuild_ai.context import PbuildContext
-from pbuild_ai.pbuild_ai import _run_build_guard, _check_arg_conflicts
+from pbuild_ai.pbuild_ai import _run_build_guard, _check_arg_conflicts, _check_update_hints
 
 
 class TestBuildGuard(unittest.TestCase):
@@ -378,3 +378,78 @@ class TestAnalyzeConflicts(unittest.TestCase):
         ]:
             with self.subTest(argv=argv):
                 self.assertIsNone(self._check(argv))
+
+
+class TestUpdateHints(unittest.TestCase):
+    """Test _check_update_hints: detects [REBUILD: pkg] and cross-package spec edits."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="pbuild_hints_test_"))
+        self.spec_a = self.tmpdir / "pkg-a.spec"
+        self.spec_b = self.tmpdir / "pkg-b.spec"
+        self.spec_a.write_text("Name: pkg-a\nVersion: 1.0\n")
+        self.spec_b.write_text("Name: pkg-b\nVersion: 2.0\n")
+        self.spec_files = [self.spec_a, self.spec_b]
+        self.originals = {
+            self.spec_a: self.spec_a.read_text(),
+            self.spec_b: self.spec_b.read_text(),
+        }
+        self.updated = set()
+        self.manager = MagicMock()
+        self.manager.read_file_safe.side_effect = lambda p: p.read_text()
+
+    def test_rebuild_marker_in_assistant_message(self):
+        """[REBUILD: pkg-a] in assistant content adds spec to updated_packages."""
+        messages = [
+            {"role": "assistant", "content": "Found version 2.0.\n[REBUILD: pkg-a]"},
+        ]
+        _check_update_hints([], messages, self.spec_files, self.originals, self.updated, self.manager)
+        self.assertIn(self.spec_a, self.updated)
+        self.assertNotIn(self.spec_b, self.updated)
+
+    def test_rebuild_marker_with_spec_suffix(self):
+        """[REBUILD: pkg-a.spec] also matches by stem."""
+        messages = [
+            {"role": "assistant", "content": "[REBUILD: pkg-b.spec]"},
+        ]
+        _check_update_hints([], messages, self.spec_files, self.originals, self.updated, self.manager)
+        self.assertIn(self.spec_b, self.updated)
+
+    def test_rebuild_marker_no_false_positive(self):
+        """Bare '[REBUILD:' without a valid package name does not add anything."""
+        messages = [
+            {"role": "assistant", "content": "[REBUILD:]"},
+        ]
+        _check_update_hints(None, messages, self.spec_files, self.originals, self.updated, self.manager)
+        self.assertEqual(len(self.updated), 0)
+
+    def test_cross_package_spec_edit_detected(self):
+        """AI edits pkg-b.spec during pkg-a's research phase -> pkg-b added to updated_packages."""
+        self.spec_b.write_text("Name: pkg-b\nVersion: 3.0\n")  # AI edited this
+        _check_update_hints([], [], self.spec_files, self.originals, self.updated, self.manager)
+        self.assertIn(self.spec_b, self.updated)
+        self.assertNotIn(self.spec_a, self.updated)
+
+    def test_cross_package_edit_no_false_positive(self):
+        """No spec changes -> nothing added to updated_packages."""
+        _check_update_hints([], [], self.spec_files, self.originals, self.updated, self.manager)
+        self.assertEqual(len(self.updated), 0)
+
+    def test_rebuild_marker_multiple_messages(self):
+        """Multiple assistant messages are scanned."""
+        messages = [
+            {"role": "assistant", "content": "Step 1 done."},
+            {"role": "tool", "content": "read_file: pkg-a.spec (5 lines)", "name": "read_file"},
+            {"role": "assistant", "content": "[REBUILD: pkg-b]"},
+        ]
+        _check_update_hints([], messages, self.spec_files, self.originals, self.updated, self.manager)
+        self.assertIn(self.spec_b, self.updated)
+
+    def test_rebuild_dedup(self):
+        """Same package hinted twice is only added once."""
+        messages = [
+            {"role": "assistant", "content": "[REBUILD: pkg-a] [REBUILD: pkg-a]"},
+        ]
+        _check_update_hints(None, messages, self.spec_files, self.originals, self.updated, self.manager)
+        self.assertIn(self.spec_a, self.updated)
+        self.assertEqual(len(self.updated), 1)

@@ -200,6 +200,26 @@ def _check_arg_conflicts(parser, args):
             parser.error(f"--analyze cannot be used with: {', '.join(_analyze_conflicts)}")
 
 
+def _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager):
+    """After an Ollama phase, check for [REBUILD: pkg] hints and cross-package spec edits."""
+    if messages:
+        assistant_text = " ".join(m.get("content", "") or "" for m in messages if m.get("role") == "assistant")
+        for m in re.finditer(r'\[REBUILD:\s*(\S+?)(?:\.spec)?\]', assistant_text):
+            pkg = m.group(1)
+            for spec in spec_files:
+                if spec.stem == pkg:
+                    if spec not in updated_packages:
+                        updated_packages.add(spec)
+                        print(f"[UPDATE] AI hinted rebuild for {spec.name}")
+                    break
+    for spec in spec_files:
+        current = manager.read_file_safe(spec)
+        original = spec_originals.get(spec)
+        if original is not None and current != original and spec not in updated_packages:
+            updated_packages.add(spec)
+            print(f"[UPDATE] AI modified {spec.name} ({len(current)}b vs {len(original)}b original)")
+
+
 # ==========================================
 # Main Application Logic
 # ==========================================
@@ -1061,6 +1081,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
         if UPDATE_VERSION is not None:
             base_full_context = full_context
             email_author = EMAIL if EMAIL else "<Your Name> <your@email>"
+            spec_originals = {spec: manager.read_file_safe(spec) for spec in spec_files}
             for spec in spec_files:
                 ollama.reset_context()
                 ollama.reset_stats()
@@ -1080,8 +1101,26 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     print("[INFO] No specific skill found. Using default profile.")
 
                 spec_before_update = manager.read_file_safe(spec)
-                target_version = UPDATE_VERSION
-                _changes_before = None
+                if spec in updated_packages:
+                    current = manager.read_file_safe(spec)
+                    if current == spec_originals.get(spec):
+                        print(f"[UPDATE] {spec.name} hinted for rebuild (no source changes).")
+                        continue
+                    print(f"[UPDATE] {spec.name} already updated by AI. Skipping AI phase...")
+                    spec_before_update = spec_originals[spec]
+                    target_version = UPDATE_VERSION
+                    for line in current.split('\n'):
+                        m = re.match(r'^Version:\s*(\S+)', line)
+                        if m:
+                            target_version = m.group(1)
+                            break
+                    if not target_version:
+                        target_version = 'latest'
+                    _changes_file = spec.parent / (spec.stem + '.changes')
+                    _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
+                else:
+                    target_version = UPDATE_VERSION
+                    _changes_before = None
                 if not target_version:
                     print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
                     spec_content = manager.read_file_safe(spec)
@@ -1138,6 +1177,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                             else:
                                 display = r[:500] + "..." if len(r) > 500 else r
                                 print(f"[UPDATE] {display}")
+                    _check_update_hints(results, research_messages, spec_files, spec_originals, updated_packages, manager)
                     spec_content = manager.read_file_safe(spec)
                     for line in spec_content.split('\n'):
                         m = re.match(r'^Version:\s*(\S+)', line)
@@ -1176,6 +1216,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                                 print(f"[UPDATE] {display}")
                     else:
                         print("[UPDATE] No changes made.")
+                    _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager)
 
                 # If version didn't change, restore any corrupted files and skip download
                 _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
