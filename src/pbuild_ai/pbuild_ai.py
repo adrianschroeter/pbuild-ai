@@ -639,6 +639,7 @@ if __name__ == "__main__":
         _ctx_file = Path(WORKSPACE_DIR) / ".pai.context"
         _prev_spec = ""
         _prev_diff_summary = ""
+        _prev_good_analysis = ""
 
         # Load saved context (if any) for the same spec
         if _ctx_file.exists():
@@ -684,7 +685,15 @@ if __name__ == "__main__":
                     error_context = current_build_out
             error_analysis = ollama.analyze(error_prompt, error_context, full_context)
             _latest_analysis = error_analysis
-            print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
+            if error_analysis and (error_analysis.lstrip().startswith('#') or 'norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
+                if _prev_good_analysis:
+                    print(f"\n--- OLLAMA ERROR ANALYSIS (cached) ---\n{_prev_good_analysis}\n-----------------------------\n")
+                    error_analysis = _prev_good_analysis
+                else:
+                    print("\n--- OLLAMA ERROR ANALYSIS ---\n(no analysis available)\n-----------------------------\n")
+            else:
+                _prev_good_analysis = error_analysis
+                print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
             # Auto-trigger deep-analyze if Ollama requests it and we aren't already in that mode
             if "[DEEP_ANALYZE]" in error_analysis and not DEEP_ANALYZE:
                 print("\n[DEEP ANALYZE] Ollama requested interactive investigation. Opening shell...")
@@ -695,7 +704,15 @@ if __name__ == "__main__":
                 error_analysis = ollama.analyze(error_prompt, error_context, deep_context)
                 error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                 _latest_analysis = error_analysis
-                print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
+                if error_analysis and (error_analysis.lstrip().startswith('#') or 'norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
+                    if _prev_good_analysis:
+                        print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation, cached) ---\n{_prev_good_analysis}\n-----------------------------\n")
+                        error_analysis = _prev_good_analysis
+                    else:
+                        print("\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n(no analysis available)\n-----------------------------\n")
+                else:
+                    _prev_good_analysis = error_analysis
+                    print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
             if spec_files:
                 build_suggested_dependency(error_analysis, spec_files, manager, ollama, full_context)
             print("[FIX MODE] Applying suggested changes via tool calls...")
@@ -830,7 +847,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                         try:
                             with open(spec, 'w', encoding='utf-8') as f:
                                 f.write(spec_fix + "\n")
-                            print(f"[FIX] Rewrote {spec.name} with Ollama's fix.", flush=True)
+                            print(f"[FIX] Rewrote {spec.name} with the fix.", flush=True)
                         except Exception as ex:
                             print(f"[FIX] Failed to write spec: {ex}")
                             spec_fix = None
@@ -918,7 +935,14 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 print(f"\n[WARN] Fix attempt {fix_attempt} still failing.")
                 error_analysis2 = ollama.analyze(error_prompt, build_out2, full_context)
                 _latest_analysis = error_analysis2
-                print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n{error_analysis2}\n------------------------------------------\n")
+                if error_analysis2 and (error_analysis2.lstrip().startswith('#') or 'norootforbuild' in error_analysis2 or '# spec file for package' in error_analysis2):
+                    if _prev_good_analysis:
+                        print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}, cached) ---\n{_prev_good_analysis}\n------------------------------------------\n")
+                    else:
+                        print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n(no analysis available)\n------------------------------------------\n")
+                else:
+                    _prev_good_analysis = error_analysis2
+                    print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n{error_analysis2}\n------------------------------------------\n")
                 current_build_out = build_out2
 
         if not build_success2:
