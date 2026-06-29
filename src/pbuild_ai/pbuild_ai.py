@@ -56,6 +56,22 @@ def _is_source_or_build_path(name: str) -> bool:
     return False
 
 
+def _is_comment_only_change(original: str, modified: str) -> bool:
+    """Return True if the only differences between original and modified
+    are comment lines (starting with #) or blank/whitespace-only lines."""
+    orig_lines = original.splitlines(keepends=True)
+    mod_lines = modified.splitlines(keepends=True)
+    diff = list(difflib.unified_diff(orig_lines, mod_lines, n=0))
+    for line in diff:
+        if line.startswith('---') or line.startswith('+++') or line.startswith('@@'):
+            continue
+        if line.startswith('-') or line.startswith('+'):
+            content = line[1:].strip()
+            if content and not content.startswith('#'):
+                return False
+    return True
+
+
 def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
     """Enrich error_prompt with package lookup results from gitexplorer API.
     Extracts missing filenames, unresolvable package names, and unowned
@@ -918,6 +934,12 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 print("[FIX ERROR] No source changes were made. Aborting rebuild.", flush=True)
                 if exit_on_no_changes:
                     sys.exit(1)
+                break
+
+            if changed and _is_comment_only_change(spec_content, current_spec):
+                print("[INFO] Only comment/whitespace changes — skipping rebuild.")
+                if _ctx_file.exists():
+                    _ctx_file.unlink()
                 break
 
             print("[FIX MODE] Re-building to verify...", flush=True)
