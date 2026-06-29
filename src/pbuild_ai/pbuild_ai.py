@@ -110,6 +110,72 @@ def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
     return error_prompt
 
 
+def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, program_start,
+                     run_fix_loop_func):
+    """Execute pbuild for a spec if fix_mode or update_version is set, otherwise skip.
+    
+    Returns enriched error_prompt (or original if gitexplorer wasn't triggered).
+    """
+    if ctx.fix_mode or ctx.update_version is not None:
+        PACKAGE_FILTER = ctx.package_filter
+        PROJECT_MODE = ctx.project_mode
+        PRESET = ctx.preset
+        SHOW_BUILDLOG = ctx.show_buildlog
+
+        if PACKAGE_FILTER:
+            package_name = spec.stem
+            print(f"[INFO] Building single package: {package_name}...")
+            build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
+        elif PROJECT_MODE:
+            package_name = spec.stem
+            print(f"[INFO] Building {package_name} from project directory...")
+            build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
+        else:
+            print("[INFO] Single package mode (no _manifest found). Running orphan build...")
+            build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
+
+        INCOMPLETE_SETUP_MSG = "It seems that there was an incomplete setup of /"
+        if not build_success and INCOMPLETE_SETUP_MSG in build_out:
+            print(f"[RETRY] Incomplete setup detected. Retrying with --clean...")
+            if PACKAGE_FILTER or PROJECT_MODE:
+                build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
+            else:
+                build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
+
+        if not build_success:
+            if not manager.build_phase_reached(package_name=spec.stem):
+                print(f"[RETRY] Build did not reach build phase. Retrying with --clean...")
+                if PACKAGE_FILTER or PROJECT_MODE:
+                    build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
+                else:
+                    build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
+                if build_success:
+                    print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
+                else:
+                    print(f"[RETRY] Clean build also failed. Proceeding with fix mode.")
+
+        if not build_success and build_out:
+            error_prompt = _inject_gitexplorer_results(error_prompt, build_out)
+
+        if build_success:
+            print(f"\n[OK] Build for {spec.name} succeeded.")
+            ollama.print_stats(manager=manager, program_start=program_start)
+        else:
+            print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ollama.model}...")
+            error_analysis = ollama.analyze(error_prompt, build_out, full_context)
+            print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
+
+        if ctx.fix_mode and not build_success:
+            pkg_name = package_name if 'package_name' in dir() else spec.stem
+            if PROJECT_MODE:
+                rebuild_func = lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG)
+            else:
+                rebuild_func = lambda p: manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
+            run_fix_loop_func(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
+
+    return error_prompt
+
+
 # ==========================================
 # Main Application Logic
 # ==========================================
@@ -1276,62 +1342,11 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                         if not FIX_MODE or manager.has_prior_failed_build():
                             manager.fix_file_content(spec, fix_func)
 
-                # 4. Determine build mode and execute (always from WORKSPACE_DIR, never cd)
-                if PACKAGE_FILTER:
-                    package_name = spec.stem
-                    print(f"[INFO] Building single package: {package_name}...")
-                    build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
-                elif PROJECT_MODE:
-                    package_name = spec.stem
-                    print(f"[INFO] Building {package_name} from project directory...")
-                    build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
-                else:
-                    print("[INFO] Single package mode (no _manifest found). Running orphan build...")
-                    build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
-
-                # 4b. Retry with --clean if incomplete setup detected
-                INCOMPLETE_SETUP_MSG = "It seems that there was an incomplete setup of /"
-                if not build_success and INCOMPLETE_SETUP_MSG in build_out:
-                    print(f"[RETRY] Incomplete setup detected. Retrying with --clean...")
-                    if PACKAGE_FILTER or PROJECT_MODE:
-                        build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
-                    else:
-                        build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
-
-                # 4c. If build failed without reaching build phase, retry with --clean instead of modifying sources
-                if not build_success:
-                    if not manager.build_phase_reached(package_name=spec.stem):
-                        print(f"[RETRY] Build did not reach build phase. Retrying with --clean...")
-                        if PACKAGE_FILTER or PROJECT_MODE:
-                            build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
-                        else:
-                            build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
-                        if build_success:
-                            print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
-                        else:
-                            print(f"[RETRY] Clean build also failed. Proceeding with fix mode.")
-
-                # Enrich error_prompt with gitexplorer API results when build failed
-                if not build_success and build_out:
-                    error_prompt = _inject_gitexplorer_results(error_prompt, build_out)
-
-                # 5. Ollama Error Analysis
-                if build_success:
-                    print(f"\n[OK] Build for {spec.name} succeeded.")
-                    ollama.print_stats(manager=manager, program_start=PROGRAM_START)
-                else:
-                    print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ctx.ollama.model}...")
-                    error_analysis = ollama.analyze(error_prompt, build_out, full_context)
-                    print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
-
-                # 6. Fix mode: diagnose, apply changes via tool calling, and re-build (with retries)
-                if FIX_MODE and not build_success:
-                    pkg_name = package_name if 'package_name' in dir() else spec.stem
-                    if PROJECT_MODE:
-                        rebuild_func = lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG)
-                    else:
-                        rebuild_func = lambda p: manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
-                    run_fix_loop(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
+                # 4. Build guard: only run pbuild when --fix or --update is active
+                error_prompt = _run_build_guard(
+                    spec, manager, ollama, full_context, error_prompt, ctx,
+                    PROGRAM_START, run_fix_loop,
+                )
                 
     except Exception as e:
         try:
