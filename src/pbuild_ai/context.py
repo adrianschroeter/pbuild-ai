@@ -46,6 +46,7 @@ class PbuildContext:
     ollama_server: Optional[str] = None  # --openai-server
     ollama_model_arg: Optional[str] = None
     email: str = ""
+    analyze_mode: bool = False
 
     # Derived at startup
     full_context: str = ""

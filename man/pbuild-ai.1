@@ -12,15 +12,13 @@ analyze spec files, diagnose build failures, and apply fixes.
 
 The main functionality is:
 .IP \(bu 4
-Analyze package sources
+Analyze package sources (\fB\-\-analyze\fR; this is the default)
+.IP \(bu 4
+Modify sources from a natural-language prompt (\fB\-\-modify\fR)
 .IP \(bu 4
 Run builds and fix possible build failures (\fB\-\-fix\fR)
 .IP \(bu 4
 Update sources to the latest upstream version and verify (\fB\-\-update\fR)
-.IP \(bu 4
-Update sources only, without building (\fB\-\-update\-only\fR)
-.IP \(bu 4
-Modify sources from a natural-language prompt (\fB\-\-modify\fR)
 .IP \(bu 4
 Generate a new package from scratch (\fB\-\-generate\fR)
 
@@ -46,6 +44,18 @@ Package name to focus on (only in project mode when a \fI_manifest\fR file is pr
 .B \-\-fix, \-f
 Apply suggested changes and run a test build to verify the fix.
 Repeats up to \fI\-\-fix-attempts\fR times per package.
+Conflicts with \fB\-\-analyze\fR and \fB\-\-changelog\fR.
+.TP
+.B \-\-analyze, \-a
+Analyze spec files and exit. No build is performed. This is the default
+behavior when no other option is given.
+Conflicts with \fB\-\-fix\fR, \fB\-\-update\fR, \fB\-\-generate\fR,
+\fB\-\-changelog\fR, and \fB\-\-modify\fR.
+.TP
+.B \-\-changelog
+Prepend a changelog entry for the current version in the \fI.changes\fR file,
+then exit. No build or research is performed.
+Conflicts with \fB\-\-fix\fR and \fB\-\-analyze\fR.
 .TP
 .B \-\-update, \-u
 Update to the latest upstream version. Also enables \fB\-\-fix\fR.
@@ -150,6 +160,12 @@ Alternative to \fBGITHUB_TOKEN\fR for GitHub API authentication.
 .TP
 Analyze a single package:
 pbuild\-ai bc
+.TP
+Explicitly analyze with \fB\-\-analyze\fR:
+pbuild\-ai \-\-analyze bc
+.TP
+Prepend a changelog entry for the current version:
+pbuild\-ai \-\-changelog bc
 .TP
 Test-build and auto-fix:
 pbuild\-ai \-\-fix bc

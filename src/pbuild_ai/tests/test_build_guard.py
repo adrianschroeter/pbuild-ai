@@ -6,7 +6,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Mock yaml before any pbuild_ai import to prevent ModuleNotFoundError
 _yaml = types.ModuleType('yaml')
@@ -18,7 +18,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from pbuild_ai.context import PbuildContext
-from pbuild_ai.pbuild_ai import _run_build_guard
+from pbuild_ai.pbuild_ai import _run_build_guard, _check_arg_conflicts
 
 
 class TestBuildGuard(unittest.TestCase):
@@ -245,3 +245,136 @@ class TestBuildGuardBuildFails(unittest.TestCase):
                 "error prompt", self.ctx, 100.0, self.run_fix_loop,
             )
             mock_inject.assert_not_called()
+
+
+class TestAnalyzeFlag(unittest.TestCase):
+    """Verify the --analyze flag prevents builds and enforces conflicts."""
+
+    def test_analyze_mode_in_context(self):
+        """--analyze must set ctx.analyze_mode to True."""
+        with patch('sys.argv', ['pbuild_ai', '--analyze', '/tmp/foo']):
+            import argparse
+            parser = argparse.ArgumentParser(description="RPM packager helper")
+            parser.add_argument("workspace_dir")
+            parser.add_argument("package_name", nargs="?", default=None)
+            parser.add_argument("--analyze", "-a", action="store_true")
+            parser.add_argument("--fix", "-f", action="store_true")
+            args = parser.parse_args()
+            self.assertTrue(args.analyze)
+            self.assertFalse(args.fix)
+
+    def test_analyze_no_build(self):
+        """With --analyze (fix_mode=False, update_version=None), _run_build_guard must skip build."""
+        manager = MagicMock()
+        manager.run_orphan_build.side_effect = AssertionError("pbuild should not be called")
+        manager.run_project_build.side_effect = AssertionError("pbuild should not be called")
+
+        ollama = MagicMock()
+        ollama.model = "test-model"
+        tmpdir = tempfile.mkdtemp(prefix="pbuild_analyze_test_")
+        try:
+            spec_path = Path(tmpdir) / "testpkg.spec"
+            spec_path.write_text("Name: testpkg\nVersion: 1.0\n\n%description\nTest package.\n")
+            ctx = PbuildContext(
+                workspace_dir=tmpdir,
+                fix_mode=False,
+                update_version=None,
+                analyze_mode=True,
+            )
+            result = _run_build_guard(
+                spec_path, manager, ollama, "full_context",
+                "error prompt", ctx, 100.0, MagicMock(),
+            )
+            manager.run_orphan_build.assert_not_called()
+            manager.run_project_build.assert_not_called()
+            self.assertEqual(result, "error prompt")
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+class TestAnalyzeConflicts(unittest.TestCase):
+    """Verify --analyze conflict checks via _check_arg_conflicts."""
+
+    def _make_parser(self):
+        """Return an argparse parser matching the CLI."""
+        import argparse
+        parser = argparse.ArgumentParser(description="RPM packager helper")
+        parser.add_argument("workspace_dir")
+        parser.add_argument("--analyze", "-a", action="store_true")
+        parser.add_argument("--fix", "-f", action="store_true")
+        parser.add_argument("--update", "-u", action="store_true")
+        parser.add_argument("--update-only", action="store_true")
+        parser.add_argument("--changelog", action="store_true")
+        parser.add_argument("--generate", default=None)
+        parser.add_argument("--modify", "-m", default=None)
+        return parser
+
+    def _check(self, argv):
+        """Parse argv and call _check_arg_conflicts, return the error message (or None)."""
+        import argparse, io
+        parser = self._make_parser()
+        stderr_buf = io.StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = stderr_buf
+        try:
+            args = parser.parse_args(argv)
+            _check_arg_conflicts(parser, args)
+            return None  # no conflict
+        except SystemExit:
+            return stderr_buf.getvalue()
+        finally:
+            sys.stderr = old_stderr
+
+    def test_analyze_conflicts_with_update(self):
+        msg = self._check(["--analyze", "--update", "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--analyze cannot be used with", msg)
+
+    def test_analyze_conflicts_with_update_only(self):
+        msg = self._check(["--analyze", "--update-only", "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--analyze cannot be used with", msg)
+
+    def test_analyze_conflicts_with_generate(self):
+        msg = self._check(["--analyze", "--generate=foo", "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--analyze cannot be used with", msg)
+
+    def test_analyze_conflicts_with_changelog(self):
+        msg = self._check(["--analyze", "--changelog", "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--analyze cannot be used with", msg)
+
+    def test_analyze_conflicts_with_modify(self):
+        msg = self._check(["--analyze", "--modify=fix", "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--analyze cannot be used with", msg)
+
+    def test_fix_conflicts_with_analyze(self):
+        msg = self._check(["--fix", "--analyze", "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--fix cannot be used with", msg)
+
+    def test_fix_conflicts_with_changelog(self):
+        msg = self._check(["--fix", "--changelog", "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--fix cannot be used with", msg)
+
+    def test_no_conflict_with_valid_combos(self):
+        """Combinations that should NOT trigger conflicts."""
+        for argv in [
+            ["--analyze", "/tmp/d"],
+            ["--fix", "/tmp/d"],
+            ["--update", "/tmp/d"],
+            ["--generate=foo", "/tmp/d"],
+            ["--changelog", "/tmp/d"],
+            ["--modify=fix", "/tmp/d"],
+            ["--fix", "--update", "/tmp/d"],
+            ["--update", "--changelog", "/tmp/d"],
+            ["-u", "/tmp/d"],
+            ["-a", "/tmp/d"],
+            ["-f", "/tmp/d"],
+        ]:
+            with self.subTest(argv=argv):
+                self.assertIsNone(self._check(argv))

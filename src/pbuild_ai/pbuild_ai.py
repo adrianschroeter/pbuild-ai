@@ -176,15 +176,47 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
     return error_prompt
 
 
+def _check_arg_conflicts(parser, args):
+    """Validate argument conflicts and call parser.error() on violation."""
+    if args.fix:
+        _fix_conflicts = []
+        if args.analyze:
+            _fix_conflicts.append('--analyze')
+        if args.changelog:
+            _fix_conflicts.append('--changelog')
+        if _fix_conflicts:
+            parser.error(f"--fix cannot be used with: {', '.join(_fix_conflicts)}")
+    if args.analyze:
+        _analyze_conflicts = []
+        if args.update or args.update_only:
+            _analyze_conflicts.append('--update')
+        if args.generate:
+            _analyze_conflicts.append('--generate')
+        if args.changelog:
+            _analyze_conflicts.append('--changelog')
+        if args.modify:
+            _analyze_conflicts.append('--modify')
+        if _analyze_conflicts:
+            parser.error(f"--analyze cannot be used with: {', '.join(_analyze_conflicts)}")
+
+
 # ==========================================
 # Main Application Logic
 # ==========================================
 if __name__ == "__main__":
     PROGRAM_START = time.time()
-    parser = argparse.ArgumentParser(description="RPM packager helper")
+    parser = argparse.ArgumentParser(
+        description="RPM packager helper with AI-powered build-fix and version-update.\n"
+                    "Main commands: --analyze, --fix, --update, --generate, --modify",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("workspace_dir", help="Path to the workspace directory")
     parser.add_argument("package_name", nargs="?", default=None, help="Package name to focus on (only in project mode)")
-    parser.add_argument("--fix", "-f", action="store_true", help="Apply suggested changes and run a test build to verify")
+    parser.add_argument("--analyze", "-a", action="store_true", help="Main command: analyze spec files and exit (default). Conflicts with --fix, --update, --generate, --changelog, --modify.")
+    parser.add_argument("--fix", "-f", action="store_true", help="Main command: apply AI-suggested fixes to build failures and run test builds to verify")
+    parser.add_argument("--update", "-u", action="store_true", help="Main command: update to latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
+    parser.add_argument("--generate", default=None, help="Main command: generate a new package from scratch based on the given prompt")
+    parser.add_argument("--modify", "-m", default=None, help="Main command: send a modification prompt + sources to Ollama, apply changes locally, then exit (no build)")
     parser.add_argument("--root", default=None, help="Root directory for pbuild (passed as --root to pbuild)")
     parser.add_argument("--show-buildlog", "-L", action="store_true", help="Show the pbuild build log output")
     parser.add_argument("--shell-after-build", action="store_true", help="Open a shell in the build environment on failure for debugging")
@@ -207,7 +239,6 @@ if __name__ == "__main__":
             sys.argv.insert(i + 1, f"--update-version={update_version_value}")
             break
 
-    parser.add_argument("--update", "-u", action="store_true", help="Update to the latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
     parser.add_argument("--update-only", action="store_true", help="Update sources to the latest upstream version, then exit (no test build). Use --update-only=VERSION for a specific version.")
     parser.add_argument("--update-version", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--preset", default=None, help="Preset name to pass to pbuild")
@@ -217,8 +248,6 @@ if __name__ == "__main__":
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
     parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to Ollama")
     parser.add_argument("--fresh", action="store_true", help="Discard saved .pai.context and start fresh")
-    parser.add_argument("--modify", "-m", default=None, help="Modify package sources: send prompt + sources to Ollama, apply changes locally, then quit (no build)")
-    parser.add_argument("--generate", default=None, help="Generate a new package from scratch in workspace_dir based on the given prompt. The tool will research upstream, ask clarifying questions, and create spec files.")
     parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when Ollama proposes multiple tool calls")
     parser.add_argument("--openai-server", default=None, help="OpenAI-compatible server URL (overrides OLLAMA_HOST env var, default http://localhost:11434)")
     parser.add_argument("--model", default=None, help="Ollama model name (overrides OLLAMA_MODEL env var, default gemma4)")
@@ -229,11 +258,13 @@ if __name__ == "__main__":
     clean_group.add_argument("--no-clean", action="store_true", default=True, help="Do not clean build artifacts (default)")
     args = parser.parse_args()
 
+    _check_arg_conflicts(parser, args)
+
     ctx = PbuildContext(
         workspace_dir=args.workspace_dir,
         root_dir=args.root,
         package_filter=args.package_name,
-        fix_mode=args.fix or args.update or args.modify is not None,
+        fix_mode=args.fix or args.update,
         show_buildlog=args.show_buildlog,
         do_clean=args.clean,
         vm_type=args.vm_type,
@@ -253,6 +284,7 @@ if __name__ == "__main__":
         shell_after_build=args.shell_after_build,
         interactive=args.interactive,
         email=args.email or os.environ.get("EMAIL", ""),
+        analyze_mode=args.analyze,
     )
 
     # Local aliases for backward compatibility with remaining inline code
@@ -267,6 +299,9 @@ if __name__ == "__main__":
     DEBUG = ctx.debug
     EMAIL = ctx.email
     DEEP_ANALYZE = ctx.deep_analyze
+    ANALYZE_MODE = ctx.analyze_mode
+    if ANALYZE_MODE:
+        print("[INFO] Analyze mode (--analyze). Use --fix or --update to build.")
     FIX_ATTEMPTS = ctx.fix_attempts
     PROMPT_HINT = ctx.prompt_hint
     UPDATE_VERSION = ctx.update_version

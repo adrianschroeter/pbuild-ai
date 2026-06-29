@@ -4,10 +4,11 @@ work with all package formats and AI models.
 
 The main functionality is either:
 
-* Analyze the source
-* Run builds and fix possible build failures (`--fix` option)
-* Update sources to current upstream version and verify (`--update` option)
-* Generate a new package from scratch (`--generate` option)
+* Analyze the source (`--analyze`; this is the default when no other option is given)
+* Modify sources via a natural-language prompt (`--modify`)
+* Run builds and fix possible build failures (`--fix`)
+* Update sources to current upstream version and verify (`--update`)
+* Generate a new package from scratch (`--generate`)
 
 pbuild-ai is safe by default — it only allows modifications to local
 package sources.
@@ -51,6 +52,17 @@ Update to the latest upstream version, test-build, and fix:
 git clone https://src.opensuse.org/pool/bc
 pbuild-ai --update bc
 ```
+
+### `--analyze`
+
+Explicitly analyze spec files and exit (same behavior as running without any
+flags). No build is performed. Conflicts with `--fix`, `--update`, `--generate`,
+`--changelog`, and `--modify`.
+
+### `--changelog`
+
+Prepend a changelog entry for the current version in the `.changes` file, then
+exit. No build or research is performed. Conflicts with `--fix` and `--analyze`.
 
 ### `--dist DISTRIBUTION_CONFIG`
 
@@ -140,6 +152,12 @@ the cause of an error.
 Applies source changes based on the given prompt without running a test
 build. Shows the diff and exits. Combine with `--fix` to also build and
 verify after the modification.
+
+### `--fix`
+
+Test-build a package and attempt to fix failures automatically. Requires Ollama
+to diagnose build failures and apply source changes.
+Conflicts with `--analyze` and `--changelog`.
 
 ### `--fix --prompt PROMPT`
 
