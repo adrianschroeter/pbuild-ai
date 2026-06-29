@@ -1071,9 +1071,9 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                         print(f"[INFO] Using skill profile: {s.__name__}")
                     skill_ctx_parts = []
                     for s in skills:
-                        ctx = getattr(s, 'OLLAMA_SPEC_PROMPT', '')
-                        if ctx:
-                            skill_ctx_parts.append(f"--- Skill: {s.__name__} ---\n{ctx}")
+                        skill_ctx = getattr(s, 'OLLAMA_SPEC_PROMPT', '')
+                        if skill_ctx:
+                            skill_ctx_parts.append(f"--- Skill: {s.__name__} ---\n{skill_ctx}")
                     if skill_ctx_parts:
                         full_context = f"{base_full_context}\n\n" + "\n\n".join(skill_ctx_parts)
                 else:
