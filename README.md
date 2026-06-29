@@ -28,6 +28,21 @@ Since the tool could run indefinitely, it is recommended to use AI
 servers with a fixed-cost plan — ideally a local instance on your own
 hardware.
 
+## AI Models
+
+### Known to work
+
+ * gemma4:26b-a4b-it-q4_K_M
+ * gemma4:31b-it-bf16
+ * qwen3.6:27b
+ * qwen3.6:35b-a3b
+
+### Known to be problematic
+
+ * gemma4:e2b
+   it may be used just with --update-only switch, but it is halicunating
+   version numbers already sometimes.
+
 ## Single package
 
 Create a simple analysis of a package source with no modifications.
