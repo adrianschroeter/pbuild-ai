@@ -86,9 +86,10 @@ class RpmSourceManager:
     @staticmethod
     def _run_captured(cmd, cwd, stream_output=False):
         if stream_output:
-            proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
             lines = []
-            for line in proc.stdout:
+            for raw in proc.stdout:
+                line = raw.decode('utf-8', errors='replace')
                 lines.append(line)
                 try:
                     print(line, end='', flush=True)
@@ -100,10 +101,12 @@ class RpmSourceManager:
                 raise subprocess.CalledProcessError(proc.returncode, cmd, output, '')
             return subprocess.CompletedProcess(cmd, 0, output, '')
         else:
-            result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+            result = subprocess.run(cmd, cwd=cwd, capture_output=True)
+            stdout = result.stdout.decode('utf-8', errors='replace')
+            stderr = result.stderr.decode('utf-8', errors='replace')
             if result.returncode != 0:
-                raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
-            return result
+                raise subprocess.CalledProcessError(result.returncode, cmd, stdout, stderr)
+            return subprocess.CompletedProcess(result.args, result.returncode, stdout, stderr)
 
     def _is_safe_path(self, target_path) -> bool:
         try:
@@ -142,11 +145,12 @@ class RpmSourceManager:
                 subprocess.run(cmd, cwd=self.base_dir, check=True)
                 return True, ""
             else:
-                result = subprocess.run(cmd, cwd=self.base_dir, check=True, capture_output=True, text=True)
-                return True, "\n".join(result.stdout.strip().split('\n')[-50:])
+                result = subprocess.run(cmd, cwd=self.base_dir, check=True, capture_output=True)
+                stdout = result.stdout.decode('utf-8', errors='replace')
+                return True, "\n".join(stdout.strip().split('\n')[-50:])
         except subprocess.CalledProcessError as e:
-            stderr = (e.stderr or "").strip()
-            stdout = (e.stdout or "").strip()
+            stderr = (e.stderr or b"").decode('utf-8', errors='replace').strip()
+            stdout = (e.stdout or b"").decode('utf-8', errors='replace').strip()
             err = f"STDERR:\n{stderr}\n\nSTDOUT (last 100 lines):\n"
             err += "\n".join(stdout.split('\n')[-100:]) if stdout else "No output"
             return False, err
@@ -187,12 +191,12 @@ class RpmSourceManager:
         cmd = ["pbuild", "--result"]
         print(f"[EXEC] {' '.join(cmd)}")
         try:
-            result = subprocess.run(cmd, cwd=self.base_dir, check=True, capture_output=True, text=True)
-            output = (result.stdout or "").strip()
-            return output, result.stdout or ""
+            result = subprocess.run(cmd, cwd=self.base_dir, check=True, capture_output=True)
+            output = (result.stdout or b"").decode('utf-8', errors='replace').strip()
+            return output, output
         except subprocess.CalledProcessError as e:
-            stderr = (e.stderr or "").strip()
-            stdout = (e.stdout or "").strip()
+            stderr = (e.stderr or b"").decode('utf-8', errors='replace').strip()
+            stdout = (e.stdout or b"").decode('utf-8', errors='replace').strip()
             err = f"STDERR:\n{stderr}\n\nSTDOUT (last 100 lines):\n"
             err += "\n".join(stdout.split('\n')[-100:]) if stdout else "No output"
             return "unknown", err
