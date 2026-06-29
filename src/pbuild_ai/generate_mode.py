@@ -178,6 +178,8 @@ The specification for the package to create is in the system prompt above. Start
             messages.append({"role": "assistant", "content": response_content, **tc_arg})
             for (name, _), content in zip(round_calls, round_results):
                 tool_name = "web_fetch" if name == "_skip" else name
+                if name == "read_file" and isinstance(content, str) and len(content) > 2000:
+                    content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
                 messages.append({"role": "tool", "content": str(content), "name": tool_name})
             continue
 

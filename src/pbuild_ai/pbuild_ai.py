@@ -23,6 +23,7 @@ import argparse
 import threading
 import time
 import shutil
+import difflib
 import datetime
 from pathlib import Path
 
@@ -616,6 +617,8 @@ if __name__ == "__main__":
         build_success2 = False
         _latest_analysis = ""
         _ctx_file = Path(WORKSPACE_DIR) / ".pai.context"
+        _prev_spec = ""
+        _prev_diff_summary = ""
 
         # Load saved context (if any) for the same spec
         if _ctx_file.exists():
@@ -739,14 +742,24 @@ Make all necessary changes now, then stop.
 AGENTS.md instructions (follow these):
 {fix_context}"""}
                 messages.append({"role": "assistant", "content": (error_analysis or "")[:2000]})
-                messages.append({"role": "user", "content": f"""The previous fix attempt did not resolve the build for {package_name}. Here is the new error context:
+                messages.append({"role": "user", "content": f"""The previous fix attempt did not resolve the build for {package_name}. Here is what was changed:
+{_prev_diff_summary}
+
+Here is the new error context:
 
 {error_context[:3000]}
 
 Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system prompt for the exact fix pattern — the solution is almost certainly described there. Apply the specific fix using write_file now."""})
                 MAX_HISTORY = 40
                 if len(messages) > MAX_HISTORY:
-                    messages = [messages[0]] + messages[-(MAX_HISTORY - 1):]
+                    kept = [messages[0]] + messages[-(MAX_HISTORY - 1):]
+                    # Strip read_file content from older tool messages, keep edit/write intact
+                    for i in range(1, len(kept)):
+                        if kept[i].get("role") == "tool" and kept[i].get("name") == "read_file":
+                            content = kept[i].get("content", "")
+                            if len(content) > 200:
+                                kept[i]["content"] = content[:100] + f"\n... (truncated, {len(content)} bytes) ...\n" + content[-50:]
+                    messages = kept
             tool_results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
             if isinstance(tool_results, str):
                 print(f"[FIX ERROR] {tool_results}")
@@ -848,6 +861,19 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
 
             current_spec = manager.read_file_safe(spec)
             changed = current_spec != spec_content
+            if changed:
+                diff_lines = list(difflib.unified_diff(
+                    _prev_spec.splitlines(keepends=True),
+                    current_spec.splitlines(keepends=True),
+                    fromfile="before",
+                    tofile="after",
+                    lineterm=""
+                ))
+                # Keep max 20 lines of diff to avoid bloat
+                _prev_diff_summary = "".join(diff_lines[:20])
+                if len(diff_lines) > 20:
+                    _prev_diff_summary += f"\n... ({len(diff_lines) - 20} more lines)"
+                _prev_spec = current_spec
             if not changed and not tool_results:
                 if messages:
                     _ctx_file.write_text(json.dumps({"version": 1, "mode": "fix", "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "messages": messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
@@ -1112,13 +1138,13 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                             else:
                                 display = r[:500] + "..." if len(r) > 500 else r
                                 print(f"[UPDATE] {display}")
-                        spec_content = manager.read_file_safe(spec)
-                        for line in spec_content.split('\n'):
-                            m = re.match(r'^Version:\s*(\S+)', line)
-                            if m:
-                                target_version = m.group(1)
-                                print(f"[UPDATE] Updated to version {target_version}")
-                                break
+                    spec_content = manager.read_file_safe(spec)
+                    for line in spec_content.split('\n'):
+                        m = re.match(r'^Version:\s*(\S+)', line)
+                        if m:
+                            target_version = m.group(1)
+                            print(f"[UPDATE] Updated to version {target_version}")
+                            break
                     if not target_version:
                         print("[UPDATE] Could not determine latest version.")
                         target_version = 'latest'

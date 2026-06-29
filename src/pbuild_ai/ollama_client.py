@@ -175,6 +175,8 @@ class OllamaAnalyzer:
 
             messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
             for (name, _), content in zip(round_calls, round_results):
+                if name == "read_file" and isinstance(content, str) and len(content) > 2000:
+                    content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
                 messages.append({"role": "tool", "content": str(content), "name": name})
 
         print(f"[AI] Reached max rounds ({max_rounds}).", flush=True)
