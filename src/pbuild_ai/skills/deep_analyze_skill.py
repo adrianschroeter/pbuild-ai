@@ -4,7 +4,7 @@ When building rpms, you can find the build directory usually at ~/rpmbuild/BUILD
 The package build failed and you need to diagnose why.
 
 Key locations:
-- ~/rpmbuild/BUILD/<package_name>*/<tar_ball_content>*/ — build directory
+- ~/rpmbuild/BUILD/<package_name>*-build/<tar_ball_content>/ — build directory
 - ~/rpmbuild/SOURCES/ — source tarballs, patches, and spec file
 - ~/rpmbuild/RPMS/ — built RPMs (if any)
 - ~/rpmbuild/SRPMS/ — built SRPM

@@ -1,4 +1,4 @@
-# Copyright (C) 2026 SUSE Linux Products GmbH / Adrian Schröter <adrian@suse.de>
+# Copyright (C) 2027 SUSE Linux Products GmbH / Adrian Schröter <adrian@suse.de>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -44,22 +44,42 @@ from pbuild_ai.generate_mode import run_generate_mode
 from pbuild_ai.modify_mode import run_modify_mode
 
 
+def _is_source_or_build_path(name: str) -> bool:
+    """Return True if name looks like a build source path, not an RPM package file."""
+    if re.search(r'\.(spec|patch|changes|tar\.(gz|xz|bz2)|tar|zip)$', name):
+        return True
+    if re.search(r'[\\/]\.build\.[\\/]', name) or '/BUILD/' in name or '/SOURCES/' in name:
+        return True
+    if name.startswith('/'):
+        return True
+    return False
+
+
 def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
     """Enrich error_prompt with package lookup results from gitexplorer API.
-    Extracts missing filenames and unresolvable package names from build_out,
-    queries the API, and appends compact results to the prompt.
+    Extracts missing filenames, unresolvable package names, and unowned
+    directories from build_out, queries the API, and appends results to
+    the prompt. Skips source/build paths (spec, patch, tar, etc.).
     """
     try:
         from pbuild_ai.query_gitexplorer import query_package_by_file, query_package_by_name, format_results
-        from pbuild_ai.skills.unresolvable_skill import parse_missing_filename_from_log, parse_unresolved_package_from_log
+        from pbuild_ai.skills.unresolvable_skill import (
+            parse_missing_filename_from_log,
+            parse_unresolved_package_from_log,
+            parse_unowned_directory_from_log,
+        )
 
-        if not parse_missing_filename_from_log(build_out) and not parse_unresolved_package_from_log(build_out):
+        if not any([
+            parse_missing_filename_from_log(build_out),
+            parse_unresolved_package_from_log(build_out),
+            parse_unowned_directory_from_log(build_out),
+        ]):
             return error_prompt
 
         lines = []
 
         filename = parse_missing_filename_from_log(build_out)
-        if filename:
+        if filename and not _is_source_or_build_path(filename):
             print(f"[GITEXPLORER] Querying files endpoint for: {filename}")
             results = query_package_by_file(filename)
             if results:
@@ -72,6 +92,14 @@ def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
             results = query_package_by_name(pkg)
             if results:
                 lines.append(f"Packages matching '{pkg}':")
+                lines.append(format_results(results))
+
+        directory = parse_unowned_directory_from_log(build_out)
+        if directory:
+            print(f"[GITEXPLORER] Querying files endpoint for unowned directory: {directory}")
+            results = query_package_by_file(directory)
+            if results:
+                lines.append(f"Packages providing directory '{directory}':")
                 lines.append(format_results(results))
 
         if lines:

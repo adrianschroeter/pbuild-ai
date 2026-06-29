@@ -390,7 +390,7 @@ class RpmSourceManager:
         try:
             time.sleep(3)
             pty_read(3)
-            pty_write("cd ~/rpmbuild/BUILD/")
+            pty_write("cd ~/rpmbuild/BUILD/*-build/")
             time.sleep(1)
             pty_read(3)
             pty_write("pwd && ls -la")

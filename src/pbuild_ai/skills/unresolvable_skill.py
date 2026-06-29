@@ -1,7 +1,7 @@
 import re
 
 # Triggered when the build log shows dependency resolution failures
-PROMPT_PATTERN = r"(?i)(nothing provides|unresolvable|no provider|has no possibility|nothing provides.*devel|choice.*requires|solver.*fail|dependency.*error)"
+PROMPT_PATTERN = r"(?i)(nothing provides|unresolvable|no provider|has no possibility|nothing provides.*devel|choice.*requires|solver.*fail|dependency.*error|director(y|ies) not owned)"
 
 # Also trigger when spec contains known problematic patterns
 CONTENT_PATTERN = r"(?i)BuildRequires:\s*(libosmesa|OpenGL|nvidia)"
@@ -44,6 +44,14 @@ wrap it in a conditional:
   BuildRequires: foo-devel
   %endif
   ```
+
+### 5. Unowned directories (RPM install-time)
+If the build log says "directories not owned by a package" followed by
+a directory path like `/etc/alternatives`, the package uses a directory
+that no other RPM package owns. Find which package provides that directory
+(or the command installed there) and add it to BuildRequires. For example,
+`/etc/alternatives` is provided by `aaa_alternative` — add
+`BuildRequires: aaa_alternative` to fix it.
 """
 
 
@@ -71,6 +79,16 @@ def parse_unresolved_package_from_log(log: str) -> str | None:
     if not log:
         return None
     m = re.search(r"nothing provides\s+(\S+)", log, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return None
+
+
+def parse_unowned_directory_from_log(log: str) -> str | None:
+    """Extract an unowned directory path from 'directories not owned' errors."""
+    if not log:
+        return None
+    m = re.search(r"director(?:y|ies) not owned by a package.*?\n\s*[–-]\s+(\S+)", log, re.IGNORECASE | re.DOTALL)
     if m:
         return m.group(1)
     return None
