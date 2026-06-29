@@ -45,6 +45,10 @@ Package name to focus on (only in project mode when a \fI_manifest\fR file is pr
 Apply suggested changes and run a test build to verify the fix.
 Repeats up to \fI\-\-fix-attempts\fR times per package.
 Conflicts with \fB\-\-analyze\fR and \fB\-\-changelog\fR.
+In project mode (\fI_manifest\fR present), the full package set is built
+on each attempt. pbuild calculates which packages need rebuilding and only
+rebuilds changed and depending ones. When a package fails, only that one
+is fixed, then the set is built again to verify.
 .TP
 .B \-\-analyze, \-a
 Analyze spec files and exit. No build is performed. This is the default
@@ -62,6 +66,8 @@ Update to the latest upstream version. Also enables \fB\-\-fix\fR.
 Use \fB\-\-update=VERSION\fR to specify a concrete version.
 Without \fI=VERSION\fR, the tool researches the upstream project via
 web fetch to discover the latest stable release.
+In project mode (\fI_manifest\fR present), only packages whose version
+was actually updated are rebuilt. Unchanged packages are skipped.
 .TP
 .B \-\-update\-only
 Update sources to the latest upstream version, then exit without
@@ -78,11 +84,6 @@ Create a new openSUSE RPM package from scratch. The given prompt
 describes what to package. pbuild\-ai researches upstream sources via
 web fetch, asks clarifying questions, writes spec files and supporting
 files into the workspace directory, then exits. No build is performed.
-.TP
-.B \-\-all, \-a
-Build all packages in a project (requires \fI_manifest\fR).
-Runs \fBpbuild \-\-abort\-on\-fail\fR, detects the failing package,
-applies fixes, and restarts the full build (up to 50 iterations).
 .TP
 .B \-\-deep\-analyze, \-d
 On build failure, open an interactive shell in the build environment

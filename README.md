@@ -68,6 +68,9 @@ git clone https://src.opensuse.org/pool/bc
 pbuild-ai --update bc
 ```
 
+In project mode (`_manifest` present), only packages whose version was actually
+updated are rebuilt. Unchanged packages are skipped entirely.
+
 ### `--analyze`
 
 Explicitly analyze spec files and exit (same behavior as running without any
@@ -173,6 +176,11 @@ verify after the modification.
 Test-build a package and attempt to fix failures automatically. Requires Ollama
 to diagnose build failures and apply source changes.
 Conflicts with `--analyze` and `--changelog`.
+
+In project mode (`_manifest` present), the full package set is built on each
+attempt. pbuild calculates which packages need rebuilding and only rebuilds
+changed and depending ones. When a package fails, only that one is fixed,
+then the set is built again to verify.
 
 ### `--fix --prompt PROMPT`
 
