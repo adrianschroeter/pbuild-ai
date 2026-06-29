@@ -2,13 +2,38 @@ import json
 import os
 import re
 import subprocess
+import tarfile
 import urllib.request
+import zipfile
 from pathlib import Path
 from pbuild_ai.diff_utils import show_diff
 
 from pbuild_ai.network import is_safe_url
 
 from pbuild_ai.utils import resolve_path
+
+MAX_ARCHIVE_READ_SIZE = 512 * 1024  # 500 KB
+_ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
+
+
+def _is_safe_archive_path(file_path):
+    """Reject path-traversal inside an archive (absolute or ../ components)."""
+    if os.path.isabs(file_path):
+        return False
+    for part in Path(file_path).parts:
+        if part == '..':
+            return False
+    return True
+
+
+def _archive_type(path):
+    """Return 'tar' or 'zip' based on file extension, or None if unsupported."""
+    name = path.name.lower()
+    if name.endswith('.zip'):
+        return 'zip'
+    if any(name.endswith(e) for e in ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar')):
+        return 'tar'
+    return None
 
 
 def _strip_html(text):
@@ -242,6 +267,44 @@ def build_tools_list():
                         }
                     },
                     "required": ["source", "destination"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_archive",
+                "description": "List all files inside a compressed archive (tar.gz, tar.bz2, tar.xz, tar, zip) in the workspace. Returns paths relative to archive root.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "archive_path": {
+                            "type": "string",
+                            "description": "Path to the archive file (relative to workspace root)"
+                        }
+                    },
+                    "required": ["archive_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file_from_archive",
+                "description": "Read a specific file from inside a compressed archive (tar.gz, tar.bz2, tar.xz, tar, zip) in the workspace. Symlinks, hardlinks, files over 500 KB, and paths with ../ are rejected for security.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "archive_path": {
+                            "type": "string",
+                            "description": "Path to the archive file (relative to workspace root)"
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file inside the archive"
+                        }
+                    },
+                    "required": ["archive_path", "file_path"]
                 }
             }
         }
@@ -657,6 +720,103 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 results.append(f"OK: Renamed {source} to {destination}")
             except Exception as e:
                 results.append(f"Error renaming file: {e}")
+        elif tool_name == "list_archive":
+            archive_path = tool_input.get("archive_path")
+            if not archive_path:
+                results.append("Error: list_archive requires an 'archive_path' argument")
+                continue
+            arch_resolved = resolve_path(archive_path, workspace_dir)
+            if arch_resolved is None or not manager._is_safe_path(arch_resolved):
+                results.append(f"Error: {archive_path} is outside the workspace directory.")
+                continue
+            if not arch_resolved.is_file():
+                results.append(f"Error: Archive not found: {archive_path}")
+                continue
+            arch_type = _archive_type(arch_resolved)
+            if arch_type == 'tar':
+                try:
+                    with tarfile.open(arch_resolved, 'r:*') as tar:
+                        names = tar.getnames()
+                    count = len(names)
+                    print(f"[TOOL] list_archive: {archive_path} ({count} entries)")
+                    results.append("\n".join(names) if names else "(empty archive)")
+                except Exception as e:
+                    results.append(f"Error reading archive: {e}")
+            elif arch_type == 'zip':
+                try:
+                    with zipfile.ZipFile(arch_resolved, 'r') as zf:
+                        names = zf.namelist()
+                    count = len(names)
+                    print(f"[TOOL] list_archive: {archive_path} ({count} entries)")
+                    results.append("\n".join(names) if names else "(empty archive)")
+                except Exception as e:
+                    results.append(f"Error reading archive: {e}")
+            else:
+                results.append(f"Error: Unsupported archive format: {archive_path}")
+        elif tool_name == "read_file_from_archive":
+            archive_path = tool_input.get("archive_path")
+            file_path = tool_input.get("file_path")
+            if not archive_path:
+                results.append("Error: read_file_from_archive requires 'archive_path' and 'file_path' arguments")
+                continue
+            if not file_path:
+                results.append("Error: read_file_from_archive requires a 'file_path' argument")
+                continue
+            if not _is_safe_archive_path(file_path):
+                results.append(f"Error: Invalid path inside archive: {file_path} (absolute or ../ is not allowed)")
+                continue
+            arch_resolved = resolve_path(archive_path, workspace_dir)
+            if arch_resolved is None or not manager._is_safe_path(arch_resolved):
+                results.append(f"Error: {archive_path} is outside the workspace directory.")
+                continue
+            if not arch_resolved.is_file():
+                results.append(f"Error: Archive not found: {archive_path}")
+                continue
+            arch_type = _archive_type(arch_resolved)
+            if arch_type == 'tar':
+                try:
+                    with tarfile.open(arch_resolved, 'r:*') as tar:
+                        try:
+                            info = tar.getmember(file_path)
+                        except KeyError:
+                            results.append(f"Error: File not found in archive: {file_path}")
+                            continue
+                        if info.issym() or info.islnk():
+                            results.append(f"Error: Refusing to read symlink/hardlink: {file_path}")
+                            continue
+                        if info.size > MAX_ARCHIVE_READ_SIZE:
+                            results.append(f"Error: File too large ({info.size} bytes, limit {MAX_ARCHIVE_READ_SIZE})")
+                            continue
+                        f = tar.extractfile(info)
+                        if f is None:
+                            results.append(f"Error: Cannot read {file_path} (directory or special file)")
+                            continue
+                        content = f.read().decode('utf-8', errors='replace')
+                    print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)")
+                    results.append(content)
+                except Exception as e:
+                    results.append(f"Error reading from archive: {e}")
+            elif arch_type == 'zip':
+                try:
+                    with zipfile.ZipFile(arch_resolved, 'r') as zf:
+                        try:
+                            info = zf.getinfo(file_path)
+                        except KeyError:
+                            results.append(f"Error: File not found in archive: {file_path}")
+                            continue
+                        if info.external_attr >> 16 & 0o120000 == 0o120000:
+                            results.append(f"Error: Refusing to read symlink/hardlink: {file_path}")
+                            continue
+                        if info.file_size > MAX_ARCHIVE_READ_SIZE:
+                            results.append(f"Error: File too large ({info.file_size} bytes, limit {MAX_ARCHIVE_READ_SIZE})")
+                            continue
+                        content = zf.read(file_path).decode('utf-8', errors='replace')
+                    print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)")
+                    results.append(content)
+                except Exception as e:
+                    results.append(f"Error reading from archive: {e}")
+            else:
+                results.append(f"Error: Unsupported archive format: {archive_path}")
         else:
             results.append(f"Error: Unknown tool '{tool_name}'")
     return results
