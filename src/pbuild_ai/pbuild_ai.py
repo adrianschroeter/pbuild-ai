@@ -128,6 +128,7 @@ if __name__ == "__main__":
     parser.add_argument("--openai-server", default=None, help="OpenAI-compatible server URL (overrides OLLAMA_HOST env var, default http://localhost:11434)")
     parser.add_argument("--model", default=None, help="Ollama model name (overrides OLLAMA_MODEL env var, default gemma4)")
     parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries (e.g., 'adrian@suse.de' or 'Adrian Schröter <adrian@suse.de>'). Falls back to EMAIL env var.")
+    parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     clean_group = parser.add_mutually_exclusive_group()
     clean_group.add_argument("--clean", action="store_true", default=False, help="Clean build artifacts before building")
     clean_group.add_argument("--no-clean", action="store_true", default=True, help="Do not clean build artifacts (default)")
@@ -866,6 +867,21 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
         if not PACKAGE_FILTER:
             run_prebuild_scripts(spec_files)
         ctx.spec_files = spec_files
+
+        # --changelog mode: standalone changelog entry for current version
+        if args.changelog:
+            _email = EMAIL if EMAIL else "<Your Name> <your@email>"
+            for _spec in spec_files:
+                _v_match = re.search(r'^Version:\s*(\S+)', manager.read_file_safe(_spec), re.M)
+                if not _v_match:
+                    print(f"[CHANGELOG] Could not determine version from {_spec.name}, skipping.")
+                    continue
+                _changes_path = _spec.parent / (_spec.stem + '.changes')
+                if write_changelog_entry(_changes_path, "", _v_match.group(1), _email):
+                    print(f"[CHANGELOG] Added entry for {_spec.stem} ({_v_match.group(1)}).")
+                else:
+                    print(f"[CHANGELOG] Entry for {_spec.stem} ({_v_match.group(1)}) already exists, skipped.")
+            sys.exit(0)
 
         # --generate mode: create a new package from scratch
         if ctx.generate_prompt:
