@@ -21,7 +21,71 @@ import time
 import urllib.request
 from pathlib import Path
 
+from pbuild_ai.network import is_safe_url
 from pbuild_ai.tools import execute_tool_calls
+
+
+def _resolve_url_references(ctx):
+    """Scan spec files for Source:/Patch: lines containing remote URLs,
+    download the content, and rewrite the lines to reference local files.
+
+    This prevents build failures when the build environment has no network
+    access -- all sources and patches must be stored locally in git.
+    """
+    for spec in ctx.spec_files:
+        content = ctx.manager.read_file_safe(spec)
+        if not content:
+            continue
+
+        lines = content.split('\n')
+        modified = 0
+
+        for i, line in enumerate(lines):
+            m = re.match(r'^(Source\d*|Patch\d*):\s+(https?://\S+)', line.strip(), re.I)
+            if not m:
+                continue
+            tag = m.group(1)
+            url = m.group(2).rstrip()
+
+            safe, _ = is_safe_url(url)
+            if not safe:
+                print(f"[MODIFY] Skipping unsafe URL in {spec.name}:{i+1}: {url}")
+                continue
+
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            fname = Path(parsed.path).name
+            if not fname:
+                fname = f"from_{tag.lower()}.patch"
+
+            local_path = spec.parent / fname
+            if not local_path.exists():
+                print(f"[MODIFY] Downloading {url} -> {fname}")
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "pbuild-ai/1.0"})
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        data = resp.read()
+                    local_path.write_bytes(data)
+                    print(f"[MODIFY] Downloaded {len(data)} bytes to {fname}")
+                except Exception as e:
+                    print(f"[MODIFY] Failed to download {url}: {e}")
+                    continue
+            else:
+                print(f"[MODIFY] {fname} already exists, skipping download.")
+
+            # Preserve inline comment after the URL (including leading space)
+            suffix = ""
+            comment_pos = line.find('#')
+            if comment_pos > 0:
+                before_hash = line[comment_pos - 1]
+                suffix = (line[comment_pos - 1:] if before_hash == ' '
+                          else line[comment_pos:])
+            lines[i] = f"{tag}: {fname}{suffix}"
+            modified += 1
+
+        if modified:
+            spec.write_text('\n'.join(lines))
+            print(f"[MODIFY] Updated {spec.name}: {modified} remote URL(s) resolved to local files.")
 
 
 def run_modify_mode(ctx):
@@ -188,6 +252,7 @@ Skill instructions (follow these):
 
         # Save context on exhaustion, delete on success
         if changes_made:
+            _resolve_url_references(ctx)
             if _ctx_file.exists():
                 _ctx_file.unlink()
                 print(f"[MODIFY] Removed saved context ({_ctx_file.name}) after successful changes.")
