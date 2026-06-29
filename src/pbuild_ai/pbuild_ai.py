@@ -1318,7 +1318,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 # 5. Ollama Error Analysis
                 if build_success:
                     print(f"\n[OK] Build for {spec.name} succeeded.")
-                    ollama.print_stats()
+                    ollama.print_stats(manager=manager, program_start=PROGRAM_START)
                 else:
                     print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ctx.ollama.model}...")
                     error_analysis = ollama.analyze(error_prompt, build_out, full_context)

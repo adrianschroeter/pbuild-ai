@@ -23,7 +23,8 @@ Steps (do them in order, never skip any):
 4. Update the spec — make ONLY these changes and nothing else:
    - Prefer edit_file for targeted changes (it preserves all other lines)
    - Change the Version tag to the new version number
-    - When updating Source/Patch URLs, keep all RPM macros (%{{version}}, %{{name}}, etc.) intact — never expand them to literal values. Only replace literal OLD version numbers that appear in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if 1.0.19 was the old version). If the current Source is a plain tarball URL (.tar.gz, .tar.xz, .tar.bz2) without _service or RemoteAsset/CreateArchive lines, keep it as a plain tarball URL — do NOT create _service or add RemoteAsset/CreateArchive.
+   - When updating Source/Patch URLs, keep all RPM macros (%{{version}}, %{{name}}, etc.) intact — never expand them to literal values. Only replace literal OLD version numbers that appear in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if 1.0.19 was the old version). If the current Source is a plain tarball URL (.tar.gz, .tar.xz, .tar.bz2) without _service or RemoteAsset/CreateArchive lines, keep it as a plain tarball URL — do NOT create _service or add RemoteAsset/CreateArchive.
+   - If you remove any Patch: lines, the changelog entry MUST name the exact patch filename(s) and state why (e.g., "Remove alevt-gcc15.patch (upstream applied the fix in this release)"). This is openSUSE policy.
    - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 5. Update the .changes file (same name as the .spec but with .changes extension):
    - Use list_files to find the .changes file if unsure of its name
@@ -52,6 +53,7 @@ VERSION_UPDATE_PROMPT = """Update the spec file to version {target_version}:
 - Use web_fetch to get the release notes for version {target_version} from the upstream project page (GitHub releases, GitLab releases, PyPI, etc.)
 - Update the Version tag
 - Update Source and Patch URLs: keep all RPM macros (%{version}, %{name}) intact — never expand them to literal values. Only replace literal old version numbers in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if present). If the current Source is a plain tarball URL (.tar.gz, .tar.xz, .tar.bz2) without _service or RemoteAsset/CreateArchive lines, keep it as a plain tarball URL — do NOT create _service or add RemoteAsset/CreateArchive.
+- If you remove any Patch: lines, the changelog entry MUST name the exact patch filename(s) and state why (e.g., "Remove alevt-gcc15.patch (upstream applied the fix in this release)"). This is openSUSE policy.
 - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 - Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes.
   Follow the canonical openSUSE .changes format:
