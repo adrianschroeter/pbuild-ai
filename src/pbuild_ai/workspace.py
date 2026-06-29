@@ -461,7 +461,8 @@ Do you have enough information to diagnose and fix the {package_name} build fail
                 if debug:
                     print(f"[DEEP PROMPT]\n{continue_prompt}\n[/DEEP PROMPT]")
                 answer = ollama.analyze("You are investigating a failed RPM build.", continue_prompt, full_context).strip().upper()
-                print(f"[DEEP] Ollama says: {answer}")
+                model_name = ollama.model if ollama else "unknown"
+                print(f"[DEEP] AI({model_name}) says: {answer}")
                 if answer.startswith("Y"):
                     print(f"[DEEP] Ollama has enough information. Proceeding to fix.")
                     break

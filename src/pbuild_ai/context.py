@@ -48,6 +48,7 @@ class PbuildContext:
     email: str = ""
     analyze_mode: bool = False
     max_rounds: int = 15
+    program_start: float = 0.0
 
     # Derived at startup
     full_context: str = ""

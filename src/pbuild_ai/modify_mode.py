@@ -206,7 +206,7 @@ Skill instructions (follow these):
                 for name, tool_input in round_calls:
                     args_preview = json.dumps(tool_input)[:300]
                     if ctx.debug:
-                        print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
+                        print(f"[AI] Tool call: {name}({args_preview})", flush=True)
                 try:
                     round_results = execute_tool_calls(round_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive)
                 except Exception as e:
@@ -271,3 +271,5 @@ Skill instructions (follow these):
             }
             _ctx_file.write_text(json.dumps(save_data, indent=2))
             print(f"[MODIFY] Saved conversation context to {_ctx_file.name} for restart.")
+
+    ctx.ollama.print_stats(manager=ctx.manager, program_start=ctx.program_start)

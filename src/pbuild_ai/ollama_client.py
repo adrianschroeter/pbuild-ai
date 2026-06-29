@@ -114,7 +114,7 @@ class OllamaAnalyzer:
                 if text:
                     preview = text[:500].replace('\n', ' | ')
                     if self.debug:
-                        print(f"[OLLAMA] No tool calls. Text response: {preview}", flush=True)
+                        print(f"[AI] No tool calls. Text response: {preview}", flush=True)
                 if all_results:
                     return all_results
                 return []
@@ -159,7 +159,7 @@ class OllamaAnalyzer:
             for name, tool_input in round_calls:
                 args_preview = json.dumps(tool_input)[:300]
                 if self.debug:
-                    print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
+                    print(f"[AI] Tool call: {name}({args_preview})", flush=True)
 
             round_results = execute_tool_calls(round_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive)
             for (name, inp), r in zip(round_calls, round_results):
@@ -177,5 +177,5 @@ class OllamaAnalyzer:
             for (name, _), content in zip(round_calls, round_results):
                 messages.append({"role": "tool", "content": str(content), "name": name})
 
-        print(f"[OLLAMA] Reached max rounds ({max_rounds}).", flush=True)
+        print(f"[AI] Reached max rounds ({max_rounds}).", flush=True)
         return all_results

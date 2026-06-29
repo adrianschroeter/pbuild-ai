@@ -146,7 +146,7 @@ The specification for the package to create is in the system prompt above. Start
                     continue
                 args_preview = json.dumps(tool_input)[:300]
                 if ctx.debug:
-                    print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
+                    print(f"[AI] Tool call: {name}({args_preview})", flush=True)
             try:
                 round_results = execute_tool_calls([(n, i) for n, i in round_calls if n != "_skip"], ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive)
             except Exception as e:
@@ -202,3 +202,5 @@ The specification for the package to create is in the system prompt above. Start
         else:
             print("[GENERATE] No response from Ollama.")
             break
+
+    ctx.ollama.print_stats(manager=ctx.manager, program_start=ctx.program_start)

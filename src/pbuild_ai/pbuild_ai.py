@@ -159,7 +159,6 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
 
         if build_success:
             print(f"\n[OK] Build for {spec.name} succeeded.")
-            ollama.print_stats(manager=manager, program_start=program_start)
         else:
             print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ollama.model}...")
             error_analysis = ollama.analyze(error_prompt, build_out, full_context)
@@ -204,7 +203,6 @@ def _check_arg_conflicts(parser, args):
 # Main Application Logic
 # ==========================================
 if __name__ == "__main__":
-    PROGRAM_START = time.time()
     parser = argparse.ArgumentParser(
         description="RPM packager helper with AI-powered build-fix and version-update.\n"
                     "Main commands: --analyze, --fix, --update, --generate, --modify",
@@ -287,6 +285,7 @@ if __name__ == "__main__":
         email=args.email or os.environ.get("EMAIL", ""),
         analyze_mode=args.analyze,
         max_rounds=args.max_rounds,
+        program_start=time.time(),
     )
 
     # Local aliases for backward compatibility with remaining inline code
@@ -597,7 +596,7 @@ if __name__ == "__main__":
                     else:
                         dep_prompt = DEFAULT_SPEC_PROMPT
                     dep_spec_analysis = ollama.analyze(dep_prompt, manager.read_file_safe(dep_spec), full_context)
-                    print(f"-> Ollama says about {dep_spec.name}:\n{dep_spec_analysis}\n")
+                    print(f"-> AI({ollama.model}) says about {dep_spec.name}:\n{dep_spec_analysis}\n")
                     dep_success, dep_out = manager.run_project_build(suggested, stream_output=SHOW_BUILDLOG)
                     if dep_success:
                         print(f"[DEP] '{suggested}' built successfully. Continuing with current package.")
@@ -879,7 +878,6 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             if exit_on_exhaustion:
                 sys.exit(1)
 
-        ollama.print_stats(manager=manager, program_start=PROGRAM_START)
         return build_success2
 
     def run_project_fix_loop(spec_files, manager, ollama, skill_manager, base_fc):
@@ -1370,21 +1368,22 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 else:
                     # Normal flow: spec analysis and skill-based fix
                     if not ctx.modify_prompt:
-                        print(f"[OLLAMA] Analyzing Spec-file: {spec.name}...")
+                        print(f"[AI] Analyzing Spec-file: {spec.name}...")
                         analysis_context = full_context
                         if PROMPT_HINT:
                             analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
                         spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
-                        print(f"-> Ollama says:\n{spec_analysis}\n")
+                        print(f"-> AI({ollama.model}) says:\n{spec_analysis}\n")
                         if not FIX_MODE or manager.has_prior_failed_build():
                             manager.fix_file_content(spec, fix_func)
 
                 # 4. Build guard: only run pbuild when --fix or --update is active
                 error_prompt = _run_build_guard(
                     spec, manager, ollama, full_context, error_prompt, ctx,
-                    PROGRAM_START, run_fix_loop,
+                    ctx.program_start, run_fix_loop,
                 )
-                
+
+        ollama.print_stats(manager=manager, program_start=ctx.program_start)
     except Exception as e:
         try:
             print(f"Script aborted: {e}")
