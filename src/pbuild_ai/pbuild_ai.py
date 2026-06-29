@@ -85,6 +85,7 @@ def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
 # Main Application Logic
 # ==========================================
 if __name__ == "__main__":
+    PROGRAM_START = time.time()
     parser = argparse.ArgumentParser(description="RPM packager helper")
     parser.add_argument("workspace_dir", help="Path to the workspace directory")
     parser.add_argument("package_name", nargs="?", default=None, help="Package name to focus on (only in project mode)")
@@ -745,7 +746,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             if exit_on_exhaustion:
                 sys.exit(1)
 
-        ollama.print_stats()
+        ollama.print_stats(manager=manager, program_start=PROGRAM_START)
         return build_success2
 
     def run_project_fix_loop(spec_files, manager, ollama, skill_manager, base_fc):

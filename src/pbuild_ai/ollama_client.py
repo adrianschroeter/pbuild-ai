@@ -45,8 +45,14 @@ class OllamaAnalyzer:
         self.ai_calls = 0
         self.ai_time = 0.0
 
-    def print_stats(self):
-        print(f"\n[STATS] AI calls: {self.ai_calls}  |  AI time: {self.ai_time:.1f}s")
+    def print_stats(self, manager=None, program_start=None):
+        parts = [f"[STATS] AI model: {self.model}  |  AI calls: {self.ai_calls}  |  AI time: {self.ai_time:.1f}s"]
+        if manager is not None:
+            parts.append(f"pbuild calls: {manager.pbuild_calls}  |  pbuild time: {manager.pbuild_time:.1f}s")
+        if program_start is not None:
+            total = time.time() - program_start
+            parts.append(f"total runtime: {total:.1f}s")
+        print("  |  ".join(parts))
 
     def _request(self, url, payload):
         if payload.get("context") is None:

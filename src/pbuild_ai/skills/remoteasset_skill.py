@@ -56,5 +56,9 @@ Source:        %{name}-%{version}.tar.xz
 - If there is no `_service` file, just add the two prefix lines to the `Source:` line.
 - Avoid any other change.
 
+Make sure that you remove also the belonging tar, recompress and set_version services when 
+removing the obs_scm service.
+
 Make the changes using write_file. Write both the spec file and the _service file if needed.
+The _service can get removed entirely if no other services are inside.
 """

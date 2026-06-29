@@ -80,6 +80,8 @@ class RpmSourceManager:
         self.vm_memory = vm_memory
         self.shell_after_build = shell_after_build
         self.preset = preset
+        self.pbuild_calls = 0
+        self.pbuild_time = 0.0
 
     @staticmethod
     def _run_captured(cmd, cwd, stream_output=False):
@@ -164,10 +166,17 @@ class RpmSourceManager:
         if self.shell_after_build:
             cmd.append("--shell-after-build")
         print(f"[EXEC] {' '.join(cmd)}")
+        t0 = time.time()
         try:
             result = self._run_captured(cmd, self.base_dir, stream_output=stream_output)
+            elapsed = time.time() - t0
+            self.pbuild_calls += 1
+            self.pbuild_time += elapsed
             return True, "\n".join(result.stdout.strip().split('\n')[-50:])
         except subprocess.CalledProcessError as e:
+            elapsed = time.time() - t0
+            self.pbuild_calls += 1
+            self.pbuild_time += elapsed
             stderr = (e.stderr or "").strip()
             stdout = (e.stdout or "").strip()
             err = f"STDERR:\n{stderr}\n\nSTDOUT (last 100 lines):\n"
@@ -307,10 +316,17 @@ class RpmSourceManager:
         if self.shell_after_build:
             cmd.append("--shell-after-build")
         print(f"[EXEC] {' '.join(cmd)}")
+        t0 = time.time()
         try:
             result = self._run_captured(cmd, self.base_dir, stream_output=stream_output)
+            elapsed = time.time() - t0
+            self.pbuild_calls += 1
+            self.pbuild_time += elapsed
             return True, "\n".join(result.stdout.strip().split('\n')[-50:])
         except subprocess.CalledProcessError as e:
+            elapsed = time.time() - t0
+            self.pbuild_calls += 1
+            self.pbuild_time += elapsed
             stderr = (e.stderr or "").strip()
             stdout = (e.stdout or "").strip()
             err = f"STDERR:\n{stderr}\n\nSTDOUT (last 100 lines):\n"
@@ -344,6 +360,7 @@ class RpmSourceManager:
         import select
 
         master_fd, slave_fd = pty.openpty()
+        t0 = time.time()
         proc = subprocess.Popen(cmd, cwd=self.base_dir,
                                stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
                                close_fds=True)
@@ -458,6 +475,9 @@ Summarize the root cause of the {package_name} build failure and what fix is nee
         except Exception as e:
             print(f"[DEEP ERROR] {e}")
         finally:
+            elapsed = time.time() - t0
+            self.pbuild_calls += 1
+            self.pbuild_time += elapsed
             self.deep_exploration = collected
             try:
                 os.write(master_fd, b"exit\n")
