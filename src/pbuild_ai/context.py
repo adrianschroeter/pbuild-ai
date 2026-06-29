@@ -47,6 +47,7 @@ class PbuildContext:
     ollama_model_arg: Optional[str] = None
     email: str = ""
     analyze_mode: bool = False
+    max_rounds: int = 15
 
     # Derived at startup
     full_context: str = ""

@@ -245,6 +245,7 @@ if __name__ == "__main__":
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
     parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from Ollama")
     parser.add_argument("--fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, resets for each package)")
+    parser.add_argument("--max-rounds", type=int, default=15, help="Max tool-call rounds per fix attempt (default: 15, 0 = unlimited)")
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
     parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to Ollama")
     parser.add_argument("--fresh", action="store_true", help="Discard saved .pai.context and start fresh")
@@ -285,6 +286,7 @@ if __name__ == "__main__":
         interactive=args.interactive,
         email=args.email or os.environ.get("EMAIL", ""),
         analyze_mode=args.analyze,
+        max_rounds=args.max_rounds,
     )
 
     # Local aliases for backward compatibility with remaining inline code
@@ -746,7 +748,7 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                 MAX_HISTORY = 40
                 if len(messages) > MAX_HISTORY:
                     messages = [messages[0]] + messages[-(MAX_HISTORY - 1):]
-            tool_results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE)
+            tool_results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
             if isinstance(tool_results, str):
                 print(f"[FIX ERROR] {tool_results}")
             elif tool_results:
@@ -1093,7 +1095,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     ]
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
-                    results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=15)
+                    results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
                     if isinstance(results, str):
                         print(f"[UPDATE ERROR] {results}")
                     elif results:
@@ -1129,7 +1131,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     ]
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
-                    results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=15)
+                    results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
                     if isinstance(results, str):
                         print(f"[UPDATE ERROR] {results}")
                     elif results:

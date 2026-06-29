@@ -90,7 +90,8 @@ class OllamaAnalyzer:
         except Exception as e:
             return f"[OLLAMA ERROR] {e}"
 
-    def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=5, interactive=False):
+    def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False):
+        max_rounds = max_rounds if max_rounds > 0 else 999999
         all_results = []
         for round_idx in range(max_rounds):
             payload = {
