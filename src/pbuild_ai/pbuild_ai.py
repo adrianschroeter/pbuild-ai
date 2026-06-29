@@ -685,12 +685,12 @@ if __name__ == "__main__":
                     error_context = current_build_out
             error_analysis = ollama.analyze(error_prompt, error_context, full_context)
             _latest_analysis = error_analysis
-            if error_analysis and (error_analysis.lstrip().startswith('#') or 'norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
+            if error_analysis and ('norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
                 if _prev_good_analysis:
                     print(f"\n--- OLLAMA ERROR ANALYSIS (cached) ---\n{_prev_good_analysis}\n-----------------------------\n")
                     error_analysis = _prev_good_analysis
                 else:
-                    print("\n--- OLLAMA ERROR ANALYSIS ---\n(no analysis available)\n-----------------------------\n")
+                    print(f"\n--- OLLAMA ERROR ANALYSIS ---\n(preview: {error_analysis[:200]})\n-----------------------------\n")
             else:
                 _prev_good_analysis = error_analysis
                 print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
@@ -704,15 +704,15 @@ if __name__ == "__main__":
                 error_analysis = ollama.analyze(error_prompt, error_context, deep_context)
                 error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                 _latest_analysis = error_analysis
-                if error_analysis and (error_analysis.lstrip().startswith('#') or 'norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
-                    if _prev_good_analysis:
-                        print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation, cached) ---\n{_prev_good_analysis}\n-----------------------------\n")
-                        error_analysis = _prev_good_analysis
-                    else:
-                        print("\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n(no analysis available)\n-----------------------------\n")
+            if error_analysis and ('norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
+                if _prev_good_analysis:
+                    print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation, cached) ---\n{_prev_good_analysis}\n-----------------------------\n")
+                    error_analysis = _prev_good_analysis
                 else:
-                    _prev_good_analysis = error_analysis
-                    print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
+                    print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n(preview: {error_analysis[:200]})\n-----------------------------\n")
+            else:
+                _prev_good_analysis = error_analysis
+                print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
             if spec_files:
                 build_suggested_dependency(error_analysis, spec_files, manager, ollama, full_context)
             print("[FIX MODE] Applying suggested changes via tool calls...")
@@ -935,11 +935,11 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 print(f"\n[WARN] Fix attempt {fix_attempt} still failing.")
                 error_analysis2 = ollama.analyze(error_prompt, build_out2, full_context)
                 _latest_analysis = error_analysis2
-                if error_analysis2 and (error_analysis2.lstrip().startswith('#') or 'norootforbuild' in error_analysis2 or '# spec file for package' in error_analysis2):
+                if error_analysis2 and ('norootforbuild' in error_analysis2 or '# spec file for package' in error_analysis2):
                     if _prev_good_analysis:
                         print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}, cached) ---\n{_prev_good_analysis}\n------------------------------------------\n")
                     else:
-                        print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n(no analysis available)\n------------------------------------------\n")
+                        print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n(preview: {error_analysis2[:200]})\n------------------------------------------\n")
                 else:
                     _prev_good_analysis = error_analysis2
                     print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n{error_analysis2}\n------------------------------------------\n")
