@@ -202,4 +202,4 @@ Skill instructions (follow these):
                 "timestamp": time.time(),
             }
             _ctx_file.write_text(json.dumps(save_data, indent=2))
-            print(f"[MODIFY] Saved conversation context to {_ctx_file.name} for restart with --modify")
+            print(f"[MODIFY] Saved conversation context to {_ctx_file.name} for restart.")

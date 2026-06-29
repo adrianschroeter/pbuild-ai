@@ -712,7 +712,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             if not changed and not tool_results:
                 if messages:
                     _ctx_file.write_text(json.dumps({"version": 1, "mode": "fix", "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "messages": messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
-                    print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart with --prompt")
+                    print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart.")
                 print("[FIX ERROR] No source changes were made. Aborting rebuild.", flush=True)
                 if exit_on_no_changes:
                     sys.exit(1)
@@ -739,7 +739,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
         if not build_success2:
             if messages:
                 _ctx_file.write_text(json.dumps({"version": 1, "mode": "fix", "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "messages": messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
-                print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart with --prompt")
+                print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart.")
             label = MAX_ATTEMPTS if not unlimited else "unlimited"
             print(f"[FIX ERROR] All {label} fix attempts exhausted. Build still failing.")
             if exit_on_exhaustion:
