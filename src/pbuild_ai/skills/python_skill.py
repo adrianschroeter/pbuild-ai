@@ -4,6 +4,8 @@
 TARGET_PATTERN = r"^python-.*\.spec$"
 # Also trigger for any spec file with python_module BuildRequires
 CONTENT_PATTERN = r"BuildRequires:\s*%\{python_module\b"
+# Trigger on build log errors about Python version mismatch
+PROMPT_PATTERN = r"(?i)requires a different Python"
 
 # Specific instruction to the LLM for Python packages before the build
 OLLAMA_SPEC_PROMPT = """
@@ -37,6 +39,18 @@ analysis text alone.
 When recommending another python3xx-MODULE package first, build instead python-MODULE source.
 
 If you are unsure about the root cause and need to investigate interactively inside the build environment, include [DEEP_ANALYZE] in your response.
+
+### 5. Python version mismatch
+If the build log says "Package 'NAME' requires a different Python: X.Y.Z not in ...",
+the package's Python version constraint excludes the system Python version.
+Skip the unsupported version by adding at the top of the spec (below the
+copyright header):
+
+    %define skip_pythonXYZ 1
+
+Where XYZ is the major.minor version without dots (e.g., for Python 3.14.4 use
+%define skip_python314 1). For Python 2, use %define skip_python2 1.
+Multiple skip lines can be added for different versions.
 """
 
 def fix_content(content: str) -> str:
