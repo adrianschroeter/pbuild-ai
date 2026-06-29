@@ -161,8 +161,11 @@ class OllamaAnalyzer:
                     print(f"[OLLAMA] Tool call: {name}({args_preview})", flush=True)
 
             round_results = execute_tool_calls(round_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive)
-            for r in round_results:
-                if r.startswith("[Fetched "):
+            for (name, inp), r in zip(round_calls, round_results):
+                if name == "read_file":
+                    line_count = r.count('\n')
+                    display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
+                elif r.startswith("[Fetched "):
                     display = r.split("\n", 1)[0]
                 else:
                     display = r[:500] + "..." if len(r) > 500 else r

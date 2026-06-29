@@ -212,8 +212,11 @@ Skill instructions (follow these):
                 except Exception as e:
                     round_results = [f"Error executing tool: {e}"]
                     print(f"[MODIFY TOOL ERROR] {e}")
-                for r in round_results:
-                    if r.startswith("[Fetched "):
+                for (name, inp), r in zip(round_calls, round_results):
+                    if name == "read_file":
+                        line_count = r.count('\n')
+                        display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
+                    elif r.startswith("[Fetched "):
                         display = r.split("\n", 1)[0]
                     else:
                         display = r[:500] + "..." if len(r) > 500 else r

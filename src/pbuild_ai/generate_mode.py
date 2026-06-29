@@ -164,8 +164,11 @@ The specification for the package to create is in the system prompt above. Start
                     final_results.append(round_results[cache_idx])
                     cache_idx += 1
             round_results = final_results
-            for r in round_results:
-                if r.startswith("[Fetched "):
+            for (name, inp), r in zip(round_calls, round_results):
+                if name == "read_file":
+                    line_count = r.count('\n')
+                    display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
+                elif r.startswith("[Fetched "):
                     display = r.split("\n", 1)[0]
                 else:
                     display = r[:500] + "..." if len(r) > 500 else r

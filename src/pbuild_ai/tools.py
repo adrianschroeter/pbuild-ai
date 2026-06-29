@@ -406,7 +406,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 continue
             try:
                 content = manager.read_file_safe(file_path)
-                print(f"[TOOL] read_file: {tool_input['path']} -> {file_path}")
+                print(f"[TOOL] read_file: {tool_input['path']}")
                 results.append(content)
             except FileNotFoundError:
                 results.append(f"Error: File not found: {tool_input['path']}")
