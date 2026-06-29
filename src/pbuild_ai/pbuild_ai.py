@@ -156,7 +156,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when Ollama proposes multiple tool calls")
     parser.add_argument("--openai-server", default=None, help="OpenAI-compatible server URL (overrides OLLAMA_HOST env var, default http://localhost:11434)")
     parser.add_argument("--model", default=None, help="Ollama model name (overrides OLLAMA_MODEL env var, default gemma4)")
-    parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries (e.g., 'adrian@suse.de' or 'Adrian Schröter <adrian@suse.de>'). Falls back to EMAIL env var.")
+    parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries. Falls back to EMAIL env var.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     clean_group = parser.add_mutually_exclusive_group()
     clean_group.add_argument("--clean", action="store_true", default=False, help="Clean build artifacts before building")

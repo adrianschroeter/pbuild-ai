@@ -4,26 +4,32 @@ import re
 CHANGELOG_PROMPT = """
 ## .changes file format (openSUSE policy)
 
-The `.changes` file (same stem as the spec) uses this format:
+The `.changes` file uses entries separated by `---` lines. There must be a
+blank line BEFORE each `---` line (except at the very top of the file).
+
+Correct example:
 
 -------------------------------------------------------------------
-<Weekday> <Month> <Day> <Time> UTC <Year> - <Author Name> <email>
+Mon Jun 29 12:00:00 UTC 2026 - pbuild-ai <email@suse.de>
 
-- <entry text>
-- <more entries if needed>
+- Updated to version 1.2.3
+  * upstream changelog details here
+- Remove old-patch.patch (upstream applied the fix)
+- Update generated using pbuild-ai
+
+-------------------------------------------------------------------
+Tue Nov  8 10:21:12 UTC 2022 - Previous Author <email>
+
+- Earlier entry
 
 ### Rules:
 - Always prepend new entries at the top. Never modify or remove older entries.
-- The author header uses `pbuild-ai <EMAIL>` format.
-- Entry body uses `- ` bullet lines with blank line before the next entry.
-- When updating to a new version, include: `- Updated to version VERSION`
-  followed by relevant upstream changelog details.
-- When removing a `Patch:` line, the changelog entry MUST name the exact
-  patch filename and state why it was removed, for example:
-  `- Remove 0001-fix-segfault.patch (upstream applied the fix in this release)`
-  This is openSUSE policy for non-git packages.
+- Replace `<email@suse.de>` with the actual email from the spec. Do NOT leave
+  `<EMAIL>` as a literal placeholder — substitute it with a real address.
+- Entry body uses `- ` bullet lines.
+- When removing a `Patch:` line, name the exact patch filename and state why.
+- End each entry body with `- Update generated using pbuild-ai`.
 - When the .changes file does not exist, create it.
-- End the entry body with `- Update generated using pbuild-ai`.
 """
 
 
