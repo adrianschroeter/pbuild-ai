@@ -752,7 +752,13 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                 print(f"[FIX ERROR] {tool_results}")
             elif tool_results:
                 for r in tool_results:
-                    display = r.split("\n", 1)[0] if r.startswith("[Fetched ") else (r[:500] + "..." if len(r) > 500 else r)
+                    if r.startswith("read_file: ") and not r.startswith("read_file: Error"):
+                        line_count = r.count('\n')
+                        display = f"read_file: ({line_count} lines)"
+                    elif r.startswith("[Fetched "):
+                        display = r.split("\n", 1)[0]
+                    else:
+                        display = r[:500] + "..." if len(r) > 500 else r
                     print(f"[FIX] {display}")
                 relocate_patches(tool_results, spec)
             else:
