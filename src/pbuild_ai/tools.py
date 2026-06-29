@@ -55,9 +55,11 @@ def _auth_headers(url):
             headers["Authorization"] = f"Bearer {token}"
     return headers
 
-def build_tools_list():
-    """Return the standard Ollama tool definitions."""
-    return [
+def build_tools_list(interactive=False):
+    """Return the standard Ollama tool definitions.
+    When interactive=False, the ask_user tool is excluded so Ollama
+    cannot waste a round on a question nobody will answer."""
+    tools = [
         {
             "type": "function",
             "function": {
@@ -218,23 +220,6 @@ def build_tools_list():
         {
             "type": "function",
             "function": {
-                "name": "ask_user",
-                "description": "Ask the user a clarifying question and get their answer. Use this when you need more information to proceed, e.g., choosing between options or confirming details.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "question": {
-                            "type": "string",
-                            "description": "The question to ask the user"
-                        }
-                    },
-                    "required": ["question"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "remove_file",
                 "description": "Remove/delete a file from the workspace directory. Only files within the workspace are allowed.",
                 "parameters": {
@@ -309,6 +294,25 @@ def build_tools_list():
             }
         }
     ]
+    if interactive:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "ask_user",
+                "description": "Ask the user a clarifying question and get their answer. Use this when you need more information to proceed, e.g., choosing between options or confirming details.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The question to ask the user"
+                        }
+                    },
+                    "required": ["question"]
+                }
+            }
+        })
+    return tools
 
 
 def _extract_header(content):

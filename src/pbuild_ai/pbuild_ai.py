@@ -351,7 +351,7 @@ if __name__ == "__main__":
         return content # Does nothing if no skill matches
 
     # Define allowed tools (file operations within workspace + remote web fetching)
-    TOOLS = build_tools_list()
+    TOOLS = build_tools_list(interactive=INTERACTIVE)
     ctx.tools = TOOLS
 
     def apply_build_order(spec_files):
