@@ -144,7 +144,7 @@ def build_tools_list(interactive=False):
             "type": "function",
             "function": {
                 "name": "web_fetch",
-                "description": "Fetch content from a remote HTTPS URL. Only HTTPS URLs to public servers are allowed. file://, http://, ftp://, and private/local IP addresses are blocked.",
+                "description": "Fetch content from a remote HTTPS URL into the AI context (read-only). For release notes, API responses, or web pages. Do NOT use this to download source tarballs — use download_file instead, which saves the file to disk permanently. Only HTTPS URLs to public servers are allowed. file://, http://, ftp://, and private/local IP addresses are blocked.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -161,7 +161,7 @@ def build_tools_list(interactive=False):
             "type": "function",
             "function": {
                 "name": "download_file",
-                "description": "Download a file from a remote HTTPS URL and save it to the workspace directory. Only safe HTTPS URLs are allowed.",
+                "description": "Download a file from a remote HTTPS URL and save it to the workspace directory. Use this for source tarballs — unlike web_fetch, this saves the file permanently to disk. Only safe HTTPS URLs are allowed.",
                 "parameters": {
                     "type": "object",
                     "properties": {

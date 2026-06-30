@@ -44,7 +44,7 @@ Steps (do them in order, never skip any):
    Source:        
    ```
    Make sure each `#!` line is on its OWN line (one per line). Do NOT rename `Source:` to `Source0:` — keep the existing Source tag name exactly as-is. Do NOT merge `#!RemoteAsset` and `#!CreateArchive` onto one line. Read the actual revision tag from _service's `<param name="revision">` and use it as `<REVISION_TAG>` (e.g., if revision is "v0.4.2", use `#v0.4.2`). The git URL from _service's `<param name="url">` is the same URL to use in `#!RemoteAsset: git+URL#TAG`. Otherwise just update <revision> tags in _service.
-7. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Include the package subdirectory in the filename argument (e.g., "libopenshot/libopenshot-0.4.0.tar.xz" not just "libopenshot-0.4.0.tar.xz") — use list_files output to find the correct relative path from the workspace root. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
+7. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Use download_file, NOT web_fetch: web_fetch only reads content into memory and does NOT save the file to disk. Include the package subdirectory in the filename argument (e.g., "libopenshot/libopenshot-0.4.0.tar.xz" not just "libopenshot-0.4.0.tar.xz") — use list_files output to find the correct relative path from the workspace root. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
 
 Also consult the AGENTS.md / skill rules below for project-specific update steps (e.g., tarball updates, _service file changes, additional files to update).
 
@@ -71,7 +71,7 @@ VERSION_UPDATE_PROMPT = """Update the spec file to version {target_version}:
   #!CreateArchive
   Source:        
   Do NOT rename Source: to Source0:. Do NOT merge lines. Otherwise just update <revision> tags in _service.
-- Then download the new source tarball using download_file — include the package subdirectory in the filename (check list_files output for the correct relative path from workspace root). Construct the URL from the spec's Source tag (substituting %{{version}} and the old version), not from the release page assets which are often precompiled binaries
+- Then download the new source tarball using download_file (NOT web_fetch — web_fetch is read-only and does not save to disk). Include the package subdirectory in the filename (check list_files output for the correct relative path from workspace root). Construct the URL from the spec's Source tag (substituting %{{version}} and the old version), not from the release page assets which are often precompiled binaries
 
 Also consult the AGENTS.md / skill rules below for version specific update steps (e.g., tarball updates, service file changes, additional files to update).
 
