@@ -32,7 +32,12 @@ if __name__ == "__main__" and not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 if __name__ == "__main__" and "--version" in sys.argv:
-    print("pbuild-ai version 0.1.0")
+    import importlib.metadata
+    try:
+        _ver = importlib.metadata.version("pbuild-ai")
+    except Exception:
+        _ver = "undefined (not installed)"
+    print(f"pbuild-ai version {_ver}")
     sys.exit(0)
 
 from pbuild_ai.manifest import list_packages
@@ -48,7 +53,11 @@ from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROM
 from pbuild_ai.generate_mode import run_generate_mode
 from pbuild_ai.modify_mode import run_modify_mode
 
-__version__ = "0.1.0"
+import importlib.metadata as _ilm
+try:
+    __version__ = _ilm.version("pbuild-ai")
+except Exception:
+    __version__ = "undefined (not installed)"
 
 
 def _is_source_or_build_path(name: str) -> bool:
