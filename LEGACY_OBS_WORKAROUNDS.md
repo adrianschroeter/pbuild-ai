@@ -19,6 +19,19 @@ To enable them, add a `_service` file with the following content:
 </services>
 ```
 
+## Directories
+
+git repositories may contain directories and pbuild-ai may create them.
+
+OBS Legacy needs to store them as obscpio archive. To create it, just call
+
+  # osc add DIRECTORY
+
+and add the resulting DIRECTORY.obscpio file.
+
+Also keep in mind to refresh the archive when files get changed inside.
+At build time it will appear as directory again.
+
 ## openSUSE Policy
 
 openSUSE Policy currently requires you to include the referenced source file; you cannot rely solely on the OBS instance to fetch it at build time.
