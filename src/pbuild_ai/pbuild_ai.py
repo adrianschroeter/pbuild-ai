@@ -281,6 +281,13 @@ def _check_update_hints(results, messages, spec_files, spec_originals, updated_p
 # Main Application Logic
 # ==========================================
 if __name__ == "__main__":
+    import builtins as _builtins
+    _original_print = _builtins.print
+    def _flush_print(*args, **kwargs):
+        kwargs.setdefault("flush", True)
+        _original_print(*args, **kwargs)
+    _builtins.print = _flush_print
+
     parser = argparse.ArgumentParser(
         description="RPM packager helper with AI-powered build-fix and version-update.\n"
                     "Main commands: --analyze, --fix, --update, --generate, --modify",
