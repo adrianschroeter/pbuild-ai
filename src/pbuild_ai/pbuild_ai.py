@@ -1421,6 +1421,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                                     if _old_v and _old_v.group(1) != target_version:
                                         _expanded = _expanded.replace(_old_v.group(1), target_version)
                                     _source_url = _expanded
+                            _dl_failed = False
                             if _source_url:
                                 from urllib.parse import urlparse
                                 _fname = Path(urlparse(_source_url).path).name or Path(_source_url).name
@@ -1428,41 +1429,65 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                                 if _rel.parent != Path('.'):
                                     _fname = str(_rel.parent / _fname)
                                 print(f"[UPDATE] Downloading {_fname}...")
+                                _dl_ok = False
                                 for _r in execute_tool_calls(
                                     [("download_file", {"url": _source_url, "filename": _fname})],
                                     manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE
                                 ):
                                     _d = _r[:500] + "..." if len(_r) > 500 else _r
                                     print(f"[UPDATE] {_d}")
-                                # Remove old source tarball if it exists and differs
-                                _old_source_url = None
-                                for _oline in spec_before_update.split('\n'):
-                                    _om = re.match(r'^Source\d*:\s*(.+)', _oline, re.I)
-                                    if _om:
-                                        _old_source_url = _om.group(1).strip()
-                                        break
-                                if _old_source_url:
-                                    _macros = {}
-                                    for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', spec_before_update, re.M):
-                                        _macros[_kv.group(1).lower()] = _kv.group(2)
-                                    _old_expanded = _old_source_url
-                                    for _key, _val in _macros.items():
-                                        _old_expanded = _old_expanded.replace(f'%{{{_key}}}', _val)
-                                    _old_fname = Path(urlparse(_old_expanded).path).name or Path(_old_expanded).name
-                                    _old_rel = Path(spec).relative_to(Path(WORKSPACE_DIR))
-                                    if _old_rel.parent != Path('.'):
-                                        _old_fname = str(_old_rel.parent / _old_fname)
-                                    _old_path = Path(WORKSPACE_DIR) / _old_fname
-                                    _new_path = Path(WORKSPACE_DIR) / _fname
-                                    if _old_path.exists() and _old_path != _new_path:
-                                        _old_path.unlink()
-                                        print(f"[UPDATE] Removed old source: {_old_fname}")
-                                # Remove _service file — tarball replaces obs_scm
-                                _svc = spec.parent / "_service"
-                                if _svc.exists():
-                                    _svc.unlink()
-                                    print(f"[UPDATE] Removed _service file (tarball replaces obs_scm).")
+                                    if _r.startswith("OK"):
+                                        _dl_ok = True
+                                # Fallback: if GitHub releases URL 404'd, try archive URL pattern
+                                if not _dl_ok and 'github.com' in _source_url and '/releases/download/' in _source_url:
+                                    _gh_m = re.search(r'github\.com/([^/]+/[^/]+?)(?:/|$)', _source_url)
+                                    if _gh_m:
+                                        _alt_url = f"https://github.com/{_gh_m.group(1)}/archive/refs/tags/v{target_version}.tar.gz"
+                                        _alt_fname = _fname.rsplit('.', 2)[0] + '.tar.gz' if _fname.endswith('.tar.bz2') else _fname
+                                        print(f"[UPDATE] GitHub release URL failed, trying archive: {_alt_url}")
+                                        for _r in execute_tool_calls(
+                                            [("download_file", {"url": _alt_url, "filename": _alt_fname})],
+                                            manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE
+                                        ):
+                                            _d = _r[:500] + "..." if len(_r) > 500 else _r
+                                            print(f"[UPDATE] {_d}")
+                                            if _r.startswith("OK"):
+                                                _dl_ok = True
+                                                _fname = _alt_fname
+                                if not _dl_ok:
+                                    _dl_failed = True
+                                    print(f"[UPDATE] Source download failed — skipping build for {spec.name}.")
+                                # Remove old source tarball only if new download succeeded
+                                if _dl_ok:
+                                    _old_source_url = None
+                                    for _oline in spec_before_update.split('\n'):
+                                        _om = re.match(r'^Source\d*:\s*(.+)', _oline, re.I)
+                                        if _om:
+                                            _old_source_url = _om.group(1).strip()
+                                            break
+                                    if _old_source_url:
+                                        _macros = {}
+                                        for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', spec_before_update, re.M):
+                                            _macros[_kv.group(1).lower()] = _kv.group(2)
+                                        _old_expanded = _old_source_url
+                                        for _key, _val in _macros.items():
+                                            _old_expanded = _old_expanded.replace(f'%{{{_key}}}', _val)
+                                        _old_fname = Path(urlparse(_old_expanded).path).name or Path(_old_expanded).name
+                                        _old_rel = Path(spec).relative_to(Path(WORKSPACE_DIR))
+                                        if _rel.parent != Path('.'):
+                                            _old_fname = str(_old_rel.parent / _old_fname)
+                                        _old_path = Path(WORKSPACE_DIR) / _old_fname
+                                        _new_path = Path(WORKSPACE_DIR) / _fname
+                                        if _old_path.exists() and _old_path != _new_path:
+                                            _old_path.unlink()
+                                            print(f"[UPDATE] Removed old source: {_old_fname}")
+                                    # Remove _service file — tarball replaces obs_scm
+                                    _svc = spec.parent / "_service"
+                                    if _svc.exists():
+                                        _svc.unlink()
+                                        print(f"[UPDATE] Removed _service file (tarball replaces obs_scm).")
                     except Exception as e:
+                        _dl_failed = True
                         print(f"[UPDATE] Source download failed: {e}")
 
                 spec_after = manager.read_file_safe(spec)
@@ -1475,8 +1500,9 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     if _changes_after == (_changes_before or ''):
                         if write_changelog_entry(_changes_file, _old_v.group(1), _new_v.group(1), email_author):
                             print(f"[UPDATE] Added changelog entry for {_old_v.group(1)} -> {_new_v.group(1)}.")
-                    updated_packages.add(spec)
-                    print(f"[UPDATE] Updated {spec.name}.")
+                    if not _dl_failed:
+                        updated_packages.add(spec)
+                        print(f"[UPDATE] Updated {spec.name}.")
                 elif spec_after != spec_before_update:
                     print(f"[UPDATE] No changes for {spec.name}.")
 
