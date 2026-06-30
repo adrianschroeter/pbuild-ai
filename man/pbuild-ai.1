@@ -33,6 +33,12 @@ exchanging changes.
 Since the tool could run indefinitely, it is recommended to use AI
 servers with a fixed-cost plan \(en ideally a local instance on your own
 hardware.
+
+While waiting for the AI server, downloads, or builds, pbuild\-ai shows
+a colored spinner on stderr (\fB[AI]\fR in cyan, \fB[BUILD]\fR in yellow,
+\fB[TOOL]\fR in green) to indicate activity. The spinner is disabled
+when stderr is not a terminal, or when \fBNO_SPINNER\fR or
+\fBNO_COLOR\fR is set.
 .SH OPTIONS
 .TP
 .B workspace_dir
@@ -131,7 +137,8 @@ Ask the user to select which changes to apply when Ollama proposes
 multiple tool calls.
 .TP
 .B \-\-debug, \-D
-Print raw JSON responses from Ollama for debugging.
+Print raw JSON responses from Ollama for debugging, along with
+request/response timings.
 .TP
 .B \-\-openai\-server URL
 OpenAI-compatible server URL. Overrides the \fBOLLAMA_HOST\fR environment variable.
@@ -139,7 +146,7 @@ Defaults to \fBhttp://localhost:11434\fR.
 .TP
 .B \-\-model NAME
 Ollama model name. Overrides the \fBOLLAMA_MODEL\fR environment variable.
-Defaults to \fBgemma4\fR.
+Default: \fBdefault\fR (server-defined fallback).
 .SH ENVIRONMENT
 .TP
 .B OLLAMA_HOST
@@ -148,7 +155,15 @@ Default: \fBhttp://localhost:11434\fR.
 .TP
 .B OLLAMA_MODEL
 Ollama model name. Overridden by \fB\-\-model\fR.
-Default: \fBgemma4\fR.
+Default: \fBdefault\fR (server-defined fallback).
+.TP
+.B NO_SPINNER
+Set to \fB1\fR, \fBtrue\fR, or \fByes\fR to disable the activity spinner
+on stderr.
+.TP
+.B NO_COLOR
+Set to \fB1\fR, \fBtrue\fR, or \fByes\fR to disable colored output
+(also disables the spinner colors).
 .TP
 .B GITHUB_TOKEN
 GitHub personal access token. When set, all API requests to

@@ -20,6 +20,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from pbuild_ai.spinner import Spinner, CYAN
 from pbuild_ai.tools import execute_tool_calls
 
 
@@ -87,8 +88,10 @@ class OllamaAnalyzer:
             headers={'Content-Type': 'application/json'}
         )
         try:
-            with self._opener.open(req) as response:
-                raw = response.read().decode('utf-8')
+            model_name = payload.get('model', self.model)
+            with Spinner(prefix=f"[AI] {model_name}", color=CYAN):
+                with self._opener.open(req) as response:
+                    raw = response.read().decode('utf-8')
         except urllib.error.HTTPError as e:
             body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
             if self.debug:

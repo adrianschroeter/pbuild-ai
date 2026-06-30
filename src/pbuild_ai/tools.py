@@ -7,6 +7,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from pbuild_ai.diff_utils import show_diff
+from pbuild_ai.spinner import Spinner, GREEN
 
 from pbuild_ai.network import is_safe_url
 
@@ -511,8 +512,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 continue
             try:
                 req = urllib.request.Request(url, headers=_auth_headers(url))
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    content = response.read().decode("utf-8", errors="replace")
+                with Spinner(prefix="[TOOL] web_fetch", color=GREEN):
+                    with urllib.request.urlopen(req, timeout=30) as response:
+                        content = response.read().decode("utf-8", errors="replace")
                     stripped = _strip_html(content)
                     display = stripped[:100000] if len(stripped) < len(content) else content[:100000]
                     print(f"[TOOL] web_fetch: {url} ({len(content)} bytes -> {len(stripped)} stripped)")
@@ -565,8 +567,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 req = urllib.request.Request(url, headers=_auth_headers(url))
-                with urllib.request.urlopen(req, timeout=120) as response:
-                    data = response.read()
+                with Spinner(prefix="[TOOL] download", color=GREEN):
+                    with urllib.request.urlopen(req, timeout=120) as response:
+                        data = response.read()
                 with open(file_path, 'wb') as f:
                     f.write(data)
                 size = file_path.stat().st_size

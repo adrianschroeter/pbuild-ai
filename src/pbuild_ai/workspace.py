@@ -14,10 +14,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
-import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
+
+from pbuild_ai.spinner import Spinner, YELLOW
 
 
 def _extract_shell_command(text: str) -> str | None:
@@ -88,20 +90,30 @@ class RpmSourceManager:
         if stream_output:
             proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
             lines = []
-            for raw in proc.stdout:
-                line = raw.decode('utf-8', errors='replace')
-                lines.append(line)
-                try:
-                    print(line, end='', flush=True)
-                except BlockingIOError:
-                    pass
+            spinner = Spinner(prefix="[BUILD]", color=YELLOW)
+            spinner.start()
+            try:
+                for raw in proc.stdout:
+                    line = raw.decode('utf-8', errors='replace')
+                    lines.append(line)
+                    try:
+                        print(line, end='', flush=True)
+                    except BlockingIOError:
+                        pass
+            finally:
+                spinner.stop()
             proc.wait()
             output = ''.join(lines)
             if proc.returncode != 0:
                 raise subprocess.CalledProcessError(proc.returncode, cmd, output, '')
             return subprocess.CompletedProcess(cmd, 0, output, '')
         else:
-            result = subprocess.run(cmd, cwd=cwd, capture_output=True)
+            spinner = Spinner(prefix="[BUILD]", color=YELLOW)
+            spinner.start()
+            try:
+                result = subprocess.run(cmd, cwd=cwd, capture_output=True)
+            finally:
+                spinner.stop()
             stdout = result.stdout.decode('utf-8', errors='replace')
             stderr = result.stderr.decode('utf-8', errors='replace')
             if result.returncode != 0:

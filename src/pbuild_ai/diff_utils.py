@@ -1,4 +1,20 @@
 import difflib
+import os
+
+
+_COLOR = os.environ.get("NO_COLOR", "").lower() not in ("1", "true", "yes")
+
+
+def _green(text):
+    return f"\033[32m{text}\033[0m" if _COLOR else text
+
+
+def _red(text):
+    return f"\033[31m{text}\033[0m" if _COLOR else text
+
+
+def _cyan(text):
+    return f"\033[36m{text}\033[0m" if _COLOR else text
 
 
 def show_diff(old_content, new_content, file_path, prefix="[FIX]"):
@@ -13,11 +29,11 @@ def show_diff(old_content, new_content, file_path, prefix="[FIX]"):
     print(f"{prefix} --- Diff for {file_path} ---")
     for line in diff:
         if line.startswith("+"):
-            print(f"\033[32m{prefix} {line}\033[0m", end="")
+            print(f"{_green(prefix)} {_green(line)}", end="")
         elif line.startswith("-"):
-            print(f"\033[31m{prefix} {line}\033[0m", end="")
+            print(f"{_red(prefix)} {_red(line)}", end="")
         elif line.startswith("@@"):
-            print(f"\033[36m{prefix} {line}\033[0m", end="")
+            print(f"{_cyan(prefix)} {_cyan(line)}", end="")
         else:
             print(f"{prefix} {line}", end="")
     print(f"{prefix} --- End diff ---")
