@@ -116,6 +116,33 @@ def _is_comment_only_change(original: str, modified: str) -> bool:
     return True
 
 
+def _extract_error_context(text, context_lines=3, max_errors=30):
+    """Extract lines containing 'error:' plus surrounding context from build output.
+    Prepend these before the full log so they survive MAX_PROMPT_CHARS truncation.
+    Returns empty string if no error lines found.
+    """
+    if not text:
+        return ''
+    lines = text.split('\n')
+    error_indices = set()
+    for i, line in enumerate(lines):
+        if 'error:' in line.lower():
+            for j in range(max(0, i - context_lines), min(len(lines), i + 1)):
+                error_indices.add(j)
+    if not error_indices:
+        return ''
+    sorted_idx = sorted(error_indices)[:max_errors * (context_lines + 1)]
+    result = ['--- Build errors (with context) ---']
+    prev = -999
+    for idx in sorted_idx:
+        if idx > prev + 1:
+            result.append('...')
+        result.append(lines[idx])
+        prev = idx
+    result.append('--- End ---')
+    return '\n'.join(result)
+
+
 def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
     """Enrich error_prompt with package lookup results from gitexplorer API.
     Extracts missing filenames, unresolvable package names, and unowned
@@ -222,7 +249,8 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
             print(f"\n[OK] Build for {spec.name} succeeded.")
         else:
             print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ollama.model}...")
-            error_analysis = ollama.analyze(error_prompt, build_out, full_context)
+            _err_ctx = _extract_error_context(build_out)
+            error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{build_out}" if _err_ctx else build_out, full_context)
             if not ctx.fix_mode:
                 print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
 
@@ -750,7 +778,11 @@ if __name__ == "__main__":
                 has_log, log_content = manager.get_build_log(package_name=spec.stem)
                 if has_log:
                     print("[DIAG] Build log found. Analyzing...")
-                    error_context = f"Build output:\n{current_build_out[:2000]}\n\nBuild log:\n{log_content}"
+                    _err_ctx = _extract_error_context(log_content)
+                    error_context = f"Build output:\n{current_build_out[:2000]}"
+                    if _err_ctx:
+                        error_context += f"\n\n{_err_ctx}"
+                    error_context += f"\n\nBuild log:\n{log_content}"
                 else:
                     print(f"[DIAG] Warning: {log_content}")
                     # No log found — check unresolvable in build output, otherwise abort (single-mode only)
