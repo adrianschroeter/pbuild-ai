@@ -314,6 +314,8 @@ if __name__ == "__main__":
         print(f"pbuild-ai version {__version__}")
         sys.exit(0)
 
+    print(f"[PBUILD-AI] Version {__version__}")
+
     _check_arg_conflicts(parser, args)
 
     ctx = PbuildContext(
