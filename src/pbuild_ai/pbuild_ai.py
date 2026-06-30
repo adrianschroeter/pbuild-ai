@@ -33,10 +33,24 @@ if __name__ == "__main__" and not __package__:
 
 if __name__ == "__main__" and "--version" in sys.argv:
     import importlib.metadata
+    _ver = "undefined (not installed)"
+    _local = False
     try:
-        _ver = importlib.metadata.version("pbuild-ai")
+        _dist = importlib.metadata.distribution("pbuild-ai")
+        if _dist:
+            _installed_ver = _dist.version
+            _installed_loc = str(Path(_dist.locate_file("")).resolve().parent)
+            _running_loc = str(Path(__file__).resolve().parent)
+            if _installed_loc == _running_loc:
+                _ver = _installed_ver
+            else:
+                _local = True
     except Exception:
-        _ver = "undefined (not installed)"
+        pass
+    if _local:
+        _pyproject = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
+        _v = re.search(r'^version\s*=\s*"([^"]+)"', _pyproject.read_text(), re.M) if _pyproject.exists() else None
+        _ver = _v.group(1) if _v else _ver
     print(f"pbuild-ai version {_ver}")
     sys.exit(0)
 
@@ -54,10 +68,22 @@ from pbuild_ai.generate_mode import run_generate_mode
 from pbuild_ai.modify_mode import run_modify_mode
 
 import importlib.metadata as _ilm
+_ver = "undefined (not installed)"
 try:
-    __version__ = _ilm.version("pbuild-ai")
+    _dist = _ilm.distribution("pbuild-ai")
+    if _dist:
+        _installed_ver = _dist.version
+        _installed_loc = str(Path(_dist.locate_file("")).resolve().parent)
+        _running_loc = str(Path(__file__).resolve().parent)
+        if _installed_loc == _running_loc:
+            _ver = _installed_ver
+        else:
+            _pyproject = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
+            _v = re.search(r'^version\s*=\s*"([^"]+)"', _pyproject.read_text(), re.M) if _pyproject.exists() else None
+            _ver = _v.group(1) if _v else _installed_ver
 except Exception:
-    __version__ = "undefined (not installed)"
+    pass
+__version__ = _ver
 
 
 def _is_source_or_build_path(name: str) -> bool:
