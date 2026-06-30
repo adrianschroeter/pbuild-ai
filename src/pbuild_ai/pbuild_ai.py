@@ -966,6 +966,13 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
 
             print("[FIX MODE] Re-building to verify...", flush=True)
             build_success2, build_out2 = rebuild_func(package_name)
+            _build_out_lower = build_out2.lower() if build_out2 else ""
+            if build_success2:
+                print("[FIX MODE] Build was successful")
+            elif "unresolvable" in _build_out_lower or "nothing provides" in _build_out_lower:
+                print("[FIX MODE] Build was unresolvable")
+            else:
+                print("[FIX MODE] Build was failed")
 
             if build_success2:
                 print(f"\n[OK] Fix verified: Build for {spec.name} succeeded after applying changes.")
