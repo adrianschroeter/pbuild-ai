@@ -1279,14 +1279,13 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
                     if results:
                         for r in results:
-                            if DEBUG:
-                                print(f"[UPDATE] {r}")
-                            elif r.startswith("web_fetch: [Fetched "):
+                            if r.startswith("web_fetch: [Fetched ") or r.startswith("read_file: "):
                                 display = r.split("\n", 1)[0]
-                                print(f"[UPDATE] {display}")
+                            elif DEBUG:
+                                display = r
                             else:
                                 display = r[:500] + "..." if len(r) > 500 else r
-                                print(f"[UPDATE] {display}")
+                            print(f"[UPDATE] {display}")
                     _check_update_hints(results, research_messages, spec_files, spec_originals, updated_packages, manager)
                     spec_content = manager.read_file_safe(spec)
                     for line in spec_content.split('\n'):
@@ -1314,14 +1313,13 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
                     if results:
                         for r in results:
-                            if DEBUG:
-                                print(f"[UPDATE] {r}")
-                            elif r.startswith("web_fetch: [Fetched "):
+                            if r.startswith("web_fetch: [Fetched ") or r.startswith("read_file: "):
                                 display = r.split("\n", 1)[0]
-                                print(f"[UPDATE] {display}")
+                            elif DEBUG:
+                                display = r
                             else:
                                 display = r[:500] + "..." if len(r) > 500 else r
-                                print(f"[UPDATE] {display}")
+                            print(f"[UPDATE] {display}")
                     else:
                         print("[UPDATE] No changes made.")
                     _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager)
