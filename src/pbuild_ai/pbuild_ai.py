@@ -31,6 +31,10 @@ if __name__ == "__main__" and not __package__:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+if __name__ == "__main__" and "--version" in sys.argv:
+    print("pbuild-ai version 0.1.0")
+    sys.exit(0)
+
 from pbuild_ai.manifest import list_packages
 from pbuild_ai.diff_utils import show_diff
 from pbuild_ai.tools import execute_tool_calls, build_tools_list
@@ -43,6 +47,8 @@ from pbuild_ai.skills.changelog_skill import CHANGELOG_PROMPT, write_changelog_e
 from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_UPDATE_PROMPT
 from pbuild_ai.generate_mode import run_generate_mode
 from pbuild_ai.modify_mode import run_modify_mode
+
+__version__ = "0.1.0"
 
 
 def _is_source_or_build_path(name: str) -> bool:
@@ -248,6 +254,7 @@ if __name__ == "__main__":
     parser.add_argument("workspace_dir", help="Path to the workspace directory")
     parser.add_argument("package_name", nargs="?", default=None, help="Package name to focus on (only in project mode)")
     parser.add_argument("--analyze", "-a", action="store_true", help="Main command: analyze spec files and exit (default). Conflicts with --fix, --update, --generate, --changelog, --modify.")
+    parser.add_argument("--version", action="store_true", help="Show version and exit")
     parser.add_argument("--fix", "-f", action="store_true", help="Main command: apply AI-suggested fixes to build failures and run test builds to verify")
     parser.add_argument("--update", "-u", action="store_true", help="Main command: update to latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
     parser.add_argument("--generate", default=None, help="Main command: generate a new package from scratch based on the given prompt")
@@ -293,6 +300,10 @@ if __name__ == "__main__":
     clean_group.add_argument("--clean", action="store_true", default=False, help="Clean build artifacts before building")
     clean_group.add_argument("--no-clean", action="store_true", default=True, help="Do not clean build artifacts (default)")
     args = parser.parse_args()
+
+    if args.version:
+        print(f"pbuild-ai version {__version__}")
+        sys.exit(0)
 
     _check_arg_conflicts(parser, args)
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pbuild-ai"
-version = "0.1.0"
+version = "0.1.5"
 description = "RPM packager helper with Ollama AI"
 requires-python = ">=3.10"
 
