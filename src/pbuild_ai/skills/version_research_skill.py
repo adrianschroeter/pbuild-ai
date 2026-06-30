@@ -21,7 +21,7 @@ Steps (do them in order, never skip any):
    - For PyPI, fetch https://pypi.org/pypi/PACKAGE/VERSION/json and look for the description or release_url field
    - Extract the changelog entries for this version from the fetched content
 4. Update the spec — make ONLY these changes and nothing else:
-   - Prefer edit_file for targeted changes (it preserves all other lines)
+   - Prefer edit_file for targeted changes (it preserves all other lines). Include enough surrounding lines so old_string matches ONLY ONE location.
    - Change the Version tag to the new version number
    - When updating Source/Patch URLs, keep all RPM macros (%{{version}}, %{{name}}, etc.) intact — never expand them to literal values. Only replace literal OLD version numbers that appear in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if 1.0.19 was the old version). If the current Source is a plain tarball URL (.tar.gz, .tar.xz, .tar.bz2) without _service or RemoteAsset/CreateArchive lines, keep it as a plain tarball URL — do NOT create _service or add RemoteAsset/CreateArchive.
    - If you remove any Patch: lines, the changelog entry MUST name the exact patch filename(s) and state why (e.g., "Remove alevt-gcc15.patch (upstream applied the fix in this release)"). This is openSUSE policy.

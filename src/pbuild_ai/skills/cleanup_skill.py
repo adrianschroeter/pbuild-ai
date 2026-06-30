@@ -49,7 +49,7 @@ Ensure Source URLs use `%{name}` and `%{version}` macros where possible instead 
 ### 11. Update .changes file if needed
 If you make significant changes (e.g., converted from obs_scm), add a changelog entry to the `.changes` file noting the cleanup.
 
-Apply all these changes now using the available tools. Prefer `edit_file` for targeted changes and `write_file` only for large rewrites or new files.
+Apply all these changes now using the available tools. Prefer `edit_file` for targeted changes (include enough surrounding lines so old_string matches ONLY ONE location) and `write_file` only for large rewrites or new files.
 """
 
 OLLAMA_ERROR_PROMPT = """

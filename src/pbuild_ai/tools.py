@@ -85,7 +85,7 @@ def build_tools_list(interactive=False):
             "type": "function",
             "function": {
                 "name": "edit_file",
-                "description": "Apply a targeted search-and-replace edit to an existing file in the workspace. PREFER this over write_file for small, specific changes — it preserves all lines not being modified. The old_string must match exactly one location in the file.",
+                "description": "Apply a targeted search-and-replace edit to an existing file in the workspace. PREFER this over write_file for small, specific changes — it preserves all lines not being modified. IMPORTANT: Include enough surrounding lines (the full target line plus 1-2 lines of context before/after) so that old_string matches EXACTLY ONE location.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -95,7 +95,7 @@ def build_tools_list(interactive=False):
                         },
                         "old_string": {
                             "type": "string",
-                            "description": "Exact text to search for (must match exactly one location)"
+                            "description": "Exact text to search for. Include adjacent surrounding lines (full target line + 1-2 lines before/after) so that this string appears ONLY ONCE in the file."
                         },
                         "new_string": {
                             "type": "string",

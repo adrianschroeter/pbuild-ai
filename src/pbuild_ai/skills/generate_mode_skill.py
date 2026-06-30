@@ -8,7 +8,7 @@ THE USER'S SPECIFICATION (this is the complete request, not a conversation start
 IMPORTANT: The specification above IS the request. Do NOT ask the user "what would you like to package?" or otherwise request information they already provided. Start working immediately based on the specification given.
 
 You have these tools:
-- edit_file(path, old_string, new_string): targeted search-and-replace (PREFER this for small changes)
+- edit_file(path, old_string, new_string): targeted search-and-replace (PREFER this for small changes). Include enough surrounding lines (full target line + 1-2 lines context) so old_string matches EXACTLY ONE location.
 - write_file(path, content): write a file (use only for large rewrites or new files)
 - read_file(path): read a file
 - web_fetch(url): fetch an HTTPS URL to research upstream sources
