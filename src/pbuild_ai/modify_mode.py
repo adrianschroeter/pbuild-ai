@@ -150,6 +150,7 @@ Skill instructions (follow these):
                 "stream": False
             }
             try:
+                _t0 = time.time()
                 req = urllib.request.Request(
                     ctx.ollama.chat_api_url,
                     data=json.dumps(payload).encode('utf-8'),
@@ -160,6 +161,8 @@ Skill instructions (follow these):
                     if ctx.debug:
                         print(f"[DEBUG] Ollama raw response:\n{raw}", flush=True)
                     result = json.loads(raw)
+                ctx.ollama.ai_calls += 1
+                ctx.ollama.ai_time += time.time() - _t0
             except Exception as e:
                 print(f"[MODIFY ERROR] {e}")
                 break
