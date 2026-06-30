@@ -39,9 +39,11 @@ if __name__ == "__main__" and "--version" in sys.argv:
         _dist = importlib.metadata.distribution("pbuild-ai")
         if _dist:
             _installed_ver = _dist.version
-            _installed_loc = str(Path(_dist.locate_file("")).resolve().parent)
-            _running_loc = str(Path(__file__).resolve().parent)
-            if _installed_loc == _running_loc:
+            # Check if the dist-info is in the same site-packages tree as __file__
+            _dist_info = Path(_dist.locate_file("")).resolve()
+            _running = Path(__file__).resolve()
+            _in_site_packages = _dist_info.parent in _running.parents
+            if _in_site_packages:
                 _ver = _installed_ver
             else:
                 _local = True
@@ -73,9 +75,10 @@ try:
     _dist = _ilm.distribution("pbuild-ai")
     if _dist:
         _installed_ver = _dist.version
-        _installed_loc = str(Path(_dist.locate_file("")).resolve().parent)
-        _running_loc = str(Path(__file__).resolve().parent)
-        if _installed_loc == _running_loc:
+        _dist_info = Path(_dist.locate_file("")).resolve()
+        _running = Path(__file__).resolve()
+        _in_site_packages = _dist_info.parent in _running.parents
+        if _in_site_packages:
             _ver = _installed_ver
         else:
             _pyproject = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
