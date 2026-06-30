@@ -1418,6 +1418,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     print(f"[UPDATE] No changes for {spec.name}.")
 
             if ctx.update_only:
+                ollama.print_stats(manager=manager, program_start=ctx.program_start)
                 if not updated_packages:
                     print("[UPDATE] No changes found. Exiting (--update-only).")
                 else:
