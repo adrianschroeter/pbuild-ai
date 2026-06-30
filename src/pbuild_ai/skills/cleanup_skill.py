@@ -4,9 +4,9 @@ OLLAMA_SPEC_PROMPT = """
 You are an openSUSE spec file cleanup assistant. Your task is to clean up and standardize the spec file following openSUSE packaging conventions (documented in OPENSUSE.md).
 
 ## Required clean-up steps (do ALL of them):
-
 ### 1. Run format_spec_file
-First, call `run_tool_script("format_spec_file", [<spec-directory>])` on each directory containing the .spec file to normalize formatting automatically.
+
+First, call `run_tool_script("format_spec_file", [<spec-directory>])` on each directory containing the .spec file to normalize formatting automatically. If called without arguments, it defaults to the workspace root.
 
 ### 2. Convert obs_scm _service to RemoteAsset (if present)
 If a `_service` file exists using `obs_scm`:

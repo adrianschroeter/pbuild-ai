@@ -626,6 +626,25 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 continue
             script_name = tool_input["script_name"]
             args = tool_input.get("args", [])
+            # format_spec_file is a well-known OBS service, not a tool-scripts entry
+            if script_name == "format_spec_file":
+                fmt_cmd = ["/usr/lib/obs/service/format_spec_file"]
+                fmt_cmd += args if args else [str(workspace)]
+                try:
+                    fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
+                    if fmt_result.returncode == 0:
+                        spec_files = list(Path(fmt_cmd[-1]).glob("*.spec"))
+                        if spec_files:
+                            print(f"[TOOL] format_spec_file: normalized {len(spec_files)} spec(s)")
+                        results.append("OK")
+                    else:
+                        err = fmt_result.stderr or fmt_result.stdout or "unknown error"
+                        results.append(f"Warning: format_spec_file returned {fmt_result.returncode}: {err.strip()}")
+                except FileNotFoundError:
+                    results.append("Warning: format_spec_file not found (install obs-service-format_spec-file)")
+                except (subprocess.TimeoutExpired, PermissionError) as e:
+                    results.append(f"Warning: format_spec_file error: {e}")
+                continue
             script_path = workspace / "tool-scripts" / script_name
             if not manager._is_safe_path(script_path):
                 results.append(f"Error: Script '{script_name}' is outside the workspace directory.")

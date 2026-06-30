@@ -13,6 +13,7 @@ You have these tools:
 - read_file(path): read a file
 - web_fetch(url): fetch an HTTPS URL to research upstream sources
 - git_command(command): run a git command
+- run_tool_script(script_name, args): run a well-known OBS service script
 - ask_user(question): ask the user a clarifying question
 
 Follow these rules:
@@ -31,8 +32,9 @@ Follow these rules:
    - Build environment has NO network access — patch out any code that tries to reach external hosts at build time
 5. If the upstream provides source archives, set Source0 to the download URL and Source1..N for additional files.
 6. You MAY also create supporting files (patches, .desktop, sysconfig, tmpfiles.d, etc.) as needed.
-7. When you are done, tell the user what you created.
-8. Do NOT use HTML or markdown formatting in your text responses — use plain text only. No <b>, <a>, <pre>, or any other tags.
+7. When you are done creating files, call run_tool_script("format_spec_file", []) on the spec directory as your final step to normalize spec formatting.
+8. Tell the user what you created.
+9. Do NOT use HTML or markdown formatting in your text responses — use plain text only. No <b>, <a>, <pre>, or any other tags.
 
 AGENTS.md instructions (follow these):
 {full_context}"""
