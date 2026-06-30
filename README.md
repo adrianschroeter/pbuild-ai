@@ -42,6 +42,10 @@ hardware.
  * gemma4:e2b
    it may be used just with --update-only switch, but it is halicunating
    version numbers already sometimes.
+ * qwen3 or qwen coder versions
+
+Also older ollama versions are not providing a compatible openai api.
+Use version 0.30 at least.
 
 ## Single package
 
