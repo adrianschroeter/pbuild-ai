@@ -223,7 +223,8 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
         else:
             print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ollama.model}...")
             error_analysis = ollama.analyze(error_prompt, build_out, full_context)
-            print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
+            if not ctx.fix_mode:
+                print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
 
         if ctx.fix_mode and not build_success:
             pkg_name = package_name if 'package_name' in dir() else spec.stem
