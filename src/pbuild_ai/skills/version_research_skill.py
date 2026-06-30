@@ -10,11 +10,12 @@ If a newer version exists, you MUST complete ALL steps before stopping.
 
 Steps (do them in order, never skip any):
 1. Examine the Source URLs in the spec to identify the upstream project. Also check the `URL:` tag (upstream homepage) — it may point to the current project home even if the Source URL is stale.
-2. Use web_fetch to find the latest stable version:
-   - For GitHub projects, try the API first (https://api.github.com/repos/OWNER/REPO/releases/latest) — it returns JSON with the 'tag_name' field
-   - For GitLab, try https://gitlab.com/api/v4/projects/OWNER%2FREPO/releases/permalink/latest
-   - For PyPI, try https://pypi.org/pypi/PACKAGE/json
-   - Fall back to fetching the releases page if no API is available
+ 2. Use web_fetch to find the latest stable version:
+    - For GitHub projects, try the API first (https://api.github.com/repos/OWNER/REPO/releases/latest) — it returns JSON with the 'tag_name' field
+    - For GitLab, try https://gitlab.com/api/v4/projects/OWNER%2FREPO/releases/permalink/latest
+    - For PyPI, try https://pypi.org/pypi/PACKAGE/json
+    - For GNU projects: use https://ftp.gnu.org/pub/gnu/PACKAGE/ instead of www.gnu.org — the main site is often under DoS attack. Fetch https://ftp.gnu.org/pub/gnu/PACKAGE/ and check for the highest version number.
+    - Fall back to fetching the releases page if no API is available
    - **If the GitHub API returns a 404 or the repo doesn't exist**, the project may have moved or been renamed. Try:
      a. Fetch the `URL:` tag (upstream homepage) from the spec to find the new location
      b. Search GitHub using `web_fetch("https://api.github.com/search/repositories?q=PROJECTNAME+in:name&sort=stars&per_page=5")` — this returns JSON with matching repos
@@ -58,6 +59,7 @@ VERSION_UPDATE_PROMPT = """Update the spec file to version {target_version}:
 - CRITICAL: If the spec file's Version tag already reads "Version: {target_version}", make NO changes to any files and respond with "already-at-version". Do NOT edit any files when the version hasn't changed.
 - Use web_fetch to get the release notes for version {target_version} from the upstream project page (GitHub releases, GitLab releases, PyPI, etc.)
   - If the GitHub API returns 404 (project moved), try searching via `https://api.github.com/search/repositories?q=PROJECTNAME+in:name&sort=stars&per_page=5` or fetch the `URL:` tag from the spec to find the new project home
+  - For GNU projects: use https://ftp.gnu.org/pub/gnu/PACKAGE/ — avoid www.gnu.org (often under DoS attack)
 - Update the Version tag
 - Update Source and Patch URLs: keep all RPM macros (%{{version}}, %{{name}}) intact — never expand them to literal values. Only replace literal old version numbers in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if present). If the current Source is a plain tarball URL (.tar.gz, .tar.xz, .tar.bz2) without _service or RemoteAsset/CreateArchive lines, keep it as a plain tarball URL — do NOT create _service or add RemoteAsset/CreateArchive.
 - If the Source line is just a local filename (e.g., `Source: %{{name}}-%{{version}}.tar.gz`) without a proper scheme, AND you determined the actual upstream download URL: update it to include the full URL with %{{version}}/%{{name}} macros.
