@@ -1197,7 +1197,8 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                                 print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
                                 continue
                         except Exception as _e:
-                            pass
+                            _status = getattr(_e, 'code', None) or getattr(_e, 'status', None) or type(_e).__name__
+                            print(f"[UPDATE] GitHub API check ({_github_api_url}) failed: {_status} — falling back to AI research.")
 
                     research_system_content = VERSION_RESEARCH_SYSTEM_PROMPT.format(
                         spec=spec,
