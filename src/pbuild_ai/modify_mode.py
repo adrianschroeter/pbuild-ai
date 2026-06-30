@@ -163,9 +163,13 @@ Skill instructions (follow these):
                     result = json.loads(raw)
                 ctx.ollama.ai_calls += 1
                 ctx.ollama.ai_time += time.time() - _t0
+            except urllib.error.HTTPError as e:
+                body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
+                print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} — {body}")
+                sys.exit(1)
             except Exception as e:
-                print(f"[MODIFY ERROR] {e}")
-                break
+                print(f"[OLLAMA ERROR] {e}")
+                sys.exit(1)
 
             message = result.get('message', {})
             if 'tool_calls' in message and message['tool_calls']:

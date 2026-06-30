@@ -430,7 +430,7 @@ if __name__ == "__main__":
     else:
         full_context = agents_md_content
     
-    ollama = OllamaAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "gemma4"), debug=DEBUG)
+    ollama = OllamaAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "default"), debug=DEBUG)
     ctx.ollama = ollama
     ctx.full_context = full_context
 
@@ -902,7 +902,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
 - Output the COMPLETE spec, not just the changed parts
 - Just raw spec content and nothing else"""
                         result = ollama.analyze("You are an RPM spec expert.", prompt, full_context)
-                        if not result or result.startswith("[OLLAMA ERROR"):
+                        if not result:
                             return None
                         extracted = extract_spec(result)
                         if extracted and len(extracted) > 50 and any(l.strip().startswith(("Name:", "Summary:", "BuildRequires:")) for l in extracted.split("\n")):
@@ -1274,9 +1274,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
                     results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
-                    if isinstance(results, str):
-                        print(f"[UPDATE ERROR] {results}")
-                    elif results:
+                    if results:
                         for r in results:
                             if DEBUG:
                                 print(f"[UPDATE] {r}")
@@ -1311,9 +1309,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
                     results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
-                    if isinstance(results, str):
-                        print(f"[UPDATE ERROR] {results}")
-                    elif results:
+                    if results:
                         for r in results:
                             if DEBUG:
                                 print(f"[UPDATE] {r}")

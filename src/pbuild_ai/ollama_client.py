@@ -15,6 +15,7 @@
 
 import json
 import os
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -23,8 +24,8 @@ from pbuild_ai.tools import execute_tool_calls
 
 
 class OllamaAnalyzer:
-    def __init__(self, host=None, model="gemma4", debug=False):
-        self.host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    def __init__(self, host=None, model="default", debug=False):
+        self.host = (host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")).rstrip('/')
         self.model = model
         self.debug = debug
         self.api_url = f"{self.host}/api/generate"
@@ -33,6 +34,7 @@ class OllamaAnalyzer:
         self._chat_context = None
         self._opener = urllib.request.build_opener()
         self._opener.addheaders = [('Connection', 'keep-alive')]
+        self._chat_supported = True
         self.reset_stats()
 
     MAX_PROMPT_CHARS = 80000
@@ -54,22 +56,49 @@ class OllamaAnalyzer:
             parts.append(f"total runtime: {total:.1f}s")
         print("  |  ".join(parts))
 
+    def _chat_to_generate_payload(self, messages):
+        """Convert chat-format messages to /api/generate payload (system + prompt, no tools)."""
+        system = ''
+        prompt_parts = []
+        for msg in messages:
+            role = msg.get('role', '')
+            content = msg.get('content', '')
+            if role == 'system' and content:
+                system += content + '\n'
+            elif content:
+                prompt_parts.append(f"{role}: {content}")
+        return {
+            "model": self.model,
+            "system": system.strip() or None,
+            "prompt": '\n'.join(prompt_parts) if prompt_parts else '.',
+            "stream": False
+        }
+
     def _request(self, url, payload):
         if payload.get("context") is None:
             payload.pop("context", None)
+        if self.debug:
+            payload_preview = json.dumps(payload)
+            print(f"[DEBUG] Ollama request: {url} ({len(payload_preview)} bytes payload, model={payload.get('model', '?')})", flush=True)
         t0 = time.time()
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode('utf-8'),
             headers={'Content-Type': 'application/json'}
         )
-        with self._opener.open(req) as response:
-            raw = response.read().decode('utf-8')
+        try:
+            with self._opener.open(req) as response:
+                raw = response.read().decode('utf-8')
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
+            if self.debug:
+                print(f"[DEBUG] Ollama HTTP {e.code} response body:\n{body}", flush=True)
+            raise RuntimeError(f"HTTP Error {e.code}: {e.reason} — {body}") from e
         elapsed = time.time() - t0
         self.ai_calls += 1
         self.ai_time += elapsed
         if self.debug:
-            print(f"[DEBUG] Ollama raw response:\n{raw}", flush=True)
+            print(f"[DEBUG] Ollama raw response ({len(raw)} bytes, {elapsed:.1f}s):\n{raw}", flush=True)
         return json.loads(raw)
 
     def analyze(self, system_prompt, context_data, agents_md=None):
@@ -88,25 +117,55 @@ class OllamaAnalyzer:
             self._context = result.get("context")
             return result.get('response', '').strip()
         except Exception as e:
-            return f"[OLLAMA ERROR] {e}"
+            print(f"[OLLAMA ERROR] {e}")
+            sys.exit(1)
 
     def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False):
         max_rounds = max_rounds if max_rounds > 0 else 999999
         all_results = []
         for round_idx in range(max_rounds):
-            payload = {
-                "model": self.model,
-                "messages": messages,
-                "tools": tools,
-                "stream": False
-            }
-            if self._chat_context is not None:
-                payload["context"] = self._chat_context
+            if self._chat_supported:
+                payload = {
+                    "model": self.model,
+                    "messages": messages,
+                    "tools": tools,
+                    "stream": False
+                }
+                if self._chat_context is not None:
+                    payload["context"] = self._chat_context
+            else:
+                payload = self._chat_to_generate_payload(messages)
             try:
-                result = self._request(self.chat_api_url, payload)
-                self._chat_context = result.get("context")
+                result = self._request(
+                    self.chat_api_url if self._chat_supported else self.api_url,
+                    payload
+                )
+                if self._chat_supported:
+                    self._chat_context = result.get("context")
+            except RuntimeError as e:
+                if "HTTP Error 405" in str(e) and self._chat_supported:
+                    print(f"[INFO] Chat API not supported at {self.chat_api_url}, falling back to {self.api_url}")
+                    self._chat_supported = False
+                    payload = self._chat_to_generate_payload(messages)
+                    try:
+                        result = self._request(self.api_url, payload)
+                    except Exception as e2:
+                        print(f"[OLLAMA ERROR] {e2}")
+                        sys.exit(1)
+                else:
+                    print(f"[OLLAMA ERROR] {e}")
+                    sys.exit(1)
             except Exception as e:
-                return f"[OLLAMA ERROR] {e}"
+                print(f"[OLLAMA ERROR] {e}")
+                sys.exit(1)
+
+            if not self._chat_supported:
+                # /api/generate returns text in 'response', no tool calls
+                text = result.get('response', '').strip()
+                if text:
+                    print(f"[FIX] {text[:500]}", flush=True)
+                    all_results.append(text)
+                return all_results
 
             message = result.get('message', {})
             if 'tool_calls' not in message or not message['tool_calls']:

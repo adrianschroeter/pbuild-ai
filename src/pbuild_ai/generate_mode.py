@@ -99,10 +99,15 @@ The specification for the package to create is in the system prompt above. Start
             with urllib.request.urlopen(req) as resp:
                 raw = resp.read().decode('utf-8')
                 if ctx.debug:
-                    print(f"[DEBUG] Ollama raw response:\n{raw}", flush=True)
+                    print(f"[DEBUG] Ollama response ({len(raw)} bytes):\n{raw}", flush=True)
                 result = json.loads(raw)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
+            print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} — {body}")
+            sys.exit(1)
         except Exception as e:
-            print(f"[GENERATE ERROR] {e}")
+            print(f"[OLLAMA ERROR] {e}")
+            sys.exit(1)
             break
 
         message = result.get('message', {})
