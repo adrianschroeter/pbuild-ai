@@ -89,7 +89,9 @@ Combine with \fB\-\-fix\fR to also test-build and fix after the modification.
 Create a new openSUSE RPM package from scratch. The given prompt
 describes what to package. pbuild\-ai researches upstream sources via
 web fetch, asks clarifying questions, writes spec files and supporting
-files into the workspace directory, then exits. No build is performed.
+files into the workspace directory.
+Combine with \fB\-\-fix\fP to automatically test-build and fix failures
+after generation. Without \fB\-\-fix\fP, no build is performed.
 .TP
 .B \-\-deep\-analyze, \-d
 On build failure, open an interactive shell in the build environment
@@ -197,6 +199,9 @@ pbuild\-ai \-\-update\-only bc
 .TP
 Update sources to a specific version without building:
 pbuild\-ai \-\-update\-only=1.2.3 bc
+.TP
+Generate a new package and test-build it:
+pbuild\-ai \-\-generate https://github.com/atom/atom/archive/refs/tags/v1.60.0.tar.gz \-\-fix .
 .TP
 Modify sources with a prompt and test-build:
 pbuild\-ai \-\-modify "switch to systemd service" \-\-fix bc

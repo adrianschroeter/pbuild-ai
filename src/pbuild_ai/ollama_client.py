@@ -232,6 +232,10 @@ class OllamaAnalyzer:
                     display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
                 elif name == "list_archive":
                     continue
+                elif name == "read_file_from_archive":
+                    if not self.debug:
+                        continue
+                    display = r[:500] + "..." if len(r) > 500 else r
                 elif r.startswith("[Fetched "):
                     display = r.split("\n", 1)[0]
                 else:

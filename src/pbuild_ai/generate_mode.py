@@ -15,6 +15,7 @@
 
 import json
 import re
+import subprocess
 import sys
 import tarfile
 import urllib.request
@@ -248,6 +249,10 @@ The specification for the package to create is in the system prompt above. Start
                     display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
                 elif name == "list_archive":
                     continue
+                elif name == "read_file_from_archive":
+                    if not ctx.debug:
+                        continue
+                    display = r[:500] + "..." if len(r) > 500 else r
                 elif r.startswith("[Fetched "):
                     display = r.split("\n", 1)[0]
                 else:
@@ -297,4 +302,11 @@ The specification for the package to create is in the system prompt above. Start
             print("[GENERATE] No response from Ollama.")
             break
 
+    for spec_file in sorted(Path(ctx.workspace_dir).rglob("*.spec")):
+        try:
+            fmt_cmd = ["/usr/lib/obs/service/format_spec_file", str(spec_file.parent)]
+            subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
+            print(f"[GENERATE] format_spec_file: normalized {spec_file.name}")
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
+            pass
     ctx.ollama.print_stats(manager=ctx.manager, program_start=ctx.program_start, skill_manager=ctx.skill_manager)

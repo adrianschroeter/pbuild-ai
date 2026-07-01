@@ -1260,7 +1260,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         # --generate mode: create a new package from scratch
         if ctx.generate_prompt:
             run_generate_mode(ctx)
-            sys.exit(0)
+            if not FIX_MODE:
+                sys.exit(0)
+            # Re-scan for spec files created by generate mode before entering fix phase
+            spec_files = [f for f in Path(WORKSPACE_DIR).rglob("*.spec") if manager._is_safe_path(f)]
+            ctx.spec_files = spec_files
 
         # --modify mode: hand sources + prompt to Ollama, apply changes locally
         if ctx.modify_prompt:

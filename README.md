@@ -211,6 +211,8 @@ variable. Defaults to `gemma4`.
 Creates a new openSUSE RPM package from scratch. The given prompt
 describes what to package. pbuild-ai researches upstream sources via
 web fetch, asks clarifying questions, and writes spec files and
-supporting files into the workspace directory. No build is performed
-after generation.
+supporting files into the workspace directory.
+
+Combine with `--fix` to automatically test-build and fix failures after
+generation. Without `--fix`, no build is performed.
 
