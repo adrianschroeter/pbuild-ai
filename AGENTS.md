@@ -8,3 +8,11 @@
 - **tool-scripts execution requires `--allow-tool-scripts`.** Without this flag, tool-scripts/ is never executed. If the directory doesn't exist, it's silently skipped.
 - **remove_file / rename_file** operate inside the workspace sandbox, same as read_file/write_file. `rename_file` creates parent directories if needed. `rename_file` refuses if destination already exists.
 
+## Exit Values
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success — all requested operations completed. |
+| 1 | Fix failure — build errors could not be resolved after exhausting all fix attempts, or no changes were made when changes were required. |
+| 2 | Internal error — Ollama API returned an error (HTTP 4xx/5xx, schema rejection, connection failure), or an unexpected exception occurred in pbuild-ai itself. |
+

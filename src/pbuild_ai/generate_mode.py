@@ -103,11 +103,11 @@ The specification for the package to create is in the system prompt above. Start
                 result = json.loads(raw)
         except urllib.error.HTTPError as e:
             body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
-            print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} — {body}")
-            sys.exit(1)
+            print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} - {body}")
+            sys.exit(2)
         except Exception as e:
             print(f"[OLLAMA ERROR] {e}")
-            sys.exit(1)
+            sys.exit(2)
             break
 
         message = result.get('message', {})

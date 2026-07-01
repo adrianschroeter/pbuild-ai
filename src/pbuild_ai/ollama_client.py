@@ -121,7 +121,7 @@ class OllamaAnalyzer:
             return result.get('response', '').strip()
         except Exception as e:
             print(f"[OLLAMA ERROR] {e}")
-            sys.exit(1)
+            sys.exit(2)
 
     def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False):
         max_rounds = max_rounds if max_rounds > 0 else 999999
@@ -154,13 +154,13 @@ class OllamaAnalyzer:
                         result = self._request(self.api_url, payload)
                     except Exception as e2:
                         print(f"[OLLAMA ERROR] {e2}")
-                        sys.exit(1)
+                        sys.exit(2)
                 else:
                     print(f"[OLLAMA ERROR] {e}")
-                    sys.exit(1)
+                    sys.exit(2)
             except Exception as e:
                 print(f"[OLLAMA ERROR] {e}")
-                sys.exit(1)
+                sys.exit(2)
 
             if not self._chat_supported:
                 # /api/generate returns text in 'response', no tool calls

@@ -730,7 +730,7 @@ if __name__ == "__main__":
                         return False
         return False
 
-    def run_fix_loop(spec, package_name, initial_build_out, error_prompt, rebuild_func, exit_on_no_changes=False, exit_on_exhaustion=False):
+    def run_fix_loop(spec, package_name, initial_build_out, error_prompt, rebuild_func, exit_on_no_changes=False):
         """Shared fix loop: diagnose → apply tool changes → rebuild → repeat."""
         MAX_ATTEMPTS = FIX_ATTEMPTS if FIX_ATTEMPTS > 0 else 999999
         unlimited = FIX_ATTEMPTS == 0
@@ -1071,8 +1071,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                 print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart.")
             label = MAX_ATTEMPTS if not unlimited else "unlimited"
             print(f"[FIX ERROR] All {label} fix attempts exhausted. Build still failing.")
-            if exit_on_exhaustion:
-                sys.exit(1)
+            sys.exit(1)
 
         return build_success2
 
@@ -1154,8 +1153,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                     print(f"[PROJECT BUILD] Clean build also failed. Proceeding with fix loop.")
 
             if not run_fix_loop(spec, failed_pkg, all_out, error_prompt,
-                lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG),
-                exit_on_exhaustion=True):
+                lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG)):
                 return False
 
         return True

@@ -210,7 +210,6 @@ def build_tools_list(interactive=False):
                         },
                         "args": {
                             "type": "array",
-                            "items": {"type": "string"},
                             "description": "Optional arguments to pass to the script"
                         }
                     },
