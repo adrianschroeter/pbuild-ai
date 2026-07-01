@@ -102,7 +102,7 @@ class TestStatsPrinted(unittest.TestCase):
             with patch('urllib.request.urlopen', return_value=empty_resp):
                 gm.run_generate_mode(ctx)
 
-        ctx.ollama.print_stats.assert_called_once_with(manager=ctx.manager, program_start=ctx.program_start)
+        ctx.ollama.print_stats.assert_called_once_with(manager=ctx.manager, program_start=ctx.program_start, skill_manager=ctx.skill_manager)
 
     # --- --modify mode ---
 
@@ -131,4 +131,4 @@ class TestStatsPrinted(unittest.TestCase):
             with patch('urllib.request.urlopen', return_value=empty_resp):
                 mm.run_modify_mode(ctx)
 
-        ctx.ollama.print_stats.assert_called_once_with(manager=ctx.manager, program_start=ctx.program_start)
+        ctx.ollama.print_stats.assert_called_once_with(manager=ctx.manager, program_start=ctx.program_start, skill_manager=ctx.skill_manager)
