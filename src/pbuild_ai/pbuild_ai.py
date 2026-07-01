@@ -1661,7 +1661,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
                         spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
                         print(f"-> AI({ollama.model}) says:\n{spec_analysis}\n")
-                        if not FIX_MODE or manager.has_prior_failed_build():
+                        if not FIX_MODE or manager.has_prior_failed_build() or PROMPT_HINT:
                             manager.fix_file_content(spec, fix_func)
 
                 # 4. Build guard: only run pbuild when --fix or --update is active
