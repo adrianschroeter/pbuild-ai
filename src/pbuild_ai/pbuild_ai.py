@@ -811,15 +811,15 @@ if __name__ == "__main__":
                 error_analysis = ollama.analyze(error_prompt, error_context, deep_context)
                 error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                 _latest_analysis = error_analysis
-            if error_analysis and ('norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
-                if _prev_good_analysis:
-                    print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation, cached) ---\n{_prev_good_analysis}\n-----------------------------\n")
-                    error_analysis = _prev_good_analysis
+                if error_analysis and ('norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
+                    if _prev_good_analysis:
+                        print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation, cached) ---\n{_prev_good_analysis}\n-----------------------------\n")
+                        error_analysis = _prev_good_analysis
+                    else:
+                        print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n(preview: {error_analysis[:200]})\n-----------------------------\n")
                 else:
-                    print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n(preview: {error_analysis[:200]})\n-----------------------------\n")
-            else:
-                _prev_good_analysis = error_analysis
-                print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
+                    _prev_good_analysis = error_analysis
+                    print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
             if spec_files:
                 build_suggested_dependency(error_analysis, spec_files, manager, ollama, full_context)
             print("[FIX MODE] Applying suggested changes via tool calls...")
