@@ -198,6 +198,31 @@ def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
     return error_prompt
 
 
+def _apply_analysis_fix_patterns(spec: Path, spec_content: str, error_analysis: str) -> str | None:
+    """Apply well-known fix patterns directly from the analysis text without a model call.
+    
+    Returns the new spec content if a pattern was applied, or None if no pattern matched.
+    """
+    lines = spec_content.split("\n")
+    analysis_lower = error_analysis.lower()
+    modified = False
+
+    # Pattern: %setup → %autosetup in %prep section
+    if "%autosetup" in analysis_lower and not any("%autosetup" in l for l in lines):
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if re.match(r'^%setup(?:$|[-\s])', stripped):
+                lines[i] = line.replace(stripped, "%autosetup")
+                modified = True
+                break
+
+    if modified:
+        new_content = "\n".join(lines)
+        show_diff(spec_content, new_content, spec)
+        return new_content
+    return None
+
+
 def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, program_start,
                      run_fix_loop_func):
     """Execute pbuild for a spec if fix_mode or update_version is set, otherwise skip.
@@ -855,6 +880,9 @@ Spec file path: {spec.relative_to(WORKSPACE_DIR)}
 Error context:
 {error_context[:5000]}
 
+Error analysis (the specific fix was identified here):
+{error_analysis[:2000]}
+
 Current spec content:
 {spec_content[:5000]}
 
@@ -922,6 +950,11 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                     print("[FIX] No tool calls received. Asking Ollama to rewrite the spec file...")
 
                     def try_rewrite():
+                        # Extract the explicit fix suggestion from the analysis
+                        _fix_snippet = ""
+                        _fix_match = re.search(r'\*\*Fix:\*\*\s*(.*?)(?:\n```|\n\n---|\Z)', error_analysis, re.DOTALL)
+                        if _fix_match:
+                            _fix_snippet = _fix_match.group(1).strip()
                         prompt = f"""The build for {spec.name} failed.
 
 Error (from analysis):
@@ -930,7 +963,10 @@ Error (from analysis):
 Current spec:
 {spec_content[:5000]}
 
-Fix the spec file. Your output must be ONLY the complete raw spec file content.
+The analysis identified the fix as:
+{_fix_snippet or '(see error analysis above)'}
+
+Apply this exact fix. Your output must be ONLY the complete raw spec file content.
 - No markdown formatting
 - No code fences
 - No explanations, no introductory text, no summary
@@ -977,6 +1013,12 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                                 print(f"[FIX] All tags already present in spec, no changes needed.", flush=True)
                         else:
                             print(f"[FIX] No RPM tags found in analysis. Analysis preview: {error_analysis[:300].replace(chr(10), ' | ')}", flush=True)
+
+                    if not spec_fix:
+                        _applied_direct = _apply_analysis_fix_patterns(spec, spec_content, error_analysis)
+                        if _applied_direct:
+                            print(f"[FIX] Applied fix patterns directly from analysis.", flush=True)
+                            spec_fix = _applied_direct
 
                     if not spec_fix:
                         print("[FIX] Trying to parse change instructions from analysis...", flush=True)
