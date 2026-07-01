@@ -625,12 +625,19 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             args = tool_input.get("args", [])
             # format_spec_file is a well-known OBS service, not a tool-scripts entry
             if script_name == "format_spec_file":
+                fmt_cwd = workspace
+                if args:
+                    _arg = args[0]
+                    _arg_path = Path(_arg)
+                    if _arg_path.suffix == '.spec':
+                        fmt_cwd = (workspace / _arg_path).resolve().parent
+                    else:
+                        fmt_cwd = Path(_arg).resolve()
                 fmt_cmd = ["/usr/lib/obs/service/format_spec_file"]
-                fmt_cmd += args if args else [str(workspace)]
                 try:
-                    fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
+                    fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30, cwd=fmt_cwd)
                     if fmt_result.returncode == 0:
-                        spec_files = list(Path(fmt_cmd[-1]).glob("*.spec"))
+                        spec_files = list(fmt_cwd.glob("*.spec"))
                         if spec_files:
                             print(f"[TOOL] format_spec_file: normalized {len(spec_files)} spec(s)")
                         results.append("OK")
