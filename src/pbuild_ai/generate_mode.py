@@ -18,6 +18,8 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -167,7 +169,7 @@ The specification for the package to create is in the system prompt above. Start
                 headers={'Content-Type': 'application/json'}
             )
             with Spinner(prefix=f"[AI] {ctx.ollama.model}", color=CYAN):
-                with urllib.request.urlopen(req) as resp:
+                with urllib.request.urlopen(req, timeout=ctx.ollama.timeout) as resp:
                     raw = resp.read().decode('utf-8')
             if ctx.debug:
                 print(f"[DEBUG] Ollama response ({len(raw)} bytes):\n{raw}", flush=True)
@@ -176,6 +178,21 @@ The specification for the package to create is in the system prompt above. Start
             body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
             print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} - {body}")
             sys.exit(2)
+        except OSError as e:
+            if ctx.debug:
+                print(f"[OLLAMA] Transient error, retrying once: {e}", flush=True)
+            time.sleep(2)
+            try:
+                with urllib.request.urlopen(req, timeout=ctx.ollama.timeout) as resp:
+                    raw = resp.read().decode('utf-8')
+                result = json.loads(raw)
+            except urllib.error.HTTPError as e2:
+                body2 = e2.read().decode('utf-8', errors='replace')[:2000] if e2.fp else ''
+                print(f"[OLLAMA ERROR] HTTP {e2.code}: {e2.reason} - {body2}")
+                sys.exit(2)
+            except Exception as e2:
+                print(f"[OLLAMA ERROR] {e2}")
+                sys.exit(2)
         except Exception as e:
             print(f"[OLLAMA ERROR] {e}")
             sys.exit(2)

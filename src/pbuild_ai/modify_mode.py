@@ -156,7 +156,7 @@ Skill instructions (follow these):
                     data=json.dumps(payload).encode('utf-8'),
                     headers={'Content-Type': 'application/json'}
                 )
-                with urllib.request.urlopen(req) as resp:
+                with urllib.request.urlopen(req, timeout=ctx.ollama.timeout) as resp:
                     raw = resp.read().decode('utf-8')
                     if ctx.debug:
                         print(f"[DEBUG] Ollama raw response:\n{raw}", flush=True)
@@ -167,6 +167,24 @@ Skill instructions (follow these):
                 body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
                 print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} - {body}")
                 sys.exit(2)
+            except OSError as e:
+                if ctx.debug:
+                    print(f"[OLLAMA] Transient error, retrying once: {e}", flush=True)
+                time.sleep(2)
+                _t0 = time.time()
+                try:
+                    with urllib.request.urlopen(req, timeout=ctx.ollama.timeout) as resp:
+                        raw = resp.read().decode('utf-8')
+                        result = json.loads(raw)
+                    ctx.ollama.ai_calls += 1
+                    ctx.ollama.ai_time += time.time() - _t0
+                except urllib.error.HTTPError as e2:
+                    body2 = e2.read().decode('utf-8', errors='replace')[:2000] if e2.fp else ''
+                    print(f"[OLLAMA ERROR] HTTP {e2.code}: {e2.reason} - {body2}")
+                    sys.exit(2)
+                except Exception as e2:
+                    print(f"[OLLAMA ERROR] {e2}")
+                    sys.exit(2)
             except Exception as e:
                 print(f"[OLLAMA ERROR] {e}")
                 sys.exit(2)

@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -25,10 +26,11 @@ from pbuild_ai.tools import execute_tool_calls
 
 
 class OllamaAnalyzer:
-    def __init__(self, host=None, model="default", debug=False):
+    def __init__(self, host=None, model="default", debug=False, timeout=None):
         self.host = (host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
         self.model = model
         self.debug = debug
+        self.timeout = timeout if timeout is not None else int(os.environ.get("OLLAMA_TIMEOUT", "900"))
         self.api_url = f"{self.host}/api/generate"
         self.chat_api_url = f"{self.host}/api/chat"
         self._context = None
@@ -92,13 +94,27 @@ class OllamaAnalyzer:
         try:
             model_name = payload.get('model', self.model)
             with Spinner(prefix=f"[AI] {model_name}", color=CYAN):
-                with self._opener.open(req) as response:
+                with self._opener.open(req, timeout=self.timeout) as response:
                     raw = response.read().decode('utf-8')
         except urllib.error.HTTPError as e:
             body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
             if self.debug:
                 print(f"[DEBUG] Ollama HTTP {e.code} response body:\n{body}", flush=True)
             raise RuntimeError(f"HTTP Error {e.code}: {e.reason} — {body}") from e
+        except OSError as e:
+            if self.debug:
+                print(f"[DEBUG] Ollama request failed (will retry once): {e}", flush=True)
+            time.sleep(2)
+            try:
+                with self._opener.open(req, timeout=self.timeout) as response:
+                    raw = response.read().decode('utf-8')
+            except urllib.error.HTTPError as e2:
+                body2 = e2.read().decode('utf-8', errors='replace')[:2000] if e2.fp else ''
+                raise RuntimeError(f"HTTP Error {e2.code}: {e2.reason} — {body2}") from e2
+            except OSError as e2:
+                raise RuntimeError(
+                    f"Ollama connection failed after retry ({self.timeout}s timeout): {e2}"
+                ) from e2
         elapsed = time.time() - t0
         self.ai_calls += 1
         self.ai_time += elapsed

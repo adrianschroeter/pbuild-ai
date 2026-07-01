@@ -393,6 +393,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when Ollama proposes multiple tool calls")
     parser.add_argument("--openai-server", default=None, help="OpenAI-compatible server URL (overrides OLLAMA_HOST env var, default http://localhost:11434)")
     parser.add_argument("--model", default=None, help="Ollama model name (overrides OLLAMA_MODEL env var, default gemma4)")
+    parser.add_argument("--ollama-timeout", type=int, default=None, help="Timeout in seconds for Ollama API requests (default: 900, overrides OLLAMA_TIMEOUT env var)")
     parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries. Falls back to EMAIL env var.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     clean_group = parser.add_mutually_exclusive_group()
@@ -429,6 +430,7 @@ if __name__ == "__main__":
         generate_prompt=args.generate,
         ollama_server=args.openai_server,
         ollama_model_arg=args.model,
+        ollama_timeout=args.ollama_timeout or int(os.environ.get("OLLAMA_TIMEOUT", "900")),
         shell_after_build=args.shell_after_build,
         interactive=args.interactive,
         email=args.email or os.environ.get("EMAIL", ""),
@@ -487,7 +489,7 @@ if __name__ == "__main__":
     else:
         full_context = agents_md_content
     
-    ollama = OllamaAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "default"), debug=DEBUG)
+    ollama = OllamaAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "default"), debug=DEBUG, timeout=ctx.ollama_timeout)
     ctx.ollama = ollama
     ctx.full_context = full_context
 
