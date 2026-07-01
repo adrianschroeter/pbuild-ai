@@ -650,7 +650,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     results.append(f"Warning: format_spec_file error: {e}")
                 continue
             if not allow_tool_scripts:
-                results.append("Warning: run_tool_script requires --allow-tool-scripts")
+                if (workspace / "tool-scripts").is_dir():
+                    results.append("Warning: run_tool_script requires --allow-tool-scripts")
                 continue
             script_path = workspace / "tool-scripts" / script_name
             if not manager._is_safe_path(script_path):

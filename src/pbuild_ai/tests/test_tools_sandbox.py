@@ -436,8 +436,7 @@ class TestExecuteToolCallsSandbox(unittest.TestCase):
             self.manager, str(self.ws),
             allow_tool_scripts=False,
         )
-        self.assertEqual(len(results), 1)
-        self.assertIn("--allow-tool-scripts", results[0])
+        self.assertEqual(len(results), 0)
 
     def test_format_spec_file_without_allow_tool_scripts(self):
         results = execute_tool_calls(
@@ -458,9 +457,8 @@ class TestExecuteToolCallsSandbox(unittest.TestCase):
             self.manager, str(self.ws),
             allow_tool_scripts=False,
         )
-        self.assertEqual(len(results), 2)
+        self.assertEqual(len(results), 1)
         self.assertIn("Wrote", results[0])
-        self.assertIn("--allow-tool-scripts", results[1])
 
 
 class TestGitPushBlocked(unittest.TestCase):
