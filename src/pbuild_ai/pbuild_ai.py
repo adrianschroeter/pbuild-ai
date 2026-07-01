@@ -1626,6 +1626,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
             print(f"Script aborted: {e}")
         except BlockingIOError:
             sys.stderr.write(f"Script aborted: {e}\n")
+        sys.exit(2)
 
 def main():
     """Entry point for pbuild-ai CLI."""

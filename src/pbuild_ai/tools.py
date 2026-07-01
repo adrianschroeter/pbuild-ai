@@ -621,12 +621,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 except Exception as e:
                     results.append(f"Error executing git command: {e}")
         elif tool_name == "run_tool_script":
-            if not allow_tool_scripts:
-                if not (workspace / "tool-scripts").is_dir():
-                    continue
-                results.append("Warning: --allow-tool-scripts is required to execute tool-scripts")
-                continue
-            script_name = tool_input["script_name"]
+            script_name = tool_input.get("script_name", "")
             args = tool_input.get("args", [])
             # format_spec_file is a well-known OBS service, not a tool-scripts entry
             if script_name == "format_spec_file":
@@ -646,6 +641,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     results.append("Warning: format_spec_file not found (install obs-service-format_spec-file)")
                 except (subprocess.TimeoutExpired, PermissionError) as e:
                     results.append(f"Warning: format_spec_file error: {e}")
+                continue
+            if not allow_tool_scripts:
+                results.append("Warning: run_tool_script requires --allow-tool-scripts")
                 continue
             script_path = workspace / "tool-scripts" / script_name
             if not manager._is_safe_path(script_path):
