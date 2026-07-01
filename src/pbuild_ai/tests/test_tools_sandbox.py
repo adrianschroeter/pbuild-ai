@@ -428,6 +428,40 @@ class TestExecuteToolCallsSandbox(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertIn("outside the workspace", results[0])
 
+    # -- run_tool_script result-count and flag bypass regression tests --
+
+    def test_run_tool_script_blocked_without_flag_and_no_tool_scripts_dir(self):
+        results = execute_tool_calls(
+            [("run_tool_script", {"script_name": "list.sh", "args": []})],
+            self.manager, str(self.ws),
+            allow_tool_scripts=False,
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("--allow-tool-scripts", results[0])
+
+    def test_format_spec_file_without_allow_tool_scripts(self):
+        results = execute_tool_calls(
+            [("run_tool_script", {"script_name": "format_spec_file", "args": [str(self.ws)]})],
+            self.manager, str(self.ws),
+            allow_tool_scripts=False,
+        )
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("--allow-tool-scripts", results[0])
+
+    def test_multiple_tool_calls_include_run_tool_script_without_flag(self):
+        self._safe_file("existing.txt", "data")
+        results = execute_tool_calls(
+            [
+                ("write_file", {"path": "new.txt", "content": "hello"}),
+                ("run_tool_script", {"script_name": "deploy.sh", "args": []}),
+            ],
+            self.manager, str(self.ws),
+            allow_tool_scripts=False,
+        )
+        self.assertEqual(len(results), 2)
+        self.assertIn("Wrote", results[0])
+        self.assertIn("--allow-tool-scripts", results[1])
+
 
 class TestGitPushBlocked(unittest.TestCase):
     """Test that git push is blocked by execute_tool_calls."""
