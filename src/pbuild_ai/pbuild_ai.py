@@ -1406,6 +1406,7 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
 
                 # Deterministic source tarball download (not relying on Ollama tool calls)
                 if target_version and target_version not in ('latest',):
+                    _dl_failed = False
                     try:
                         _spec_content = manager.read_file_safe(spec)
                         _skip_dl = False
@@ -1451,7 +1452,6 @@ Fix the spec file. Your output must be ONLY the complete raw spec file content.
                                     if _old_v and _old_v.group(1) != target_version:
                                         _expanded = _expanded.replace(_old_v.group(1), target_version)
                                     _source_url = _expanded
-                            _dl_failed = False
                             if _source_url:
                                 from urllib.parse import urlparse
                                 _fname = Path(urlparse(_source_url).path).name or Path(_source_url).name
