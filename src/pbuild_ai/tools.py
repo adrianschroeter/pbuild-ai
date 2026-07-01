@@ -13,6 +13,8 @@ from pbuild_ai.network import is_safe_url
 
 from pbuild_ai.utils import resolve_path
 
+_FORMAT_SPEC_FILE_PATH = "/usr/lib/obs/service/format_spec_file"
+
 MAX_ARCHIVE_READ_SIZE = 512 * 1024  # 500 KB
 _ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
 
@@ -396,7 +398,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             results.append(f"OK: Wrote {tool_input['path']}")
             # Run format_spec_file on .spec files to normalize formatting
             if file_path.suffix == '.spec':
-                fmt_cmd = ["/usr/lib/obs/service/format_spec_file", str(file_path.parent)]
+                fmt_cmd = [_FORMAT_SPEC_FILE_PATH, str(file_path.parent)]
                 try:
                     fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
                     if fmt_result.returncode == 0:
@@ -633,7 +635,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                         fmt_cwd = (workspace / _arg_path).resolve().parent
                     else:
                         fmt_cwd = Path(_arg).resolve()
-                fmt_cmd = ["/usr/lib/obs/service/format_spec_file"]
+                fmt_cmd = [_FORMAT_SPEC_FILE_PATH]
                 try:
                     fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30, cwd=fmt_cwd)
                     if fmt_result.returncode == 0:
@@ -645,7 +647,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                         err = fmt_result.stderr or fmt_result.stdout or "unknown error"
                         results.append(f"Warning: format_spec_file returned {fmt_result.returncode}: {err.strip()}")
                 except FileNotFoundError:
-                    results.append("Warning: format_spec_file not found (install obs-service-format_spec-file)")
+                    results.append("Warning: format_spec_file not found (install obs-service-format_spec_file)")
                 except (subprocess.TimeoutExpired, PermissionError) as e:
                     results.append(f"Warning: format_spec_file error: {e}")
                 continue
