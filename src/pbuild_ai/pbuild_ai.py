@@ -768,6 +768,8 @@ if __name__ == "__main__":
         _prev_spec = ""
         _prev_diff_summary = ""
         _prev_good_analysis = ""
+        _prev_error_context = ""
+        _prev_error_analysis = ""
 
         # Load saved context (if any) for the same spec
         if _ctx_file.exists():
@@ -815,7 +817,13 @@ if __name__ == "__main__":
                         print("[BUG] No build log and no unresolvable deps detected. This is likely a bug in pbuild-ai or pbuild. Aborting.")
                         sys.exit(1)
                     error_context = current_build_out
-            error_analysis = ollama.analyze(error_prompt, error_context, full_context)
+            if error_context == _prev_error_context and _prev_error_analysis:
+                print("[FIX] Error unchanged, reusing previous analysis.")
+                error_analysis = _prev_error_analysis
+            else:
+                error_analysis = ollama.analyze(error_prompt, error_context, full_context)
+                _prev_error_context = error_context
+                _prev_error_analysis = error_analysis
             _latest_analysis = error_analysis
             if error_analysis and ('norootforbuild' in error_analysis or '# spec file for package' in error_analysis):
                 if _prev_good_analysis:
