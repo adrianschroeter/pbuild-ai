@@ -215,7 +215,7 @@ Skill instructions (follow these):
                     if ctx.debug:
                         print(f"[AI] Tool call: {name}({args_preview})", flush=True)
                 try:
-                    round_results = execute_tool_calls(round_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive)
+                    round_results = execute_tool_calls(round_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive, debug=ctx.debug)
                 except Exception as e:
                     round_results = [f"Error executing tool: {e}"]
                     print(f"[MODIFY TOOL ERROR] {e}")
@@ -281,4 +281,4 @@ Skill instructions (follow these):
             _ctx_file.write_text(json.dumps(save_data, indent=2))
             print(f"[MODIFY] Saved conversation context to {_ctx_file.name} for restart.")
 
-    ctx.ollama.print_stats(manager=ctx.manager, program_start=ctx.program_start)
+    ctx.ollama.print_stats(manager=ctx.manager, program_start=ctx.program_start, skill_manager=ctx.skill_manager)

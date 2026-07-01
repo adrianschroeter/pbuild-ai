@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Rust_Software
 
-SKILL_NAME = "rust"
+SKILL_NAME = "lang_rust"
 
 TARGET_PATTERN = r"(?i)(?:rust|cargo)"
 CONTENT_PATTERN = r"(?i)(?:%\{cargo_build\}|%\{cargo_install\}|%\{cargo_test\}|cargo-packaging|vendor\.tar\.zst)"

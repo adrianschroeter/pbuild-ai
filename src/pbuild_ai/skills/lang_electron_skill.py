@@ -2,10 +2,10 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Electron
 
-SKILL_NAME = "electron"
+SKILL_NAME = "lang_electron"
 
 TARGET_PATTERN = r"(?i)electron.*\.spec$"
-CONTENT_PATTERN = r"(?i)(?:%\{electron_rebuild\}|%\{electron_req\}|%\{electron_check_native\}|ELECTRON_SKIP_BINARY_DOWNLOAD|nodejs-electron|electron\.asar)"
+CONTENT_PATTERN = r"(?i)(?:%\{electron_rebuild\}|%\{electron_req\}|%\{electron_check_native\}|ELECTRON_SKIP_BINARY_DOWNLOAD|nodejs-electron|electron\.asar|electronVersion)"
 PROMPT_PATTERN = r"(?i)(?:electron\s+packag|electron-builder|asar\s+file|electron\s+rpm|native\s+modul)"
 
 

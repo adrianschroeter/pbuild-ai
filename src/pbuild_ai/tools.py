@@ -1,3 +1,5 @@
+import contextlib
+import fnmatch
 import json
 import os
 import re
@@ -37,6 +39,46 @@ def _archive_type(path):
     if any(name.endswith(e) for e in ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar')):
         return 'tar'
     return None
+
+
+def _resolve_archive_path(archive, file_path):
+    """Resolve file_path within archive, trying common top-level prefix if direct lookup fails.
+
+    GitHub tarballs have a ``{repo}-{version}/`` prefix on all entries —
+    this strips that layer so callers can use bare filenames.
+    """
+    _lookup = (
+        (lambda p: archive.getmember(p))
+        if hasattr(archive, 'getmember')
+        else (lambda p: archive.getinfo(p))
+    )
+    try:
+        _lookup(file_path)
+        return file_path
+    except (KeyError, LookupError):
+        pass
+    names = (
+        archive.getnames()
+        if hasattr(archive, 'getnames')
+        else archive.namelist()
+    )
+    top = None
+    for name in names:
+        parts = name.split('/')
+        if len(parts) >= 2:
+            d = parts[0]
+            if top is None:
+                top = d
+            elif top != d:
+                return file_path
+    if top:
+        candidate = f"{top}/{file_path}"
+        try:
+            _lookup(candidate)
+            return candidate
+        except (KeyError, LookupError):
+            pass
+    return file_path
 
 
 def _strip_html(text):
@@ -261,13 +303,17 @@ def build_tools_list(interactive=False):
             "type": "function",
             "function": {
                 "name": "list_archive",
-                "description": "List all files inside a compressed archive (tar.gz, tar.bz2, tar.xz, tar, zip) in the workspace. Returns paths relative to archive root.",
+                "description": "List files inside a compressed archive (tar.gz, tar.bz2, tar.xz, tar, zip) in the workspace. Returns paths relative to archive root. Optionally filter with a glob pattern.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "archive_path": {
                             "type": "string",
                             "description": "Path to the archive file (relative to workspace root)"
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Optional glob filter (e.g. '*.md', '**/*.py'). Only matching entries are returned."
                         }
                     },
                     "required": ["archive_path"]
@@ -334,7 +380,7 @@ def _extract_header(content):
     return '\n'.join(header_lines), '\n'.join(lines[rest_start:])
 
 
-def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False, interactive=False):
+def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False, interactive=False, debug=False):
     """Execute tool calls returned by Ollama. Returns list of tool results."""
     results = []
     workspace = Path(workspace_dir).resolve()
@@ -766,22 +812,41 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 results.append(f"Error: Archive not found: {archive_path}")
                 continue
             arch_type = _archive_type(arch_resolved)
+            pattern = tool_input.get("pattern")
             if arch_type == 'tar':
                 try:
-                    with tarfile.open(arch_resolved, 'r:*') as tar:
-                        names = tar.getnames()
+                    with (Spinner(prefix=f"[TOOL] list_archive", color=GREEN) if debug else contextlib.nullcontext()):
+                        with tarfile.open(arch_resolved, 'r:*') as tar:
+                            names = tar.getnames()
+                    if pattern:
+                        names = [n for n in names if fnmatch.fnmatch(n, pattern)]
                     count = len(names)
-                    print(f"[TOOL] list_archive: {archive_path} ({count} entries)")
-                    results.append("\n".join(names) if names else "(empty archive)")
+                    MAX_LIST = 100
+                    if count > MAX_LIST:
+                        display = "\n".join(names[:MAX_LIST]) + f"\n... and {count - MAX_LIST} more entries"
+                    else:
+                        display = "\n".join(names) if names else "(empty archive)"
+                    if debug:
+                        print(f"[TOOL] list_archive: {archive_path} ({count} entries)")
+                    results.append(display)
                 except Exception as e:
                     results.append(f"Error reading archive: {e}")
             elif arch_type == 'zip':
                 try:
-                    with zipfile.ZipFile(arch_resolved, 'r') as zf:
-                        names = zf.namelist()
+                    with (Spinner(prefix=f"[TOOL] list_archive", color=GREEN) if debug else contextlib.nullcontext()):
+                        with zipfile.ZipFile(arch_resolved, 'r') as zf:
+                            names = zf.namelist()
+                    if pattern:
+                        names = [n for n in names if fnmatch.fnmatch(n, pattern)]
                     count = len(names)
-                    print(f"[TOOL] list_archive: {archive_path} ({count} entries)")
-                    results.append("\n".join(names) if names else "(empty archive)")
+                    MAX_LIST = 100
+                    if count > MAX_LIST:
+                        display = "\n".join(names[:MAX_LIST]) + f"\n... and {count - MAX_LIST} more entries"
+                    else:
+                        display = "\n".join(names) if names else "(empty archive)"
+                    if debug:
+                        print(f"[TOOL] list_archive: {archive_path} ({count} entries)")
+                    results.append(display)
                 except Exception as e:
                     results.append(f"Error reading archive: {e}")
             else:
@@ -808,44 +873,54 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             arch_type = _archive_type(arch_resolved)
             if arch_type == 'tar':
                 try:
-                    with tarfile.open(arch_resolved, 'r:*') as tar:
-                        try:
-                            info = tar.getmember(file_path)
-                        except KeyError:
-                            results.append(f"Error: File not found in archive: {file_path}")
-                            continue
-                        if info.issym() or info.islnk():
-                            results.append(f"Error: Refusing to read symlink/hardlink: {file_path}")
-                            continue
-                        if info.size > MAX_ARCHIVE_READ_SIZE:
-                            results.append(f"Error: File too large ({info.size} bytes, limit {MAX_ARCHIVE_READ_SIZE})")
-                            continue
-                        f = tar.extractfile(info)
-                        if f is None:
-                            results.append(f"Error: Cannot read {file_path} (directory or special file)")
-                            continue
-                        content = f.read().decode('utf-8', errors='replace')
-                    print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)")
-                    results.append(content)
+                    with (Spinner(prefix=f"[TOOL] read_archive", color=GREEN) if debug else contextlib.nullcontext()):
+                        with tarfile.open(arch_resolved, 'r:*') as tar:
+                            try:
+                                info = tar.getmember(file_path)
+                            except KeyError:
+                                resolved = _resolve_archive_path(tar, file_path)
+                                if resolved == file_path:
+                                    results.append(f"Error: File not found in archive: {file_path}")
+                                    continue
+                                file_path = resolved
+                                info = tar.getmember(file_path)
+                            if info.issym() or info.islnk():
+                                results.append(f"Error: Refusing to read symlink/hardlink: {file_path}")
+                                continue
+                            if info.size > MAX_ARCHIVE_READ_SIZE:
+                                results.append(f"Error: File too large ({info.size} bytes, limit {MAX_ARCHIVE_READ_SIZE})")
+                                continue
+                            f = tar.extractfile(info)
+                            if f is None:
+                                results.append(f"Error: Cannot read {file_path} (directory or special file)")
+                                continue
+                            content = f.read().decode('utf-8', errors='replace')
+                        print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)")
+                        results.append(content)
                 except Exception as e:
                     results.append(f"Error reading from archive: {e}")
             elif arch_type == 'zip':
                 try:
-                    with zipfile.ZipFile(arch_resolved, 'r') as zf:
-                        try:
-                            info = zf.getinfo(file_path)
-                        except KeyError:
-                            results.append(f"Error: File not found in archive: {file_path}")
-                            continue
-                        if info.external_attr >> 16 & 0o120000 == 0o120000:
-                            results.append(f"Error: Refusing to read symlink/hardlink: {file_path}")
-                            continue
-                        if info.file_size > MAX_ARCHIVE_READ_SIZE:
-                            results.append(f"Error: File too large ({info.file_size} bytes, limit {MAX_ARCHIVE_READ_SIZE})")
-                            continue
-                        content = zf.read(file_path).decode('utf-8', errors='replace')
-                    print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)")
-                    results.append(content)
+                    with (Spinner(prefix=f"[TOOL] read_archive", color=GREEN) if debug else contextlib.nullcontext()):
+                        with zipfile.ZipFile(arch_resolved, 'r') as zf:
+                            try:
+                                info = zf.getinfo(file_path)
+                            except KeyError:
+                                resolved = _resolve_archive_path(zf, file_path)
+                                if resolved == file_path:
+                                    results.append(f"Error: File not found in archive: {file_path}")
+                                    continue
+                                file_path = resolved
+                                info = zf.getinfo(file_path)
+                            if info.external_attr >> 16 & 0o120000 == 0o120000:
+                                results.append(f"Error: Refusing to read symlink/hardlink: {file_path}")
+                                continue
+                            if info.file_size > MAX_ARCHIVE_READ_SIZE:
+                                results.append(f"Error: File too large ({info.file_size} bytes, limit {MAX_ARCHIVE_READ_SIZE})")
+                                continue
+                            content = zf.read(file_path).decode('utf-8', errors='replace')
+                        print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)")
+                        results.append(content)
                 except Exception as e:
                     results.append(f"Error reading from archive: {e}")
             else:

@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_PyQt_and_SIP
 
-SKILL_NAME = "pyqt_sip"
+SKILL_NAME = "lang_pyqt_sip"
 
 TARGET_PATTERN = r"(?i)(?:python.*qt|python.*sip|pyqt|sip).*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:sip-devel|pyqt-builder|%\{pyqt.*_build\}|%\{pyqt.*_install\}|%use_sip4|%sip4_only|%sip5_only|%pyqt_build_for_qt6|python-sip|python-qt5-sip|python-PyQt6-sip)"

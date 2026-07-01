@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://github.com/AdamMajer/nodejs-packaging
 
-SKILL_NAME = "nodejs"
+SKILL_NAME = "lang_nodejs"
 
 TARGET_PATTERN = r"(?i)^nodejs-.*\.spec$|.*-nodejs.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:nodejs-packaging|%\{nodejs_\}|%nodejs_|npm\s+ci|npm\s+install|node_module|ELECTRON_SKIP_BINARY_DOWNLOAD)"

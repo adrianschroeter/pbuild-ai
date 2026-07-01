@@ -55,8 +55,7 @@ class Spinner:
         self._running = False
         if self._thread:
             self._thread.join(timeout=0.3)
-        width = len(self.prefix) + 14
-        self._stream_write("\r" + " " * width + "\r")
+        self._stream_write("\r\n")
 
     @staticmethod
     def _stream_write(text):

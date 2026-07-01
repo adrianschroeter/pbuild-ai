@@ -16,9 +16,75 @@
 import json
 import re
 import sys
+import tarfile
 import urllib.request
+import zipfile
+from pathlib import Path
 
 from pbuild_ai.tools import execute_tool_calls
+from pbuild_ai.spinner import Spinner, CYAN
+
+_ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
+_INDICATOR_FILES = (
+    'package.json', 'go.mod', 'Cargo.toml', 'Gemfile',
+    'setup.py', 'pyproject.toml', 'composer.json', 'pom.xml',
+    'Makefile.PL', 'DESCRIPTION', 'rebar.config', 'mix.exs',
+)
+
+
+def _indicator_matches(name):
+    for ind in _INDICATOR_FILES:
+        if name == ind or name.endswith('/' + ind):
+            return True
+    return False
+
+
+def _check_archives_for_skills(ctx, evaluated_archives, injected_skills, messages):
+    """Peek into downloaded archives to find indicator files and match skills."""
+    for f in Path(ctx.workspace_dir).iterdir():
+        if not f.is_file() or not any(f.name.endswith(e) for e in _ARCHIVE_EXTS):
+            continue
+        arch_str = str(f)
+        if arch_str in evaluated_archives:
+            continue
+        evaluated_archives.add(arch_str)
+        try:
+            if f.suffix == '.zip':
+                with zipfile.ZipFile(f, 'r') as zf:
+                    names = zf.namelist()
+                    for cand in (n for n in names if _indicator_matches(n)):
+                        info = zf.getinfo(cand)
+                        if info.file_size < 100000:
+                            content = zf.read(cand).decode('utf-8', errors='replace')
+                            _apply_matching_skills(ctx, cand, content, injected_skills, messages)
+            else:
+                with tarfile.open(f, 'r:*') as tar:
+                    names = tar.getnames()
+                    for cand in (n for n in names if _indicator_matches(n)):
+                        try:
+                            info = tar.getmember(cand)
+                        except KeyError:
+                            continue
+                        if info.isfile() and info.size < 100000:
+                            fh = tar.extractfile(info)
+                            if fh:
+                                content = fh.read().decode('utf-8', errors='replace')
+                                _apply_matching_skills(ctx, cand, content, injected_skills, messages)
+        except Exception:
+            pass
+
+
+def _apply_matching_skills(ctx, filename, content, injected_skills, messages):
+    matching = ctx.skill_manager.get_skills_for(filename, content, None)
+    for skill in matching:
+        skill_name = getattr(skill, 'SKILL_NAME', '?')
+        if skill_name in injected_skills:
+            continue
+        injected_skills.add(skill_name)
+        prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', None)
+        if prompt:
+            print(f"[GENERATE] Applied skill: {skill_name}")
+            messages.append({"role": "system", "content": f"[Skill: {skill_name}]\n{prompt}"})
 
 
 def run_generate_mode(ctx):
@@ -55,7 +121,7 @@ Follow these rules:
 1. Research the upstream project first using web_fetch if a URL is provided or you can infer one, then create the package. Do NOT fetch the same URL more than once — the result is cached.
 2. For GitHub projects, use https://api.github.com/repos/OWNER/REPO/releases/latest and https://api.github.com/repos/OWNER/REPO/tags to find release versions and tarball URLs instead of the main HTML page. For specific tags, use https://github.com/OWNER/REPO/archive/refs/tags/TAG.tar.gz.
 2. Only call ask_user if the specification is truly missing critical information (e.g., no project name, no source URL, no license hint, and you cannot determine it from research). Do NOT ask generic questions.
-3. Create the package in a subdirectory named after the package (e.g., workspace_root/package-name/).
+3. Create the .spec file directly in the workspace root, next to the downloaded source tarball — do NOT use a subdirectory.
 4. Create a complete .spec file following openSUSE packaging conventions from OPENSUSE.md:
    - Keep the copyright header
    - Empty %%changelog is acceptable
@@ -83,6 +149,9 @@ The specification for the package to create is in the system prompt above. Start
     ]
     generate_max_rounds = 50
     fetch_cache = {}
+    _evaluated_specs = set()
+    _evaluated_archives = set()
+    _injected_skills = set()
     for round_idx in range(generate_max_rounds):
         payload = {
             "model": ctx.ollama.model,
@@ -96,11 +165,12 @@ The specification for the package to create is in the system prompt above. Start
                 data=json.dumps(payload).encode('utf-8'),
                 headers={'Content-Type': 'application/json'}
             )
-            with urllib.request.urlopen(req) as resp:
-                raw = resp.read().decode('utf-8')
-                if ctx.debug:
-                    print(f"[DEBUG] Ollama response ({len(raw)} bytes):\n{raw}", flush=True)
-                result = json.loads(raw)
+            with Spinner(prefix=f"[AI] {ctx.ollama.model}", color=CYAN):
+                with urllib.request.urlopen(req) as resp:
+                    raw = resp.read().decode('utf-8')
+            if ctx.debug:
+                print(f"[DEBUG] Ollama response ({len(raw)} bytes):\n{raw}", flush=True)
+            result = json.loads(raw)
         except urllib.error.HTTPError as e:
             body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
             print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} - {body}")
@@ -155,9 +225,10 @@ The specification for the package to create is in the system prompt above. Start
                 if ctx.debug:
                     print(f"[AI] Tool call: {name}({args_preview})", flush=True)
             try:
-                round_results = execute_tool_calls([(n, i) for n, i in round_calls if n != "_skip"], ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive)
+                round_results = execute_tool_calls([(n, i) for n, i in round_calls if n != "_skip"], ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive, debug=ctx.debug)
             except Exception as e:
-                round_results = [f"Error executing tool: {e}"]
+                non_skip_count = sum(1 for n, _ in round_calls if n != "_skip")
+                round_results = [f"Error executing tool: {e}"] * non_skip_count
                 print(f"[GENERATE TOOL ERROR] {e}")
             final_results = []
             cache_idx = 0
@@ -175,6 +246,8 @@ The specification for the package to create is in the system prompt above. Start
                 if name == "read_file":
                     line_count = r.count('\n')
                     display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
+                elif name == "list_archive":
+                    continue
                 elif r.startswith("[Fetched "):
                     display = r.split("\n", 1)[0]
                 else:
@@ -188,6 +261,18 @@ The specification for the package to create is in the system prompt above. Start
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
                 messages.append({"role": "tool", "content": str(content), "name": tool_name})
+            spec_files = sorted(Path(ctx.workspace_dir).rglob("*.spec"))
+            for spec_path in spec_files:
+                spec_str = str(spec_path)
+                if spec_str in _evaluated_specs:
+                    continue
+                _evaluated_specs.add(spec_str)
+                try:
+                    spec_content = spec_path.read_text(encoding='utf-8')
+                except Exception:
+                    continue
+                _apply_matching_skills(ctx, spec_path.name, spec_content, _injected_skills, messages)
+            _check_archives_for_skills(ctx, _evaluated_archives, _injected_skills, messages)
             continue
 
         text = (message.get('content') or '').strip()
@@ -212,4 +297,4 @@ The specification for the package to create is in the system prompt above. Start
             print("[GENERATE] No response from Ollama.")
             break
 
-    ctx.ollama.print_stats(manager=ctx.manager, program_start=ctx.program_start)
+    ctx.ollama.print_stats(manager=ctx.manager, program_start=ctx.program_start, skill_manager=ctx.skill_manager)

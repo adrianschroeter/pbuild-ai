@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Perl
 
-SKILL_NAME = "perl"
+SKILL_NAME = "lang_perl"
 
 TARGET_PATTERN = r"(?i)^perl-.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%perl_make_install|%perl_process_packlist|%perl_gen_filelist|%\{perl_vendorlib\}|%\{perl_vendorarch\}|%\{perl_requires\})"

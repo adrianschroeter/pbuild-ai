@@ -26,7 +26,7 @@ from pbuild_ai.tools import execute_tool_calls
 
 class OllamaAnalyzer:
     def __init__(self, host=None, model="default", debug=False):
-        self.host = (host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")).rstrip('/')
+        self.host = (host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
         self.model = model
         self.debug = debug
         self.api_url = f"{self.host}/api/generate"
@@ -48,7 +48,9 @@ class OllamaAnalyzer:
         self.ai_calls = 0
         self.ai_time = 0.0
 
-    def print_stats(self, manager=None, program_start=None):
+    def print_stats(self, manager=None, program_start=None, skill_manager=None):
+        if skill_manager is not None and skill_manager.activated_skills:
+            print(f"[STATS] Skills used: {', '.join(sorted(skill_manager.activated_skills))}")
         parts = [f"[STATS] AI model: {self.model}  |  AI calls: {self.ai_calls}  |  AI time: {self.ai_time:.1f}s"]
         if manager is not None:
             parts.append(f"pbuild calls: {manager.pbuild_calls}  |  pbuild time: {manager.pbuild_time:.1f}s")
@@ -223,11 +225,13 @@ class OllamaAnalyzer:
                 if self.debug:
                     print(f"[AI] Tool call: {name}({args_preview})", flush=True)
 
-            round_results = execute_tool_calls(round_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive)
+            round_results = execute_tool_calls(round_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive, debug=self.debug)
             for (name, inp), r in zip(round_calls, round_results):
                 if name == "read_file":
                     line_count = r.count('\n')
                     display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
+                elif name == "list_archive":
+                    continue
                 elif r.startswith("[Fetched "):
                     display = r.split("\n", 1)[0]
                 else:

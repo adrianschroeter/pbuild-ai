@@ -25,6 +25,7 @@ class SkillManager:
         self._named_skills = {}
         self.base_skill_content = None
         self.deep_analyze_prompts = []
+        self.activated_skills = set()
         self._load_skills()
         self._load_base_skill()
 
@@ -57,6 +58,7 @@ class SkillManager:
     def _print_skill_active(self, skill, filename, match_type):
         """Print a consistent [SKILL ACTIVE] message."""
         skill_name = Path(skill.__file__).name if hasattr(skill, '__file__') else "unknown"
+        self.activated_skills.add(skill_name)
         if match_type == "prompt":
             print(f"[SKILL ACTIVE] {skill_name} (prompt match)")
         else:

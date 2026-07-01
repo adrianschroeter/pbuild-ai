@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_PHP
 
-SKILL_NAME = "php"
+SKILL_NAME = "lang_php"
 
 TARGET_PATTERN = r"(?i)^php.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{__php\}|%\{__phpize\}|%\{__php_config\}|%\{php_version\}|%\{pear_phpdir\}|%\{pear_docdir\}|%\{pear_testdir\}|%\{php_pearxmldir\}|%\{__pear\}|pear)"

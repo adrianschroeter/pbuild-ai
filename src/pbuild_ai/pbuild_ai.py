@@ -1510,7 +1510,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 _dl_ok = False
                                 for _r in execute_tool_calls(
                                     [("download_file", {"url": _source_url, "filename": _fname})],
-                                    manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE
+                                    manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, debug=DEBUG
                                 ):
                                     _d = _r[:500] + "..." if len(_r) > 500 else _r
                                     print(f"[UPDATE] {_d}")
@@ -1525,7 +1525,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                         print(f"[UPDATE] GitHub release URL failed, trying archive: {_alt_url}")
                                         for _r in execute_tool_calls(
                                             [("download_file", {"url": _alt_url, "filename": _alt_fname})],
-                                            manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE
+                                            manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, debug=DEBUG
                                         ):
                                             _d = _r[:500] + "..." if len(_r) > 500 else _r
                                             print(f"[UPDATE] {_d}")
@@ -1585,7 +1585,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     print(f"[UPDATE] No changes for {spec.name}.")
 
             if ctx.update_only:
-                ollama.print_stats(manager=manager, program_start=ctx.program_start)
+                ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 if not updated_packages:
                     print("[UPDATE] No changes found. Exiting (--update-only).")
                 else:
@@ -1670,7 +1670,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     ctx.program_start, run_fix_loop,
                 )
 
-        ollama.print_stats(manager=manager, program_start=ctx.program_start)
+        ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
     except Exception as e:
         try:
             print(f"Script aborted: {e}")

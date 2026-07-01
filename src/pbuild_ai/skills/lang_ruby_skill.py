@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Ruby
 
-SKILL_NAME = "ruby"
+SKILL_NAME = "lang_ruby"
 
 TARGET_PATTERN = r"(?i)^(?:rubygem-|ruby-).*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%gem_install|gem2rpm|rubygem|%\{gem_|gem\s+install)"

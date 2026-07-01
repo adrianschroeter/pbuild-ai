@@ -55,9 +55,9 @@ class TestStatsPrinted(unittest.TestCase):
         ctx.program_start = 100.0
 
         _run_build_guard(self.spec_path, manager, ollama, "ctx", "err", ctx, 100.0, MagicMock())
-        ollama.print_stats(manager=manager, program_start=ctx.program_start)
+        ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=None)
 
-        ollama.print_stats.assert_called_once_with(manager=manager, program_start=ctx.program_start)
+        ollama.print_stats.assert_called_once_with(manager=manager, program_start=ctx.program_start, skill_manager=None)
 
     def test_fix_main_flow_prints_stats(self):
         """After _run_build_guard with fix_mode=True, outer print_stats is called."""
@@ -72,9 +72,9 @@ class TestStatsPrinted(unittest.TestCase):
         ctx.program_start = 100.0
 
         _run_build_guard(self.spec_path, manager, ollama, "ctx", "err", ctx, 100.0, MagicMock())
-        ollama.print_stats(manager=manager, program_start=ctx.program_start)
+        ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=None)
 
-        ollama.print_stats.assert_called_once_with(manager=manager, program_start=ctx.program_start)
+        ollama.print_stats.assert_called_once_with(manager=manager, program_start=ctx.program_start, skill_manager=None)
 
     # --- --generate mode ---
 

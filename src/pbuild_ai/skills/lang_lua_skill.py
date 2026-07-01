@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Lua
 
-SKILL_NAME = "lua"
+SKILL_NAME = "lang_lua"
 
 TARGET_PATTERN = r"(?i)^lua.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{lua_version\}|%\{lua_archdir\}|%\{lua_noarchdir\}|%\{lua_incdir\}|%\{lua_libdir\}|luarocks)"

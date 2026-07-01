@@ -20,7 +20,7 @@ Follow these rules:
 1. Research the upstream project first using web_fetch if a URL is provided or you can infer one, then create the package. Do NOT fetch the same URL more than once — the result is cached.
 2. For GitHub projects, use https://api.github.com/repos/OWNER/REPO/releases/latest and https://api.github.com/repos/OWNER/REPO/tags to find release versions and tarball URLs instead of the main HTML page. For specific tags, use https://github.com/OWNER/REPO/archive/refs/tags/TAG.tar.gz.
 2. Only call ask_user if the specification is truly missing critical information (e.g., no project name, no source URL, no license hint, and you cannot determine it from research). Do NOT ask generic questions.
-3. Create the package in a subdirectory named after the package (e.g., workspace_root/package-name/).
+3. Create the .spec file directly in the workspace root, next to the downloaded source tarball — do NOT use a subdirectory.
 4. Create a complete .spec file following openSUSE packaging conventions from OPENSUSE.md:
    - Keep the copyright header
    - Empty %%changelog is acceptable

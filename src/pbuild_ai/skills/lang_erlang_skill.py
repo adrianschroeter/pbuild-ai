@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Erlang
 
-SKILL_NAME = "erlang"
+SKILL_NAME = "lang_erlang"
 
 TARGET_PATTERN = r"(?i)^erlang-.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{erlang_dir\}|%\{erlang_libdir\}|%\{__erl\}|%\{__rebar\}|%rebar\b|%rebar_compile|otp)"

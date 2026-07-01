@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Java
 
-SKILL_NAME = "java"
+SKILL_NAME = "lang_java"
 
 TARGET_PATTERN = r"(?i)^java-.*\.spec$|.*-java\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{_javadir\}|%\{_javadocdir\}|BuildRequires:\s*java-devel|\bbuildRequires:\s*\bant\b|javapackages-tools|mvn-jpp)"

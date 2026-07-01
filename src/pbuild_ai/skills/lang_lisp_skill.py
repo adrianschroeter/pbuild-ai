@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Lisp
 
-SKILL_NAME = "lisp"
+SKILL_NAME = "lang_lisp"
 
 TARGET_PATTERN = r"(?i)^cl-.*\.spec$|.*lisp.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:common-lisp-controller|\.asd\b|common-lisp/source|register-common-lisp|fasl)"

@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_Typelibs
 
-SKILL_NAME = "typelibs"
+SKILL_NAME = "lang_typelibs"
 
 TARGET_PATTERN = r"(?i)typelib.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:gobject-introspection|typelib-|girepository|%\{_typelibdir\}|%\{gir_dir\})"

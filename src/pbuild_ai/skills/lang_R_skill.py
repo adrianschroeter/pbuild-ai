@@ -2,7 +2,7 @@
 ### WARNING: Currently not reviewed and adapted to git based packaging!
 ### Based on https://en.opensuse.org/openSUSE:Packaging_R
 
-SKILL_NAME = "r"
+SKILL_NAME = "lang_R"
 
 TARGET_PATTERN = r"(?i)^R-.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{rlibdir\}|R\s+CMD\s+INSTALL|packname|CRAN)"
