@@ -384,20 +384,20 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
     """Execute tool calls returned by Ollama. Returns list of tool results."""
     results = []
     workspace = Path(workspace_dir).resolve()
+    _spec_dir = workspace  # tracks spec directory for subsequent lookups
     for tool_name, tool_input in tool_calls:
         if tool_name == "write_file":
             path = tool_input.get("path")
             content = tool_input.get("content", "")
             if not path:
-                # If content looks like a spec file, try to infer path from workspace
+                # If content looks like a spec file, try to infer path
                 inferred = None
                 content_start = content.strip()[:200].lower()
                 if "spec file for package" in content_start or content_start.startswith("name:"):
-                    spec_files = sorted(workspace.glob("*.spec"))
+                    spec_files = sorted(_spec_dir.glob("*.spec"))
                     if len(spec_files) == 1:
                         inferred = spec_files[0].name
                     elif spec_files:
-                        # Try to match by package name from content header
                         m = re.search(r'spec file for package\s+(\S+)', content) or re.search(r'^Name:\s*(\S+)', content, re.MULTILINE)
                         if m:
                             pkg = m.group(1)
@@ -442,8 +442,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 f.write(tool_input["content"])
             print(f"[TOOL] write_file: {tool_input['path']}")
             results.append(f"OK: Wrote {tool_input['path']}")
-            # Run format_spec_file on .spec files to normalize formatting
+            # Track spec directory for subsequent tool call lookups
             if file_path.suffix == '.spec':
+                _spec_dir = file_path.parent
                 fmt_cmd = [_FORMAT_SPEC_FILE_PATH, str(file_path.parent)]
                 try:
                     fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
@@ -498,8 +499,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 f.write(new_content)
             print(f"[TOOL] edit_file: {path} (1 match replaced)")
             results.append(f"OK: Edited {path}")
-            # Run format_spec_file on .spec files
+            # Track spec directory for subsequent tool call lookups
             if file_path.suffix == '.spec':
+                _spec_dir = file_path.parent
                 fmt_cmd = ["/usr/lib/obs/service/format_spec_file", str(file_path.parent)]
                 try:
                     fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
@@ -582,10 +584,10 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 results.append("Error: download_file requires a 'filename' argument")
                 continue
 
-            # Expand RPM macros (%{name}, %{version}, etc.) using workspace spec files
+            # Expand RPM macros (%{name}, %{version}, etc.) using spec files in the tracked directory
             if "%{" in filename:
                 macros = {}
-                for spec_file in sorted(workspace.glob("*.spec")):
+                for spec_file in sorted(_spec_dir.glob("*.spec")):
                     spec_text = spec_file.read_text(encoding="utf-8", errors="replace")
                     for m in re.finditer(r'^(Name|Version):\s*(\S+)', spec_text, re.MULTILINE):
                         macros[m.group(1).lower()] = m.group(2)
@@ -673,7 +675,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             args = tool_input.get("args", [])
             # format_spec_file is a well-known OBS service, not a tool-scripts entry
             if script_name == "format_spec_file":
-                fmt_cwd = workspace
+                fmt_cwd = _spec_dir
                 if args:
                     _arg = args[0]
                     _arg_path = Path(_arg)
