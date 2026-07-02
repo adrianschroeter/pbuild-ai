@@ -86,6 +86,7 @@ class RpmSourceManager:
         self.pbuild_calls = 0
         self.pbuild_time = 0.0
         self.last_build_successful = True
+        self.pbuild_attempt = 0
         self.build_log_path = Path(build_log_path).resolve() if build_log_path else None
 
     def _run_captured(self, cmd, cwd, stream_output=False):
@@ -128,9 +129,13 @@ class RpmSourceManager:
         if not self.build_log_path:
             return
         try:
-            self.build_log_path.parent.mkdir(parents=True, exist_ok=True)
-            self.build_log_path.write_text(content, encoding='utf-8')
-            print(f"[BUILD LOG] Wrote {len(content)} bytes to {self.build_log_path}")
+            path_str = str(self.build_log_path)
+            if "_NUMBER_" in path_str:
+                path_str = path_str.replace("_NUMBER_", str(self.pbuild_attempt))
+            log_path = Path(path_str)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(content, encoding='utf-8')
+            print(f"[BUILD LOG] Wrote {len(content)} bytes to {log_path}")
         except Exception as e:
             print(f"[WARNING] Failed to write build log: {e}")
 
@@ -196,6 +201,7 @@ class RpmSourceManager:
         if self.shell_after_build:
             cmd.append("--shell-after-build")
         print(f"[EXEC] {' '.join(cmd)}")
+        self.pbuild_attempt += 1
         t0 = time.time()
         try:
             result = self._run_captured(cmd, self.base_dir, stream_output=stream_output)
@@ -348,6 +354,7 @@ class RpmSourceManager:
         if self.shell_after_build:
             cmd.append("--shell-after-build")
         print(f"[EXEC] {' '.join(cmd)}")
+        self.pbuild_attempt += 1
         t0 = time.time()
         try:
             result = self._run_captured(cmd, self.base_dir, stream_output=stream_output)

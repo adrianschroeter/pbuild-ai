@@ -1,4 +1,6 @@
-# python_skill.py
+# lang_python_skill.py
+
+SKILL_NAME = "lang_python"
 
 # REGEX: This skill triggers for all files starting with "python-" and ending with ".spec".
 TARGET_PATTERN = r"^python-.*\.spec$"

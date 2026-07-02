@@ -23,7 +23,7 @@ class TestSkillManager(unittest.TestCase):
     def test_first_match_by_filename(self):
         skill = self.sm.get_skill_for("python-foo.spec", content="")
         self.assertIsNotNone(skill)
-        self.assertEqual(skill.__name__, "python_skill")
+        self.assertEqual(skill.__name__, "lang_python_skill")
 
     def test_first_match_by_content(self):
         skills = self.sm.get_skills_for(
@@ -69,7 +69,7 @@ class TestSkillManager(unittest.TestCase):
     def test_single_skill_match(self):
         skills = self.sm.get_skills_for("python-foo.spec", content="irrelevant")
         self.assertEqual(len(skills), 1)
-        self.assertEqual(skills[0].__name__, "python_skill")
+        self.assertEqual(skills[0].__name__, "lang_python_skill")
 
     def test_no_skills_match(self):
         skills = self.sm.get_skills_for(
@@ -189,14 +189,14 @@ class TestSkillManager(unittest.TestCase):
             self.assertIn("cleanup_skill", {s.__name__ for s in skills},
                           f"cleanup_skill should match prompt: {prompt}")
 
-    def test_python_skill_patterns(self):
+    def test_lang_python_skill_patterns(self):
         for name in [
             "python-foo.spec",
             "python-bar.spec",
         ]:
             skills = self.sm.get_skills_for(name, content="irrelevant")
-            self.assertIn("python_skill", {s.__name__ for s in skills},
-                          f"python_skill should match filename: {name}")
+            self.assertIn("lang_python_skill", {s.__name__ for s in skills},
+                          f"lang_python_skill should match filename: {name}")
 
     def test_remoteasset_skill_patterns(self):
         for prompt in [
