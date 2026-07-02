@@ -107,6 +107,11 @@ Used alongside \fB\-\-fix\fR or \fB\-\-modify\fR.
 .B \-\-show\-buildlog, \-L
 Show the pbuild build log output on the console while building.
 .TP
+.B \-\-build\-log FILE
+Write the full pbuild build log (stdout + stderr, unfiltered) to this
+file. Written on both success and failure, overwriting any previous
+content. Useful for offline analysis or CI pipelines.
+.TP
 .B \-\-root ROOT
 Root directory for pbuild (passed as \fB\-\-root\fR to pbuild).
 .TP

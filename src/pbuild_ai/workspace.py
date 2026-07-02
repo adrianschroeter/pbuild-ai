@@ -67,7 +67,7 @@ from pbuild_ai.diff_utils import show_diff
 
 
 class RpmSourceManager:
-    def __init__(self, base_dir, do_clean=False, vm_type=None, vm_memory=None, shell_after_build=False, preset=None, root_dir=None):
+    def __init__(self, base_dir, do_clean=False, vm_type=None, vm_memory=None, shell_after_build=False, preset=None, root_dir=None, build_log_path=None):
         self.base_dir = Path(base_dir).resolve()
         if not self.base_dir.is_dir():
             raise ValueError(f"Base directory {self.base_dir} does not exist.")
@@ -85,9 +85,9 @@ class RpmSourceManager:
         self.preset = preset
         self.pbuild_calls = 0
         self.pbuild_time = 0.0
+        self.build_log_path = Path(build_log_path).resolve() if build_log_path else None
 
-    @staticmethod
-    def _run_captured(cmd, cwd, stream_output=False):
+    def _run_captured(self, cmd, cwd, stream_output=False):
         if stream_output:
             proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
             lines = []
@@ -105,6 +105,7 @@ class RpmSourceManager:
                 spinner.stop()
             proc.wait()
             output = ''.join(lines)
+            self._write_build_log(output)
             if proc.returncode != 0:
                 raise subprocess.CalledProcessError(proc.returncode, cmd, output, '')
             return subprocess.CompletedProcess(cmd, 0, output, '')
@@ -117,9 +118,20 @@ class RpmSourceManager:
                 spinner.stop()
             stdout = result.stdout.decode('utf-8', errors='replace')
             stderr = result.stderr.decode('utf-8', errors='replace')
+            self._write_build_log(stdout + ('\nSTDERR:\n' + stderr if stderr else ''))
             if result.returncode != 0:
                 raise subprocess.CalledProcessError(result.returncode, cmd, stdout, stderr)
             return subprocess.CompletedProcess(result.args, result.returncode, stdout, stderr)
+
+    def _write_build_log(self, content):
+        if not self.build_log_path:
+            return
+        try:
+            self.build_log_path.parent.mkdir(parents=True, exist_ok=True)
+            self.build_log_path.write_text(content, encoding='utf-8')
+            print(f"[BUILD LOG] Wrote {len(content)} bytes to {self.build_log_path}")
+        except Exception as e:
+            print(f"[WARNING] Failed to write build log: {e}")
 
     def _is_safe_path(self, target_path) -> bool:
         try:

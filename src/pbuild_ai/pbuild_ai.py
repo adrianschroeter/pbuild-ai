@@ -360,6 +360,7 @@ if __name__ == "__main__":
     parser.add_argument("--modify", "-m", default=None, help="Main command: send a modification prompt + sources to Ollama, apply changes locally, then exit (no build)")
     parser.add_argument("--root", default=None, help="Root directory for pbuild (passed as --root to pbuild)")
     parser.add_argument("--show-buildlog", "-L", action="store_true", help="Show the pbuild build log output")
+    parser.add_argument("--build-log", default=None, help="Write the full pbuild build log to this file")
     parser.add_argument("--shell-after-build", action="store_true", help="Open a shell in the build environment on failure for debugging")
     parser.add_argument("--vm-type", default=None, help="VM type for pbuild (e.g., kvm, qemu)")
     parser.add_argument("--vm-memory", default=None, help="VM memory for pbuild (e.g., 4096)")
@@ -436,6 +437,7 @@ if __name__ == "__main__":
         email=args.email or os.environ.get("EMAIL", ""),
         analyze_mode=args.analyze,
         max_rounds=args.max_rounds,
+        build_log=args.build_log,
         program_start=time.time(),
     )
 
@@ -473,7 +475,7 @@ if __name__ == "__main__":
         context_file_path.unlink()
         print("[INFO] Discarded saved .pai.context (--fresh).")
 
-    manager = RpmSourceManager(WORKSPACE_DIR, do_clean=DO_CLEAN, vm_type=ctx.vm_type, vm_memory=ctx.vm_memory, shell_after_build=ctx.shell_after_build, preset=PRESET, root_dir=ROOT_DIR)
+    manager = RpmSourceManager(WORKSPACE_DIR, do_clean=DO_CLEAN, vm_type=ctx.vm_type, vm_memory=ctx.vm_memory, shell_after_build=ctx.shell_after_build, preset=PRESET, root_dir=ROOT_DIR, build_log_path=ctx.build_log)
     skill_manager = SkillManager(SKILLS_DIR)
     ctx.manager = manager
     ctx.skill_manager = skill_manager
