@@ -406,7 +406,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                                     inferred = sf.name
                                     break
                         if not inferred:
-                            inferred = spec_files[0].name
+                            inferred = spec_files[0].name if spec_files else None
                 if inferred:
                     path = inferred
                     tool_input["path"] = inferred

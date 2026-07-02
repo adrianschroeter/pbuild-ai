@@ -1678,8 +1678,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 
         ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         try:
-            print(f"Script aborted: {e}")
+            print(f"Script aborted: {e}", file=sys.stderr)
         except BlockingIOError:
             sys.stderr.write(f"Script aborted: {e}\n")
         sys.exit(2)
