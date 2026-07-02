@@ -85,6 +85,7 @@ class RpmSourceManager:
         self.preset = preset
         self.pbuild_calls = 0
         self.pbuild_time = 0.0
+        self.last_build_successful = True
         self.build_log_path = Path(build_log_path).resolve() if build_log_path else None
 
     def _run_captured(self, cmd, cwd, stream_output=False):
@@ -201,11 +202,13 @@ class RpmSourceManager:
             elapsed = time.time() - t0
             self.pbuild_calls += 1
             self.pbuild_time += elapsed
+            self.last_build_successful = True
             return True, "\n".join(result.stdout.strip().split('\n')[-50:])
         except subprocess.CalledProcessError as e:
             elapsed = time.time() - t0
             self.pbuild_calls += 1
             self.pbuild_time += elapsed
+            self.last_build_successful = False
             stderr = (e.stderr or "").strip()
             stdout = (e.stdout or "").strip()
             err = f"STDERR:\n{stderr}\n\nSTDOUT (last 100 lines):\n"
@@ -351,11 +354,13 @@ class RpmSourceManager:
             elapsed = time.time() - t0
             self.pbuild_calls += 1
             self.pbuild_time += elapsed
+            self.last_build_successful = True
             return True, "\n".join(result.stdout.strip().split('\n')[-50:])
         except subprocess.CalledProcessError as e:
             elapsed = time.time() - t0
             self.pbuild_calls += 1
             self.pbuild_time += elapsed
+            self.last_build_successful = False
             stderr = (e.stderr or "").strip()
             stdout = (e.stdout or "").strip()
             err = f"STDERR:\n{stderr}\n\nSTDOUT (last 100 lines):\n"

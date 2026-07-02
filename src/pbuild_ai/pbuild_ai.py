@@ -1678,6 +1678,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     ctx.program_start, run_fix_loop,
                 )
 
+        # Check build result on normal exit — last build attempt determines exit code
+        if manager and manager.pbuild_calls > 0 and not manager.last_build_successful:
+            print("[EXIT] Last build attempt failed. Exiting with code 1.")
+            sys.exit(1)
+
         ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
     except Exception as e:
         import traceback

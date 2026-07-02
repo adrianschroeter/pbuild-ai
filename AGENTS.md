@@ -13,6 +13,6 @@
 | Code | Meaning |
 |------|---------|
 | 0 | Success — all requested operations completed. |
-| 1 | Fix failure — build errors could not be resolved after exhausting all fix attempts, or no changes were made when changes were required. |
+| 1 | Fix failure — build errors could not be resolved after exhausting all fix attempts, no changes were made when changes were required, or the last build attempt failed. |
 | 2 | Internal error — Ollama API returned an error (HTTP 4xx/5xx, schema rejection, connection failure), or an unexpected exception occurred in pbuild-ai itself. |
 

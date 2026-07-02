@@ -254,10 +254,14 @@ The specification for the package to create is in the system prompt above. Start
                 if name == "_skip":
                     final_results.append(inp["_cached"])
                 else:
-                    if name == "web_fetch" and cache_idx < len(round_results) and round_results[cache_idx].startswith("[Fetched "):
-                        url = inp["url"]
-                        fetch_cache[url] = round_results[cache_idx]
-                    final_results.append(round_results[cache_idx])
+                    if cache_idx < len(round_results):
+                        result = round_results[cache_idx]
+                        if name == "web_fetch" and result.startswith("[Fetched "):
+                            url = inp["url"]
+                            fetch_cache[url] = result
+                    else:
+                        result = f"Error: Missing result for tool call #{cache_idx} ({name})"
+                    final_results.append(result)
                     cache_idx += 1
             round_results = final_results
             for (name, inp), r in zip(round_calls, round_results):
