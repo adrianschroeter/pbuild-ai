@@ -961,7 +961,10 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                         display = r[:500] + "..." if len(r) > 500 else r
                     print(f"[FIX] {display}")
                 relocate_patches(tool_results, spec)
-            else:
+                if not any(r.startswith("OK: Wrote") or r.startswith("OK: Edited") or r.startswith("OK: Removed") or r.startswith("OK: Renamed") for r in tool_results):
+                    print("[FIX] Tool calls were all read-only. Trying rewrite from analysis instead...")
+                    tool_results = None
+            if not tool_results:
                     print("[FIX] No tool calls received. Asking Ollama to rewrite the spec file...")
 
                     def try_rewrite():

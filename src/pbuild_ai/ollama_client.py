@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from pbuild_ai.utils import resolve_path
 
 from pbuild_ai.spinner import Spinner, CYAN
 from pbuild_ai.tools import execute_tool_calls
@@ -267,10 +268,22 @@ class OllamaAnalyzer:
             all_results.extend(f"{name}: {r}" for (name, _), r in zip(round_calls, round_results))
 
             messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
-            for (name, _), content in zip(round_calls, round_results):
+            _injected_edit_help = False
+            for (name, inp), content in zip(round_calls, round_results):
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
                 messages.append({"role": "tool", "content": str(content), "name": name})
+                if not _injected_edit_help and name == "edit_file" and ("old_string not found" in str(content) or "old_string found" in str(content)):
+                    _path = inp.get("path", "")
+                    _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
+                    if _resolved and _resolved.exists():
+                        try:
+                            _file_content = manager.read_file_safe(_resolved)
+                            messages.append({"role": "user", "content": f"The edit_file call for {_path} failed. Here is the current content of {_path}:\n\n```\n{_file_content[:8000]}\n```\nAnalyze the content and retry the edit with the correct old_string."})
+                            _injected_edit_help = True
+                            print(f"[FIX] Injected file content to help edit_file retry for {_path}", flush=True)
+                        except Exception:
+                            pass
 
         print(f"[AI] Reached max rounds ({max_rounds}).", flush=True)
         return all_results
