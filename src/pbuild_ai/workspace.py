@@ -135,6 +135,7 @@ class RpmSourceManager:
             log_path = Path(path_str)
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text(content, encoding='utf-8')
+            self._last_log_path = log_path
             print(f"[BUILD LOG] Wrote {len(content)} bytes to {log_path}")
         except Exception as e:
             print(f"[WARNING] Failed to write build log: {e}")

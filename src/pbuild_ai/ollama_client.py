@@ -38,6 +38,7 @@ class OllamaAnalyzer:
         self._opener = urllib.request.build_opener()
         self._opener.addheaders = [('Connection', 'keep-alive')]
         self._chat_supported = True
+        self.manager = None
         self.reset_stats()
 
     MAX_PROMPT_CHARS = 80000
@@ -136,7 +137,13 @@ class OllamaAnalyzer:
         try:
             result = self._request(self.api_url, payload)
             self._context = result.get("context")
-            return result.get('response', '').strip()
+            response_text = result.get('response', '').strip()
+            if self.manager and hasattr(self.manager, '_last_log_path') and self.manager._last_log_path:
+                analyze_path = Path(str(self.manager._last_log_path) + ".analyze")
+                analyze_path.parent.mkdir(parents=True, exist_ok=True)
+                analyze_path.write_text(response_text, encoding='utf-8')
+                print(f"[BUILD LOG] Wrote {len(response_text)} bytes to {analyze_path}")
+            return response_text
         except Exception as e:
             print(f"[OLLAMA ERROR] {e}")
             sys.exit(2)

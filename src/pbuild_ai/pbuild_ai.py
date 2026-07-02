@@ -492,6 +492,7 @@ if __name__ == "__main__":
         full_context = agents_md_content
     
     ollama = OllamaAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "default"), debug=DEBUG, timeout=ctx.ollama_timeout)
+    ollama.manager = manager
     ctx.ollama = ollama
     ctx.full_context = full_context
 
