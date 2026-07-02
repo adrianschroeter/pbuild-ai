@@ -687,7 +687,7 @@ if __name__ == "__main__":
     def relocate_patches(tool_results, spec):
         """Move written .patch files to the spec's directory and update the spec to apply them."""
         for result in tool_results:
-            if not result.startswith("OK: Wrote ") or not result.endswith(".patch"):
+            if not (result.startswith("write_file: OK: Wrote ") or result.startswith("OK: Wrote ")) or not result.endswith(".patch"):
                 continue
             rel_path = result[len("OK: Wrote "):]
             src = _resolve_path(rel_path)
@@ -961,7 +961,7 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                         display = r[:500] + "..." if len(r) > 500 else r
                     print(f"[FIX] {display}")
                 relocate_patches(tool_results, spec)
-                if not any(r.startswith("OK: Wrote") or r.startswith("OK: Edited") or r.startswith("OK: Removed") or r.startswith("OK: Renamed") for r in tool_results):
+                if not any(r.startswith(("edit_file: OK: Edited", "write_file: OK: Wrote", "remove_file: OK: Removed", "rename_file: OK: Renamed")) for r in tool_results):
                     print("[FIX] Tool calls were all read-only. Trying rewrite from analysis instead...")
                     tool_results = None
             if not tool_results:
