@@ -139,15 +139,17 @@ class OllamaAnalyzer:
             result = self._request(self.api_url, payload)
             self._context = result.get("context")
             response_text = result.get('response', '').strip()
-            if self.manager and hasattr(self.manager, '_last_log_path') and self.manager._last_log_path:
-                analyze_path = Path(str(self.manager._last_log_path) + ".analyze")
-                analyze_path.parent.mkdir(parents=True, exist_ok=True)
-                analyze_path.write_text(response_text, encoding='utf-8')
-                print(f"[BUILD LOG] Wrote {len(response_text)} bytes to {analyze_path}")
             return response_text
         except Exception as e:
             print(f"[OLLAMA ERROR] {e}")
             sys.exit(2)
+
+    def _write_analysis_file(self, response_text):
+        if self.manager and hasattr(self.manager, '_last_log_path') and self.manager._last_log_path:
+            analyze_path = Path(str(self.manager._last_log_path) + ".analyze")
+            analyze_path.parent.mkdir(parents=True, exist_ok=True)
+            analyze_path.write_text(response_text, encoding='utf-8')
+            print(f"[BUILD LOG] Wrote {len(response_text)} bytes to {analyze_path}")
 
     def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False):
         max_rounds = max_rounds if max_rounds > 0 else 999999
