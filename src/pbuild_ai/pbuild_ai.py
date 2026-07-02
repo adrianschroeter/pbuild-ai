@@ -274,9 +274,9 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
             print(f"\n[OK] Build for {spec.name} succeeded.")
         else:
             print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ollama.model}...")
-            _err_ctx = _extract_error_context(build_out)
-            error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{build_out}" if _err_ctx else build_out, full_context)
             if not ctx.fix_mode:
+                _err_ctx = _extract_error_context(build_out)
+                error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{build_out}" if _err_ctx else build_out, full_context)
                 print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
 
         if ctx.fix_mode and not build_success:
