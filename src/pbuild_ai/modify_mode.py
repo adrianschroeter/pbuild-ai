@@ -25,6 +25,20 @@ from pbuild_ai.network import is_safe_url
 from pbuild_ai.tools import execute_tool_calls
 
 
+def _expand_url_macros(url, spec_content):
+    """Expand RPM macros like %{name}, %{version} in a URL using spec file values."""
+    macros = {}
+    for m in re.finditer(r'^(Name|Version):\s*(\S+)', spec_content, re.MULTILINE):
+        macros[m.group(1).lower()] = m.group(2)
+    if not macros:
+        return url
+    expanded = url
+    for key, val in macros.items():
+        expanded = expanded.replace(f'%{{{key}}}', val)
+        expanded = expanded.replace(f'%{{upper:{key}}}', val.upper())
+    return expanded
+
+
 def _resolve_url_references(ctx):
     """Scan spec files for Source:/Patch: lines containing remote URLs,
     download the content, and rewrite the lines to reference local files.
@@ -58,20 +72,22 @@ def _resolve_url_references(ctx):
             if not fname:
                 fname = f"from_{tag.lower()}.patch"
 
-            local_path = spec.parent / fname
+            fname_expanded = _expand_url_macros(fname, content)
+            local_path = spec.parent / fname_expanded
             if not local_path.exists():
-                print(f"[MODIFY] Downloading {url} -> {fname}")
+                download_url = _expand_url_macros(url, content)
+                print(f"[MODIFY] Downloading {download_url} -> {fname_expanded}")
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "pbuild-ai/1.0"})
+                    req = urllib.request.Request(download_url, headers={"User-Agent": "pbuild-ai/1.0"})
                     with urllib.request.urlopen(req, timeout=60) as resp:
                         data = resp.read()
                     local_path.write_bytes(data)
-                    print(f"[MODIFY] Downloaded {len(data)} bytes to {fname}")
+                    print(f"[MODIFY] Downloaded {len(data)} bytes to {fname_expanded}")
                 except Exception as e:
-                    print(f"[MODIFY] Failed to download {url}: {e}")
+                    print(f"[MODIFY] Failed to download {download_url}: {e}")
                     continue
             else:
-                print(f"[MODIFY] {fname} already exists, skipping download.")
+                print(f"[MODIFY] {fname_expanded} already exists, skipping download.")
 
             # Preserve inline comment after the URL (including leading space)
             suffix = ""
@@ -80,7 +96,7 @@ def _resolve_url_references(ctx):
                 before_hash = line[comment_pos - 1]
                 suffix = (line[comment_pos - 1:] if before_hash == ' '
                           else line[comment_pos:])
-            lines[i] = f"{tag}: {fname}{suffix}"
+            lines[i] = f"{tag}: {fname_expanded}{suffix}"
             modified += 1
 
         if modified:
