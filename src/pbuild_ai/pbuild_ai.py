@@ -954,6 +954,8 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                         display = f"read_file: ({line_count} lines)"
                     elif r.startswith("[Fetched "):
                         display = r.split("\n", 1)[0]
+                    elif r.startswith("list_files: "):
+                        continue
                     else:
                         display = r[:500] + "..." if len(r) > 500 else r
                     print(f"[FIX] {display}")
