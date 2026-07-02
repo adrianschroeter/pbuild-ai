@@ -203,13 +203,14 @@ class TestBuildGuardBuildFails(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_fix_loop_called_on_build_failure(self):
-        """When --fix is active and build fails, run_fix_loop must be called."""
+        """When --fix is active and build fails, run_fix_loop must be called.
+        analyze is skipped here — run_fix_loop handles it internally."""
         _run_build_guard(
             self.spec_path, self.manager, self.ollama, "full_context",
             "error prompt", self.ctx, 100.0, self.run_fix_loop,
         )
         self.manager.run_orphan_build.assert_called_once()
-        self.ollama.analyze.assert_called_once()
+        self.ollama.analyze.assert_not_called()
         self.run_fix_loop.assert_called_once()
 
     def test_no_fix_loop_without_fix_mode(self):
