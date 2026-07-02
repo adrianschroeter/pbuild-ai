@@ -264,7 +264,7 @@ The specification for the package to create is in the system prompt above. Start
                 if name == "read_file":
                     line_count = r.count('\n')
                     display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
-                elif name == "list_archive":
+                elif name in ("list_archive", "list_files"):
                     continue
                 elif name == "read_file_from_archive":
                     if not ctx.debug:
