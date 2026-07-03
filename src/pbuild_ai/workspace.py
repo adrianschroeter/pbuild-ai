@@ -401,13 +401,15 @@ class RpmSourceManager:
         import pty
         import select
 
+        _SHELL_PROMPT_RE = re.compile(r'[#\$]\s*(\x1b\[[0-9;]*m)?\s*$')
+
         master_fd, slave_fd = pty.openpty()
         t0 = time.time()
         proc = subprocess.Popen(cmd, cwd=self.base_dir,
                                stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
                                close_fds=True)
 
-        def pty_read(timeout=10):
+        def pty_read(timeout=10, wait_prompt=False):
             nonlocal collected
             end = time.time() + timeout
             buf = ""
@@ -416,28 +418,67 @@ class RpmSourceManager:
                 if r:
                     try:
                         data = os.read(master_fd, 4096).decode('utf-8', errors='replace')
+                        if not data:
+                            break
                         buf += data
                         collected += data
                         print(data, end='', flush=True)
+                        if wait_prompt and _SHELL_PROMPT_RE.search(buf):
+                            time.sleep(0.2)
+                            r2, _, _ = select.select([master_fd], [], [], 0.2)
+                            if not r2:
+                                break
+                            else:
+                                try:
+                                    extra = os.read(master_fd, 4096).decode('utf-8', errors='replace')
+                                    buf += extra
+                                    collected += extra
+                                    print(extra, end='', flush=True)
+                                except OSError:
+                                    break
+                                break
                     except OSError:
-                        break
-                else:
-                    if buf:
                         break
             return buf
 
         def pty_write(text):
             os.write(master_fd, (text + "\n").encode('utf-8'))
 
+        def _wait_for_shell(timeout=600):
+            """Read PTY output until a shell prompt appears or timeout."""
+            nonlocal collected
+            print(f"[DEEP] Waiting for build to fail and shell to open (timeout {timeout}s)...")
+            end = time.time() + timeout
+            while time.time() < end:
+                r, _, _ = select.select([master_fd], [], [], 1.0)
+                if r:
+                    try:
+                        data = os.read(master_fd, 4096).decode('utf-8', errors='replace')
+                        if not data:
+                            break
+                        collected += data
+                        print(data, end='', flush=True)
+                        if _SHELL_PROMPT_RE.search(collected[-200:]):
+                            time.sleep(0.3)
+                            r2, _, _ = select.select([master_fd], [], [], 0.3)
+                            if not r2:
+                                print(f"\n[DEEP] Shell ready. Starting investigation.")
+                                return True
+                    except OSError:
+                        break
+            print(f"\n[DEEP] Timed out waiting for shell prompt. Proceeding anyway.")
+            return False
+
+        def _send_and_wait(command, timeout=15):
+            """Send a command to the PTY and wait for its output (prompt-based)."""
+            print(f"[DEEP] Running: {command}")
+            pty_write(command)
+            return pty_read(timeout, wait_prompt=True)
+
         try:
-            time.sleep(3)
-            pty_read(3)
-            pty_write("cd ~/rpmbuild/BUILD/*-build/")
-            time.sleep(1)
-            pty_read(3)
-            pty_write("pwd && ls -la")
-            time.sleep(2)
-            pty_read(5)
+            _wait_for_shell()
+            _send_and_wait("cd ~/rpmbuild/BUILD/*-build/ 2>/dev/null || cd ~/rpmbuild/BUILD/*/ 2>/dev/null || true")
+            _send_and_wait("pwd && ls -la")
 
             # Auto-detect cd failure in %prep and inspect tarball
             if package_name:
@@ -446,15 +487,9 @@ class RpmSourceManager:
                 prep_failure = build_log_text and '%prep' in build_log_text
                 if cd_failure and prep_failure:
                     print(f"[DEEP] Detected cd failure in %prep. Inspecting tarball contents...")
-                    pty_write("echo '--- SOURCES ---' && ls -la ~/rpmbuild/SOURCES/")
-                    time.sleep(2)
-                    pty_read(5)
-                    pty_write("for f in ~/rpmbuild/SOURCES/*.tar.gz ~/rpmbuild/SOURCES/*.tar.bz2 ~/rpmbuild/SOURCES/*.tar.xz ~/rpmbuild/SOURCES/*.tar; do echo \"=== $f ===\"; tar -tf \"$f\" 2>/dev/null | head -20; done")
-                    time.sleep(3)
-                    pty_read(8)
-                    pty_write("echo '--- TOP-LEVEL DIRS ---' && for f in ~/rpmbuild/SOURCES/*.tar.gz ~/rpmbuild/SOURCES/*.tar.bz2 ~/rpmbuild/SOURCES/*.tar.xz ~/rpmbuild/SOURCES/*.tar; do echo \"=== $f ===\"; tar -tf \"$f\" 2>/dev/null | sed 's|/.*||' | sort -u; done")
-                    time.sleep(3)
-                    pty_read(8)
+                    _send_and_wait("echo '--- SOURCES ---' && ls -la ~/rpmbuild/SOURCES/")
+                    _send_and_wait("for f in ~/rpmbuild/SOURCES/*.tar.gz ~/rpmbuild/SOURCES/*.tar.bz2 ~/rpmbuild/SOURCES/*.tar.xz ~/rpmbuild/SOURCES/*.tar; do echo \"=== $f ===\"; tar -tf \"$f\" 2>/dev/null | head -20; done")
+                    _send_and_wait("echo '--- TOP-LEVEL DIRS ---' && for f in ~/rpmbuild/SOURCES/*.tar.gz ~/rpmbuild/SOURCES/*.tar.bz2 ~/rpmbuild/SOURCES/*.tar.xz ~/rpmbuild/SOURCES/*.tar; do echo \"=== $f ===\"; tar -tf \"$f\" 2>/dev/null | sed 's|/.*||' | sort -u; done")
                     print(f"[DEEP] Tarball inspection complete.")
 
             max_rounds = 48
@@ -482,13 +517,9 @@ RULES:
                 if command.lower().startswith("exit") or not command:
                     print(f"[DEEP] Ollama finished investigation.")
                     break
-                print(f"[DEEP] Running: {command}")
-                pty_write(command)
-                time.sleep(2)
-                output = pty_read(8)
-                if not output:
-                    time.sleep(3)
-                    output = pty_read(5)
+                output = _send_and_wait(command, timeout=15)
+                if not output or not output.strip():
+                    output = pty_read(10, wait_prompt=True)
 
                 continue_prompt = f"""The command was: {command}
 
