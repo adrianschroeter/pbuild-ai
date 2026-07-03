@@ -914,6 +914,7 @@ You MUST call one or more of these tools NOW to make changes:
 - git_command(command): run a git command
 - run_tool_script(script_name, args): run a script from tool-scripts/
 
+The spec file is already provided in the message below. Use read_file with the given path to read it locally. Do NOT use web_fetch to fetch spec files from src.opensuse.org.
 Call the tools to make changes. You may need to read files first, then call edit_file or write_file.
 Prefer edit_file for small targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: include enough surrounding lines so old_string matches ONLY ONE location.
 IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
@@ -923,7 +924,7 @@ Make all necessary changes now, then stop.
 
 AGENTS.md instructions (follow these):
 {fix_context}"""},
-                     {"role": "user", "content": f"""The build for {spec.name} failed.
+                 {"role": "user", "content": f"""The build for {spec.name} failed.
 Package: {package_name}
 Spec file path: {spec.relative_to(WORKSPACE_DIR)}
 
@@ -955,6 +956,7 @@ You MUST call one or more of these tools NOW to make changes:
 - git_command(command): run a git command
 - run_tool_script(script_name, args): run a script from tool-scripts/
 
+The spec file is already provided in the message below. Use read_file with the given path to read it locally. Do NOT use web_fetch to fetch spec files from src.opensuse.org.
 Call the tools to make changes. You may need to read files first, then call edit_file or write_file.
 Prefer edit_file for small targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: include enough surrounding lines so old_string matches ONLY ONE location.
 IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
