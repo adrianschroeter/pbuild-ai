@@ -21,7 +21,7 @@ Useful commands:
 Speeding up re-testing:
 If the error happened after the %prep and %build sections, you can speed up re-testing inside the chroot by running:
     rpmbuild -bi --short-circuit ~/rpmbuild/SOURCES/PACKAGE.spec
-This skips the earlier phases and starts from %install, allowing you to retest quickly without re-running the full build.
+This skips the earlier phases and starts from %install, allowing you to retest quickly without re-running the full build. Very useful to verify correct %files sections or failures in %install section for example.
 
 Common build failure patterns to check:
 - Missing BuildRequires: "fatal error: header.h: No such file or directory"
