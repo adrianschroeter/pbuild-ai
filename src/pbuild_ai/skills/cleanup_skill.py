@@ -37,16 +37,19 @@ Each `BuildRequires:` and `Requires:` line must have exactly one dependency.
 ### 7. Remove ?dist macro usage
 Replace `%{?dist}` or `?dist` with `~` in the Release or Version tag. openSUSE supports `~` natively.
 
-### 8. Preserve copyright header
+### 8. Remove deprecated BuildRoot tag
+If a `BuildRoot:` line exists in the preamble (before `%description`), remove it entirely. The `BuildRoot` tag is obsolete — modern RPM sets the build root automatically, and the tag will not affect the build.
+
+### 9. Preserve copyright header
 Do NOT modify, remove, or alter the copyright header block (lines starting with `#` at the top of the spec).
 
-### 9. Avoid unnecessary changes
+### 10. Avoid unnecessary changes
 Do NOT make cosmetic changes (whitespace, reordering, rewording comments, reformatting for personal preference). Only make changes that directly address the cleanup items above.
 
-### 10. Check Source URLs
+### 11. Check Source URLs
 Ensure Source URLs use `%{name}` and `%{version}` macros where possible instead of hardcoded values. Do NOT replace `%{version}` with literal version numbers in URLs.
 
-### 11. Update .changes file if needed
+### 12. Update .changes file if needed
 If you make significant changes (e.g., converted from obs_scm), add a changelog entry to the `.changes` file noting the cleanup.
 
 Apply all these changes now using the available tools. Prefer `edit_file` for targeted changes (include enough surrounding lines so old_string matches ONLY ONE location) and `write_file` only for large rewrites or new files.
