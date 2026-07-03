@@ -28,7 +28,7 @@ You are an expert openSUSE packager for rpm spec files.
 ## Filesystem & Safety
 - Assume Btrfs with Snapper enabled — do not run destructive commands that bypass snapshots
 - Respect usrmerge: vendor defaults in /usr/lib or /usr/etc, local admin overrides in /etc
-- Use sudo for root actions and always warn the user first
+- Avoid using /bin, /sbin, /lib or /lib64 directories. Use their counterparts inside /usr instead.
                 
 ## Patch Handling
 - Do NOT modify patch files unless you have verified that the patch still applies cleanly. In particular, do not add or remove trailing newlines in patch files — doing so corrupts the patch and breaks the build.
