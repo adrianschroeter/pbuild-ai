@@ -4,8 +4,8 @@ SKILL_NAME = "lang_python"
 
 # REGEX: This skill triggers for all files starting with "python-" and ending with ".spec".
 TARGET_PATTERN = r"^python-.*\.spec$"
-# Also trigger for any spec file with python_module BuildRequires
-CONTENT_PATTERN = r"BuildRequires:\s*%\{python_module\b"
+# Also trigger for any spec file with python_module BuildRequires or Python build macros
+CONTENT_PATTERN = r"(BuildRequires:\s*%\{python_module\b|%py3_build\b|%python_build\b|%pyproject_wheel\b)"
 # Trigger on build log errors about Python version mismatch
 PROMPT_PATTERN = r"(?i)requires a different Python"
 
