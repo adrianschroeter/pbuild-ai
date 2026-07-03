@@ -155,13 +155,21 @@ def build_tools_list(interactive=False):
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read the content of a file in the workspace directory. Only files within the workspace are allowed.",
+                "description": "Read the content of a file in the workspace directory. Optionally read a portion of the file by specifying offset and/or limit (both in characters). Only files within the workspace are allowed.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
                             "description": "Path to the file (relative to workspace root)"
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Character offset to start reading from (0-based, inclusive). If omitted, reads from the beginning."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of characters to read. If omitted, reads to end of file."
                         }
                     },
                     "required": ["path"]
@@ -324,7 +332,7 @@ def build_tools_list(interactive=False):
             "type": "function",
             "function": {
                 "name": "read_file_from_archive",
-                "description": "Read a specific file from inside a compressed archive (tar.gz, tar.bz2, tar.xz, tar, zip) in the workspace. Symlinks, hardlinks, files over 500 KB, and paths with ../ are rejected for security.",
+                "description": "Read a specific file from inside a compressed archive (tar.gz, tar.bz2, tar.xz, tar, zip) in the workspace. Optionally read a portion by specifying offset and/or limit (both in characters). Symlinks, hardlinks, files over 500 KB, and paths with ../ are rejected for security.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -335,6 +343,14 @@ def build_tools_list(interactive=False):
                         "file_path": {
                             "type": "string",
                             "description": "Path to the file inside the archive"
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Character offset to start reading from (0-based, inclusive). If omitted, reads from the beginning."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of characters to read. If omitted, reads to end of file."
                         }
                     },
                     "required": ["archive_path", "file_path"]
@@ -523,7 +539,14 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 continue
             try:
                 content = manager.read_file_safe(file_path)
-                print(f"[TOOL] read_file: {tool_input['path']}")
+                offset = tool_input.get("offset")
+                limit = tool_input.get("limit")
+                if offset is not None or limit is not None:
+                    start = offset if offset is not None else 0
+                    end = start + limit if limit is not None else None
+                    content = content[start:end]
+                print(f"[TOOL] read_file: {tool_input['path']}" +
+                      (f" (offset={offset}, limit={limit})" if offset is not None or limit is not None else ""))
                 results.append(content)
             except FileNotFoundError:
                 results.append(f"Error: File not found: {tool_input['path']}")
@@ -904,7 +927,12 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                                 results.append(f"Error: Cannot read {file_path} (directory or special file)")
                                 continue
                             content = f.read().decode('utf-8', errors='replace')
-                        print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)")
+                            _offset = tool_input.get("offset")
+                            _limit = tool_input.get("limit")
+                            if _offset is not None or _limit is not None:
+                                content = content[_offset or 0:(_offset or 0) + _limit if _limit is not None else None]
+                        print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)" +
+                              (f" (offset={_offset}, limit={_limit})" if any(k in tool_input for k in ("offset", "limit")) else ""))
                         results.append(content)
                 except Exception as e:
                     results.append(f"Error reading from archive: {e}")
@@ -928,7 +956,12 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                                 results.append(f"Error: File too large ({info.file_size} bytes, limit {MAX_ARCHIVE_READ_SIZE})")
                                 continue
                             content = zf.read(file_path).decode('utf-8', errors='replace')
-                        print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)")
+                            _offset = tool_input.get("offset")
+                            _limit = tool_input.get("limit")
+                            if _offset is not None or _limit is not None:
+                                content = content[_offset or 0:(_offset or 0) + _limit if _limit is not None else None]
+                        print(f"[TOOL] read_file_from_archive: {archive_path}/{file_path} ({len(content)} chars)" +
+                              (f" (offset={_offset}, limit={_limit})" if any(k in tool_input for k in ("offset", "limit")) else ""))
                         results.append(content)
                 except Exception as e:
                     results.append(f"Error reading from archive: {e}")

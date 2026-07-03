@@ -160,6 +160,27 @@ class TestReadFileFromArchive(unittest.TestCase):
         results = _call(calls, self.tmpdir)
         self.assertEqual(results[0], "all:\n\techo done\n")
 
+    def test_read_tar_gz_with_offset(self):
+        ap = self._path("test_offset.tar.gz")
+        _create_tar(ap, {"file.txt": "0123456789abcdef"})
+        calls = [("read_file_from_archive", {"archive_path": "test_offset.tar.gz", "file_path": "file.txt", "offset": 5})]
+        results = _call(calls, self.tmpdir)
+        self.assertEqual(results[0], "56789abcdef")
+
+    def test_read_tar_gz_with_limit(self):
+        ap = self._path("test_limit.tar.gz")
+        _create_tar(ap, {"file.txt": "0123456789abcdef"})
+        calls = [("read_file_from_archive", {"archive_path": "test_limit.tar.gz", "file_path": "file.txt", "limit": 7})]
+        results = _call(calls, self.tmpdir)
+        self.assertEqual(results[0], "0123456")
+
+    def test_read_tar_gz_with_offset_and_limit(self):
+        ap = self._path("test_both.tar.gz")
+        _create_tar(ap, {"file.txt": "0123456789abcdef"})
+        calls = [("read_file_from_archive", {"archive_path": "test_both.tar.gz", "file_path": "file.txt", "offset": 3, "limit": 5})]
+        results = _call(calls, self.tmpdir)
+        self.assertEqual(results[0], "34567")
+
     # --- read_file_from_archive: zip ---
 
     def test_read_zip(self):
@@ -168,6 +189,13 @@ class TestReadFileFromArchive(unittest.TestCase):
         calls = [("read_file_from_archive", {"archive_path": "test.zip", "file_path": "pkg/setup.py"})]
         results = _call(calls, self.tmpdir)
         self.assertEqual(results[0], "VERSION = '1.0'\n")
+
+    def test_read_zip_with_offset_and_limit(self):
+        ap = self._path("test_zip_both.zip")
+        _create_zip(ap, {"file.txt": "0123456789abcdef"})
+        calls = [("read_file_from_archive", {"archive_path": "test_zip_both.zip", "file_path": "file.txt", "offset": 4, "limit": 6})]
+        results = _call(calls, self.tmpdir)
+        self.assertEqual(results[0], "456789")
 
     # --- read_file_from_archive: tar.bz2 ---
 

@@ -142,6 +142,33 @@ class TestExecuteToolCallsSandbox(unittest.TestCase):
         self.assertNotIn("Error", results[0])
         self.assertIn("safe content", results[0])
 
+    def test_read_file_with_offset(self):
+        self._safe_file("offset.txt", "0123456789abcdef")
+        results = execute_tool_calls(
+            [("read_file", {"path": "offset.txt", "offset": 5})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0], "56789abcdef")
+
+    def test_read_file_with_limit(self):
+        self._safe_file("limit.txt", "0123456789abcdef")
+        results = execute_tool_calls(
+            [("read_file", {"path": "limit.txt", "limit": 7})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0], "0123456")
+
+    def test_read_file_with_offset_and_limit(self):
+        self._safe_file("both.txt", "0123456789abcdef")
+        results = execute_tool_calls(
+            [("read_file", {"path": "both.txt", "offset": 3, "limit": 5})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0], "34567")
+
     # -- write_file --
 
     def test_write_file_absolute_outside_maps_to_basename(self):
