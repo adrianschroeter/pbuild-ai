@@ -78,8 +78,8 @@ class TestStatsPrinted(unittest.TestCase):
 
     # --- --generate mode ---
 
-    def test_generate_mode_prints_stats(self):
-        """run_generate_mode calls print_stats before returning."""
+    def test_generate_mode_does_not_print_stats(self):
+        """run_generate_mode no longer calls print_stats (it moved to pbuild_ai.py)."""
         import pbuild_ai.generate_mode as gm
 
         ctx = PbuildContext(
@@ -97,17 +97,17 @@ class TestStatsPrinted(unittest.TestCase):
         ctx.tools = []
         ctx.program_start = 100.0
 
-        empty_resp = _mock_urlopen_response({"message": {}})
+        mock_resp = _mock_urlopen_response({"message": {"content": "done"}})
         with patch('sys.stdout', new_callable=io.StringIO):
-            with patch('urllib.request.urlopen', return_value=empty_resp):
+            with patch('urllib.request.urlopen', return_value=mock_resp):
                 gm.run_generate_mode(ctx)
 
-        ctx.ollama.print_stats.assert_called_once_with(manager=ctx.manager, program_start=ctx.program_start, skill_manager=ctx.skill_manager)
+        ctx.ollama.print_stats.assert_not_called()
 
     # --- --modify mode ---
 
-    def test_modify_mode_prints_stats(self):
-        """run_modify_mode calls print_stats before returning."""
+    def test_modify_mode_does_not_print_stats(self):
+        """run_modify_mode no longer calls print_stats (it moved to pbuild_ai.py)."""
         import pbuild_ai.modify_mode as mm
 
         ctx = PbuildContext(
@@ -126,9 +126,9 @@ class TestStatsPrinted(unittest.TestCase):
         ctx.program_start = 100.0
         ctx.debug = False
 
-        empty_resp = _mock_urlopen_response({"message": {}})
+        mock_resp = _mock_urlopen_response({"message": {"content": "done"}})
         with patch('sys.stdout', new_callable=io.StringIO):
-            with patch('urllib.request.urlopen', return_value=empty_resp):
+            with patch('urllib.request.urlopen', return_value=mock_resp):
                 mm.run_modify_mode(ctx)
 
-        ctx.ollama.print_stats.assert_called_once_with(manager=ctx.manager, program_start=ctx.program_start, skill_manager=ctx.skill_manager)
+        ctx.ollama.print_stats.assert_not_called()

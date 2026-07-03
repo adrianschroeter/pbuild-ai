@@ -18,12 +18,10 @@ import re
 import subprocess
 import sys
 import tarfile
-import time
-import urllib.error
-import urllib.request
 import zipfile
 from pathlib import Path
 
+from pbuild_ai.ollama_client import chat_completion
 from pbuild_ai.tools import execute_tool_calls
 from pbuild_ai.spinner import Spinner, CYAN
 
@@ -156,47 +154,8 @@ The specification for the package to create is in the system prompt above. Start
     _evaluated_archives = set()
     _injected_skills = set()
     for round_idx in range(generate_max_rounds):
-        payload = {
-            "model": ctx.ollama.model,
-            "messages": messages,
-            "tools": ctx.tools,
-            "stream": False
-        }
-        try:
-            req = urllib.request.Request(
-                ctx.ollama.chat_api_url,
-                data=json.dumps(payload).encode('utf-8'),
-                headers={'Content-Type': 'application/json'}
-            )
-            with Spinner(prefix=f"[AI] {ctx.ollama.model}", color=CYAN):
-                with urllib.request.urlopen(req, timeout=ctx.ollama.timeout) as resp:
-                    raw = resp.read().decode('utf-8')
-            if ctx.debug:
-                print(f"[DEBUG] Ollama response ({len(raw)} bytes):\n{raw}", flush=True)
-            result = json.loads(raw)
-        except urllib.error.HTTPError as e:
-            body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
-            print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} - {body}")
-            sys.exit(2)
-        except OSError as e:
-            if ctx.debug:
-                print(f"[OLLAMA] Transient error, retrying once: {e}", flush=True)
-            time.sleep(2)
-            try:
-                with urllib.request.urlopen(req, timeout=ctx.ollama.timeout) as resp:
-                    raw = resp.read().decode('utf-8')
-                result = json.loads(raw)
-            except urllib.error.HTTPError as e2:
-                body2 = e2.read().decode('utf-8', errors='replace')[:2000] if e2.fp else ''
-                print(f"[OLLAMA ERROR] HTTP {e2.code}: {e2.reason} - {body2}")
-                sys.exit(2)
-            except Exception as e2:
-                print(f"[OLLAMA ERROR] {e2}")
-                sys.exit(2)
-        except Exception as e:
-            print(f"[OLLAMA ERROR] {e}")
-            sys.exit(2)
-            break
+        with Spinner(prefix=f"[AI] {ctx.ollama.model}", color=CYAN):
+            result = chat_completion(ctx.ollama, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
         message = result.get('message', {})
         if 'tool_calls' in message and message['tool_calls']:
@@ -330,4 +289,4 @@ The specification for the package to create is in the system prompt above. Start
             print(f"[GENERATE] format_spec_file: normalized {spec_file.name}")
         except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
             pass
-    ctx.ollama.print_stats(manager=ctx.manager, program_start=ctx.program_start, skill_manager=ctx.skill_manager)
+

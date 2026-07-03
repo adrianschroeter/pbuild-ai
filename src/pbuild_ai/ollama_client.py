@@ -289,3 +289,56 @@ class OllamaAnalyzer:
 
         print(f"[AI] Reached max rounds ({max_rounds}).", flush=True)
         return all_results
+
+
+def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
+    """Send a non-streaming chat completion request with retry on transient errors
+    and empty responses. Returns the parsed result dict.
+    On HTTP/protocol errors or after 3 failed attempts, prints diagnostic info
+    and calls sys.exit(2)."""
+    payload = {"model": ollama.model, "messages": messages, "tools": tools, "stream": False}
+    data_bytes = json.dumps(payload).encode('utf-8')
+    for attempt in range(3):
+        try:
+            _t0 = time.time()
+            req = urllib.request.Request(
+                ollama.chat_api_url,
+                data=data_bytes,
+                headers={'Content-Type': 'application/json'},
+            )
+            with urllib.request.urlopen(req, timeout=ollama.timeout) as resp:
+                raw = resp.read().decode('utf-8')
+            if debug:
+                print(f"[DEBUG] Ollama response ({len(raw)} bytes):\n{raw}", flush=True)
+            result = json.loads(raw)
+            if track_stats:
+                ollama.ai_calls += 1
+                ollama.ai_time += time.time() - _t0
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
+            print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} - {body}")
+            sys.exit(2)
+        except OSError as e:
+            if attempt < 2:
+                print(f"[OLLAMA] Transient error (retry {attempt+2}/3): {e}", flush=True)
+                time.sleep(2)
+                continue
+            print(f"[OLLAMA ERROR] {e}")
+            sys.exit(2)
+        except Exception as e:
+            print(f"[OLLAMA ERROR] {e}")
+            sys.exit(2)
+
+        message = result.get('message', {})
+        if message.get('content', '').strip() or message.get('tool_calls'):
+            return result
+
+        if attempt < 2:
+            print(f"[OLLAMA] Empty response (retry {attempt+2}/3, message keys: "
+                  f"{list(message.keys())})...")
+            time.sleep(2)
+        else:
+            print(f"[OLLAMA ERROR] Empty response after 3 attempts. "
+                  f"Message keys: {list(message.keys())}. "
+                  f"Content: {message.get('content')!r}")
+            sys.exit(2)

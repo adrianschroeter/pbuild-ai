@@ -1257,6 +1257,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         if ctx.generate_prompt:
             run_generate_mode(ctx)
             if not FIX_MODE:
+                ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 sys.exit(0)
             # Re-scan for spec files created by generate mode before entering fix phase
             spec_files = [f for f in Path(WORKSPACE_DIR).rglob("*.spec") if manager._is_safe_path(f)]
@@ -1266,6 +1267,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         if ctx.modify_prompt:
             run_modify_mode(ctx)
             if not FIX_MODE:
+                ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 sys.exit(0)  # --modify without --fix: only modifies sources, does not build
 
         # Phase 1: Update pass — update all packages first without building
