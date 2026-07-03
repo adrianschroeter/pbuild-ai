@@ -813,6 +813,21 @@ if __name__ == "__main__":
         _prev_diff_summary = ""
         _prev_error_context = ""
         _prev_error_analysis = ""
+        _attempted_fixes = []
+        import hashlib as _hashlib
+        _initial_spec_hash = _hashlib.md5(manager.read_file_safe(spec).encode()).hexdigest()
+        _spec_version_hashes = [(0, _initial_spec_hash)]
+
+        def _build_attempted_fixes_context():
+            if not _attempted_fixes:
+                return ""
+            lines = ["PREVIOUSLY ATTEMPTED FIXES (ALL FAILED — do NOT suggest these again):"]
+            for _att, _diff, _err in _attempted_fixes:
+                _diff_short = _diff.replace('\n', ' | ')[:200] if _diff else '(no diff)'
+                _err_short = (_err or '')[:200].replace('\n', ' | ')
+                lines.append(f"- Attempt {_att}: {_diff_short}")
+                lines.append(f"  Result: {_err_short}")
+            return "\n".join(lines) + "\n\n"
 
         # Load saved context (if any) for the same spec
         if _ctx_file.exists():
@@ -864,7 +879,8 @@ if __name__ == "__main__":
                 print("[FIX] Error unchanged, reusing previous analysis.")
                 error_analysis = _prev_error_analysis
             else:
-                error_analysis = ollama.analyze(error_prompt, error_context, full_context)
+                _fixes_ctx = _build_attempted_fixes_context()
+                error_analysis = ollama.analyze(error_prompt, _fixes_ctx + error_context, full_context)
                 _prev_error_context = error_context
                 _prev_error_analysis = error_analysis
             _latest_analysis = error_analysis
@@ -877,7 +893,8 @@ if __name__ == "__main__":
                 time.sleep(3)
                 print("[DEEP ANALYZE] Shell exited. Re-analyzing with collected data...")
                 deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
-                error_analysis = ollama.analyze(error_prompt, error_context, deep_context)
+                _fixes_ctx = _build_attempted_fixes_context()
+                error_analysis = ollama.analyze(error_prompt, _fixes_ctx + error_context, deep_context)
                 error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                 _latest_analysis = error_analysis
                 print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
@@ -974,7 +991,7 @@ Here is the new error context:
 
 {error_context[:3000]}
 
-Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system prompt for the exact fix pattern — the solution is almost certainly described there. Apply the specific fix using write_file now."""})
+{_build_attempted_fixes_context()}Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system prompt for the exact fix pattern — the solution is almost certainly described there. Do NOT repeat any fix listed above — it already failed. Apply a DIFFERENT fix using write_file now."""})
                 MAX_HISTORY = 40
                 if len(messages) > MAX_HISTORY:
                     kept = [messages[0]] + messages[-(MAX_HISTORY - 1):]
@@ -1015,7 +1032,7 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                             _fix_snippet = _fix_match.group(1).strip()
                         prompt = f"""The build for {spec.name} failed.
 
-Error (from analysis):
+{_build_attempted_fixes_context()}Error (from analysis):
 {error_analysis[:2000]}
 
 Current spec:
@@ -1030,7 +1047,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 - No explanations, no introductory text, no summary
 - Start with the first line of the spec (typically Name: or # or %)
 - Output the COMPLETE spec, not just the changed parts
-- Just raw spec content and nothing else"""
+- Just raw spec content and nothing else
+- Do NOT repeat any fix listed in the previously attempted fixes above — they all failed."""
                         result = ollama.analyze("You are an RPM spec expert.", prompt, full_context)
                         if not result:
                             return None
@@ -1118,6 +1136,18 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 if len(diff_lines) > 20:
                     _prev_diff_summary += f"\n... ({len(diff_lines) - 20} more lines)"
                 _prev_spec = current_spec
+                # Record this fix attempt for anti-loop awareness
+                _attempted_fixes.append((fix_attempt, _prev_diff_summary, (error_context or current_build_out or "")[:500]))
+                # Circular spec detection: check if new spec matches a previous version
+                _spec_hash = _hashlib.md5(current_spec.encode()).hexdigest()
+                _match_count = sum(1 for _, h in _spec_version_hashes if h == _spec_hash)
+                if _match_count > 0:
+                    _prev_att = next(att for att, h in _spec_version_hashes if h == _spec_hash)
+                    print(f"[FIX WARNING] Circular fix detected: spec content matches attempt {_prev_att}. The LLM is reverting a previous change.", flush=True)
+                    if _match_count >= 2:
+                        print(f"[FIX ERROR] Spec has cycled back to a previous version {_match_count} times. Aborting to prevent infinite loop.", flush=True)
+                        sys.exit(1)
+                _spec_version_hashes.append((fix_attempt, _spec_hash))
             if not changed and not tool_results:
                 if messages:
                     _ctx_file.write_text(json.dumps({"version": 1, "mode": "fix", "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "messages": messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))
@@ -1162,7 +1192,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         break
                     print(f"[RETRY] Clean build also failed. Falling through to re-analysis...")
                     build_out2 = _retry_out
-                error_analysis2 = ollama.analyze(error_prompt, build_out2, full_context)
+                _fixes_ctx = _build_attempted_fixes_context()
+                error_analysis2 = ollama.analyze(error_prompt, _fixes_ctx + build_out2, full_context)
                 _latest_analysis = error_analysis2
                 print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n{error_analysis2}\n------------------------------------------\n")
                 ollama._write_analysis_file(error_analysis2)
