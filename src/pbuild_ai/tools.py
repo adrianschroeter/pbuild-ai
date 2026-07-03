@@ -615,6 +615,11 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 pass
             try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
+                if file_path.exists():
+                    size = file_path.stat().st_size
+                    print(f"[TOOL] download_file: {filename} already exists ({size} bytes), skipping download")
+                    results.append(f"OK: Already have {size} bytes at {filename}")
+                    continue
                 req = urllib.request.Request(url, headers=_auth_headers(url))
                 with Spinner(prefix="[TOOL] download", color=GREEN):
                     with urllib.request.urlopen(req, timeout=120) as response:
