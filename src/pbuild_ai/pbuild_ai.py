@@ -100,6 +100,38 @@ def _is_source_or_build_path(name: str) -> bool:
     return False
 
 
+_ENVIRONMENT_ERROR_PATTERNS = [
+    "incomplete setup of /",
+    "init_buildsystem",
+    "sysrq: Power Off",
+    ".mount.img",
+    ".mount.swap",
+    "kernel panic",
+    "cannot mount",
+    "corrupted",
+    "stale",
+    "VFS: Unable to mount root",
+]
+
+def _is_environment_error(build_out: str) -> bool:
+    """Return True if build output indicates an environment/VM/infrastructure issue
+    rather than a spec/packaging issue."""
+    if not build_out:
+        return False
+    _lower = build_out.lower()
+    # Check direct patterns
+    for _pat in _ENVIRONMENT_ERROR_PATTERNS:
+        if _pat in _lower:
+            return True
+    # Check for pbuild-level errors before any RPM phase
+    _first_lines = build_out.split('\n')[:8]
+    for _line in _first_lines:
+        if "riopp" in _line.lower() and ("error" in _line.lower() or "fail" in _line.lower()):
+            return True
+        if "pbuild" in _line.lower() and ("error" in _line.lower() or "fail" in _line.lower()):
+            return True
+    return False
+
 def _is_comment_only_change(original: str, modified: str) -> bool:
     """Return True if the only differences between original and modified
     are comment lines (starting with #) or blank/whitespace-only lines."""
@@ -283,9 +315,9 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
         if ctx.fix_mode and not build_success:
             pkg_name = package_name if 'package_name' in dir() else spec.stem
             if PROJECT_MODE:
-                rebuild_func = lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG)
+                rebuild_func = lambda p, force_clean=False: manager.run_project_build(p, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
             else:
-                rebuild_func = lambda p: manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
+                rebuild_func = lambda p, force_clean=False: manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=force_clean)
             run_fix_loop_func(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
 
     return error_prompt
@@ -850,6 +882,19 @@ if __name__ == "__main__":
                 _latest_analysis = error_analysis
                 print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
                 ollama._write_analysis_file(error_analysis)
+            if _is_environment_error(current_build_out):
+                print(f"[RETRY] Environment/VM issue detected. Retrying with --clean...")
+                if PROJECT_MODE:
+                    _retry_ok, _retry_out = manager.run_project_build(package_name, stream_output=SHOW_BUILDLOG, force_clean=True)
+                else:
+                    _retry_ok, _retry_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
+                if _retry_ok:
+                    print(f"\n[OK] Build succeeded after --clean retry.")
+                    build_success2 = True
+                    break
+                print(f"[RETRY] Clean build also failed. Re-analyzing with clean build output...")
+                current_build_out = _retry_out
+                continue
             if spec_files:
                 build_suggested_dependency(error_analysis, spec_files, manager, ollama, full_context)
             print("[FIX MODE] Applying suggested changes via tool calls...")
@@ -1106,6 +1151,15 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 break
             else:
                 print(f"\n[WARN] Fix attempt {fix_attempt} still failing.")
+                if _is_environment_error(build_out2):
+                    print(f"[RETRY] Environment/VM issue detected (attempt {fix_attempt}). Retrying with --clean...")
+                    _retry_ok, _retry_out = rebuild_func(package_name, force_clean=True)
+                    if _retry_ok:
+                        print(f"\n[OK] Build succeeded after --clean retry.")
+                        build_success2 = True
+                        break
+                    print(f"[RETRY] Clean build also failed. Falling through to re-analysis...")
+                    build_out2 = _retry_out
                 error_analysis2 = ollama.analyze(error_prompt, build_out2, full_context)
                 _latest_analysis = error_analysis2
                 print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n{error_analysis2}\n------------------------------------------\n")
@@ -1200,7 +1254,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     print(f"[PROJECT BUILD] Clean build also failed. Proceeding with fix loop.")
 
             if not run_fix_loop(spec, failed_pkg, all_out, error_prompt,
-                lambda p: manager.run_project_build(p, stream_output=SHOW_BUILDLOG)):
+                lambda p, force_clean=False: manager.run_project_build(p, stream_output=SHOW_BUILDLOG, force_clean=force_clean)):
                 return False
 
         return True
