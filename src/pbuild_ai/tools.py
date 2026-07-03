@@ -617,8 +617,10 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 if file_path.exists():
                     size = file_path.stat().st_size
-                    print(f"[TOOL] download_file: {filename} already exists ({size} bytes), skipping download")
-                    results.append(f"OK: Already have {size} bytes at {filename}")
+                    print(f"[TOOL] download_file: {filename} already exists ({size} bytes), skipping download. "
+                          f"Use remove_file first if the file is broken or needs to be re-fetched from a different URL.")
+                    results.append(f"OK: Already have {size} bytes at {filename}. "
+                                   f"Use remove_file first if the file is broken or needs to be re-downloaded from a different URL.")
                     continue
                 req = urllib.request.Request(url, headers=_auth_headers(url))
                 with Spinner(prefix="[TOOL] download", color=GREEN):
