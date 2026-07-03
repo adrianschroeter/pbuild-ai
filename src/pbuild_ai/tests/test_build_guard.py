@@ -247,6 +247,16 @@ class TestBuildGuardBuildFails(unittest.TestCase):
             )
             mock_inject.assert_not_called()
 
+    def test_fix_loop_propagates_exit_1(self):
+        """_run_build_guard must propagate SystemExit(1) from run_fix_loop when exhausted."""
+        self.run_fix_loop.side_effect = SystemExit(1)
+        with self.assertRaises(SystemExit) as cm:
+            _run_build_guard(
+                self.spec_path, self.manager, self.ollama, "full_context",
+                "error prompt", self.ctx, 100.0, self.run_fix_loop,
+            )
+        self.assertEqual(cm.exception.code, 1)
+
 
 class TestAnalyzeFlag(unittest.TestCase):
     """Verify the --analyze flag prevents builds and enforces conflicts."""

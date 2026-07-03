@@ -346,6 +346,12 @@ if __name__ == "__main__":
         _original_print(*args, **kwargs)
     _builtins.print = _flush_print
 
+    _orig_sys_exit = sys.exit
+    def _exit(code=0):
+        print(f"[EXIT] Exiting with code {code}.")
+        _orig_sys_exit(code)
+    sys.exit = _exit
+
     parser = argparse.ArgumentParser(
         description="RPM packager helper with AI-powered build-fix and version-update.\n"
                     "Main commands: --analyze, --fix, --update, --generate, --modify",
