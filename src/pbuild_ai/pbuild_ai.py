@@ -892,6 +892,7 @@ Current spec content:
 {spec_content[:5000]}
 
 Do NOT explain. Do NOT ask questions. Apply the fix using edit_file or write_file NOW.
+IMPORTANT: Your edit_file/write_file calls must use the EXACT paths from your error analysis above — do not substitute different directories or files.
 Prefer edit_file for targeted changes — it preserves all other lines.
 IMPORTANT: write_file writes the ENTIRE file. Include EVERY line verbatim.
 Keep changes minimal unless stated otherwise."""}
@@ -945,7 +946,7 @@ Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system pr
                     if r.startswith("read_file: ") and not r.startswith("read_file: Error"):
                         line_count = r.count('\n')
                         display = f"read_file: ({line_count} lines)"
-                    elif r.startswith("[Fetched "):
+                    elif r.startswith(("[Fetched ", "web_fetch: [Fetched ")):
                         display = r.split("\n", 1)[0]
                     elif r.startswith("list_files: "):
                         continue
