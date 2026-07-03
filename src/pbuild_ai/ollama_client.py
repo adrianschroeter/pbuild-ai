@@ -133,8 +133,7 @@ class OllamaAnalyzer:
             full_prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
         full_prompt = full_prompt[:self.MAX_PROMPT_CHARS]
         payload = {"model": self.model, "prompt": full_prompt, "stream": False}
-        if self._context is not None:
-            payload["context"] = self._context
+        self._context = None
         try:
             result = self._request(self.api_url, payload)
             self._context = result.get("context")
