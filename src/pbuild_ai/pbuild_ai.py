@@ -148,6 +148,39 @@ def _is_comment_only_change(original: str, modified: str) -> bool:
     return True
 
 
+def _extract_source_tarball_hint(spec_content: str, spec_path, workspace_dir: str = "") -> str:
+    """Extract the local source tarball filename from the spec's Source: line
+    and return a hint for the LLM to use read_file_from_archive."""
+    if not spec_content:
+        return ""
+    _macros = {}
+    for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', spec_content, re.M):
+        _macros[_kv.group(1).lower()] = _kv.group(2)
+    for line in spec_content.split('\n'):
+        m = re.match(r'^Source\d*:\s*(\S+)', line, re.I)
+        if m:
+            url = m.group(1).strip()
+            _expanded = url
+            for _key, _val in _macros.items():
+                _expanded = _expanded.replace(f'%{{{_key}}}', _val)
+            from urllib.parse import urlparse
+            fname = Path(urlparse(_expanded).path).name if '://' in _expanded else Path(_expanded).name
+            if not fname or fname == '.':
+                fname = _expanded
+            if fname.endswith(('.tar.gz', '.tar.bz2', '.tar.xz', '.tar', '.zip')):
+                rel = ""
+                if workspace_dir:
+                    try:
+                        rel = str(Path(spec_path).relative_to(Path(workspace_dir)))
+                    except Exception:
+                        rel = str(spec_path)
+                tarball_path = str(Path(rel).parent / fname) if rel and Path(rel).parent != Path('.') else fname
+                return (f"Local source tarball: {tarball_path} — use read_file_from_archive"
+                        f"(archive_path=\"{tarball_path}\", file_path=\"...\") to inspect its contents.\n\n")
+            break
+    return ""
+
+
 def _extract_error_context(text, context_lines=3, max_errors=30):
     """Extract lines containing 'error:' plus surrounding context from build output.
     Prepend these before the full log so they survive MAX_PROMPT_CHARS truncation.
@@ -875,6 +908,15 @@ if __name__ == "__main__":
                         print("[BUG] No build log and no unresolvable deps detected. This is likely a bug in pbuild-ai or pbuild. Aborting.")
                         sys.exit(1)
                     error_context = current_build_out
+            _files_failure = any(p in build_out_lower for p in (
+                "file not found", "unable to find", "unpackaged file",
+                "directories not owned by a package",
+            ))
+            if _files_failure:
+                _spec_content_now = manager.read_file_safe(spec)
+                _tarball_hint = _extract_source_tarball_hint(_spec_content_now, spec, WORKSPACE_DIR)
+                if _tarball_hint:
+                    error_context = _tarball_hint + error_context
             if error_context == _prev_error_context and _prev_error_analysis:
                 print("[FIX] Error unchanged, reusing previous analysis.")
                 error_analysis = _prev_error_analysis
@@ -933,6 +975,7 @@ You MUST call one or more of these tools NOW to make changes:
 - run_tool_script(script_name, args): run a script from tool-scripts/
 
 The spec file is already provided in the message below. Use read_file with the given path to read it locally. Do NOT use web_fetch to fetch spec files from any remote git hosting site (src.opensuse.org, src.fedoraproject.org, github.com, etc.).
+When you need to inspect source files, use read_file_from_archive with the local source tarball. Do NOT use web_fetch to fetch source files from upstream websites.
 Call the tools to make changes. You may need to read files first, then call edit_file or write_file.
 Prefer edit_file for targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: include enough surrounding lines so old_string matches ONLY ONE location.
 IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
@@ -976,6 +1019,7 @@ You MUST call one or more of these tools NOW to make changes:
 - run_tool_script(script_name, args): run a script from tool-scripts/
 
 The spec file is already provided in the message below. Use read_file with the given path to read it locally. Do NOT use web_fetch to fetch spec files from any remote git hosting site (src.opensuse.org, src.fedoraproject.org, github.com, etc.).
+When you need to inspect source files, use read_file_from_archive with the local source tarball. Do NOT use web_fetch to fetch source files from upstream websites.
 Call the tools to make changes. You may need to read files first, then call edit_file or write_file.
 Prefer edit_file for targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: include enough surrounding lines so old_string matches ONLY ONE location.
 IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
