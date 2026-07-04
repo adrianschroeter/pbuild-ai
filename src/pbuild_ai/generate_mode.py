@@ -23,7 +23,7 @@ from pathlib import Path
 
 from pbuild_ai.ollama_client import chat_completion
 from pbuild_ai.tools import execute_tool_calls
-from pbuild_ai.spinner import Spinner, CYAN
+from pbuild_ai.spinner import Spinner, AI_COLOR
 
 _ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
 _INDICATOR_FILES = (
@@ -154,7 +154,7 @@ The specification for the package to create is in the system prompt above. Start
     _evaluated_archives = set()
     _injected_skills = set()
     for round_idx in range(generate_max_rounds):
-        with Spinner(prefix=f"[AI] {ctx.ollama.model}", color=CYAN):
+        with Spinner(prefix=f"[AI] {ctx.ollama.model}", color=AI_COLOR):
             result = chat_completion(ctx.ollama, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
         message = result.get('message', {})

@@ -26,6 +26,7 @@ import shutil
 import difflib
 import datetime
 from pathlib import Path
+from pbuild_ai.spinner import _color, AI_COLOR
 
 if __name__ == "__main__" and not __package__:
     import sys
@@ -342,7 +343,7 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
             if not ctx.fix_mode:
                 _err_ctx = _extract_error_context(build_out)
                 error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{build_out}" if _err_ctx else build_out, full_context)
-                print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
+                print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
                 ollama._write_analysis_file(error_analysis)
 
         if ctx.fix_mode and not build_success:
@@ -926,7 +927,7 @@ if __name__ == "__main__":
                 _prev_error_context = error_context
                 _prev_error_analysis = error_analysis
             _latest_analysis = error_analysis
-            print(f"\n--- OLLAMA ERROR ANALYSIS ---\n{error_analysis}\n-----------------------------\n")
+            print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
             ollama._write_analysis_file(error_analysis)
             # Auto-trigger deep-analyze if Ollama requests it and we aren't already in that mode
             if "[DEEP_ANALYZE]" in error_analysis and not DEEP_ANALYZE:
@@ -939,7 +940,7 @@ if __name__ == "__main__":
                 error_analysis = ollama.analyze(error_prompt, _fixes_ctx + error_context, deep_context)
                 error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                 _latest_analysis = error_analysis
-                print(f"\n--- OLLAMA ERROR ANALYSIS (after deep investigation) ---\n{error_analysis}\n-----------------------------\n")
+                print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
                 ollama._write_analysis_file(error_analysis)
             if _is_environment_error(current_build_out):
                 print(f"[RETRY] Environment/VM issue detected. Retrying with --clean...")
@@ -1243,7 +1244,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 _fixes_ctx = _build_attempted_fixes_context()
                 error_analysis2 = ollama.analyze(error_prompt, _fixes_ctx + build_out2, full_context)
                 _latest_analysis = error_analysis2
-                print(f"\n--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---\n{error_analysis2}\n------------------------------------------\n")
+                print(f"\n{_color(AI_COLOR, f'--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---')}\n{error_analysis2}\n{_color(AI_COLOR, '------------------------------------------')}\n")
                 ollama._write_analysis_file(error_analysis2)
                 current_build_out = build_out2
 

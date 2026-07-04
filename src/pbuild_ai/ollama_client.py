@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 from pbuild_ai.utils import resolve_path
 
-from pbuild_ai.spinner import Spinner, CYAN
+from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.tools import execute_tool_calls
 
 
@@ -96,7 +96,7 @@ class OllamaAnalyzer:
         )
         try:
             model_name = payload.get('model', self.model)
-            with Spinner(prefix=f"[AI] {model_name}", color=CYAN):
+            with Spinner(prefix=f"[AI] {model_name}", color=AI_COLOR):
                 with self._opener.open(req, timeout=self.timeout) as response:
                     raw = response.read().decode('utf-8')
         except urllib.error.HTTPError as e:

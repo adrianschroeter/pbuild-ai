@@ -23,6 +23,8 @@ CYAN = "36"
 YELLOW = "33"
 GREEN = "32"
 
+AI_COLOR = CYAN
+
 
 class Spinner:
 
