@@ -147,8 +147,49 @@ class OllamaAnalyzer:
         if self.manager and hasattr(self.manager, '_last_log_path') and self.manager._last_log_path:
             analyze_path = Path(str(self.manager._last_log_path) + ".analyze")
             analyze_path.parent.mkdir(parents=True, exist_ok=True)
-            analyze_path.write_text(response_text, encoding='utf-8')
-            print(f"[BUILD LOG] Wrote {len(response_text)} bytes to {analyze_path}")
+            filtered = self._strip_spec_from_analysis(response_text)
+            analyze_path.write_text(filtered, encoding='utf-8')
+            print(f"[BUILD LOG] Wrote {len(filtered)} bytes to {analyze_path}")
+
+    @staticmethod
+    def _strip_spec_from_analysis(text):
+        """Remove embedded spec file content from analysis text, keeping only the analysis."""
+        if not text:
+            return text
+        # Check if the entire response IS a spec file (no analysis at all)
+        _first = next((l.strip() for l in text.split('\n') if l.strip()), '')
+        _has_analysis_markers = any(m in text for m in (
+            '### Error', '### Solution', '### Root Cause', '### Fix',
+            '**Error**', '**Fix**', '**Solution**', '**Root Cause**',
+            'Error Analysis', 'Error Cause', 'root cause',
+        ))
+        _looks_like_spec = _first.startswith('#') and 'Name:' in text and 'Version:' in text and (
+            '%prep' in text or '%build' in text or '%install' in text or '%files' in text or '%description' in text
+        )
+        if _looks_like_spec and not _has_analysis_markers:
+            return "(LLM returned spec file content instead of error analysis — see terminal output for the actual analysis)"
+        # Strip fenced spec blocks
+        lines = text.split('\n')
+        result_lines = []
+        in_spec_block = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('```spec') or (stripped.startswith('```') and any(
+                l.strip().startswith(('Name:', 'Summary:', 'Version:', '%', '#'))
+                for l in lines[max(0, i):min(len(lines), i + 5)]
+            )):
+                in_spec_block = True
+                continue
+            if in_spec_block and stripped == '```':
+                in_spec_block = False
+                continue
+            if in_spec_block:
+                continue
+            result_lines.append(line)
+        filtered = '\n'.join(result_lines).rstrip()
+        if not filtered or len(filtered) < 20:
+            return text
+        return filtered
 
     def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False):
         max_rounds = max_rounds if max_rounds > 0 else 999999
