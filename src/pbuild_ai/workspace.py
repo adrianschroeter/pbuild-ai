@@ -493,23 +493,42 @@ class RpmSourceManager:
                     print(f"[DEEP] Tarball inspection complete.")
 
             max_rounds = 48
+            _last_command = None
+            _last_output = None
+            _diagnosis = None
             for round_i in range(max_rounds):
-                inquiry_prompt = f"""{deep_analyze_prompt + chr(10) if deep_analyze_prompt else ''}You have an interactive shell inside the failed RPM build environment at ~/rpmbuild/BUILD/. The build of {package_name} failed.
+                if round_i == 0:
+                    _cmd_section = "No commands have been run yet. Suggest the first command to investigate the failure."
+                else:
+                    _cmd_section = f"""Last command run: {_last_command}
 
-Here is everything gathered so far from the shell:
-{collected[-15000:]}
+Output:
+{_last_output[-5000:] if _last_output else '(no output)'}
 
-Suggest ONE shell command to run next to investigate the failure.
+Everything gathered so far from the shell:
+{collected[-15000:]}"""
+                combined_prompt = f"""{deep_analyze_prompt + chr(10) if deep_analyze_prompt else ''}You have an interactive shell inside the failed RPM build environment at ~/rpmbuild/BUILD/. The build of {package_name} failed.
 
-RULES:
-- Output a SINGLE raw shell command only.
-- NO markdown, NO backticks, NO explanation, NO analysis.
-- NO **bold**, NO --- separators, NO headers.
-- Just the command itself, nothing else."""
-                print(f"\n[DEEP] Asking Ollama for command (round {round_i+1}/{max_rounds})...")
+{_cmd_section}
+
+Do you have enough information to diagnose and fix the {package_name} build failure?
+- If YES: Start your response with "DONE:" then explain the root cause and the specific fix needed.
+- If NO: Start your response with "NEXT:" then output a SINGLE raw shell command to run next. NO markdown, NO backticks, NO explanation — just the command after "NEXT:"."""
+                print(f"\n[DEEP] Asking Ollama (round {round_i+1}/{max_rounds})...")
                 if debug:
-                    print(f"[DEEP PROMPT]\n{inquiry_prompt}\n[/DEEP PROMPT]")
-                raw = ollama.analyze("You are investigating a failed RPM build interactively.", inquiry_prompt, full_context).strip()
+                    print(f"[DEEP PROMPT]\n{combined_prompt}\n[/DEEP PROMPT]")
+                raw = ollama.analyze("You are investigating a failed RPM build interactively.", combined_prompt, full_context).strip()
+                if not raw:
+                    print(f"[DEEP] Empty response, skipping round.")
+                    continue
+                _upper = raw.upper()
+                if _upper.startswith("DONE:"):
+                    _diagnosis = raw[5:].strip()
+                    model_name = ollama.model if ollama else "unknown"
+                    print(f"[DEEP] AI({model_name}) has enough information. Proceeding to fix.")
+                    break
+                if _upper.startswith("NEXT:"):
+                    raw = raw[5:].strip()
                 command = _extract_shell_command(raw)
                 if command is None:
                     print(f"[DEEP] No valid command found in response, skipping round.")
@@ -520,31 +539,21 @@ RULES:
                 output = _send_and_wait(command, timeout=15)
                 if not output or not output.strip():
                     output = pty_read(10, wait_prompt=True)
+                _last_command = command
+                _last_output = output
 
-                continue_prompt = f"""The command was: {command}
-
-Output:
-{output[-5000:] if output else '(no output)'}
-
-Do you have enough information to diagnose and fix the {package_name} build failure? Reply with exactly one word: YES or NO."""
-                if debug:
-                    print(f"[DEEP PROMPT]\n{continue_prompt}\n[/DEEP PROMPT]")
-                answer = ollama.analyze("You are investigating a failed RPM build.", continue_prompt, full_context).strip().upper()
-                model_name = ollama.model if ollama else "unknown"
-                print(f"[DEEP] AI({model_name}) says: {answer}")
-                if answer.startswith("Y"):
-                    print(f"[DEEP] Ollama has enough information. Proceeding to fix.")
-                    break
-
-            final_prompt = f"""The interactive investigation is complete. Here is everything collected from the build environment:
+            if _diagnosis:
+                print(f"\n[DEEP] Final diagnosis:\n{_diagnosis}\n")
+            else:
+                final_prompt = f"""The interactive investigation is complete. Here is everything collected from the build environment:
 
 {collected[-20000:]}
 
 Summarize the root cause of the {package_name} build failure and what fix is needed. Be specific."""
-            if debug:
-                print(f"\n[DEEP PROMPT]\n{final_prompt}\n[/DEEP PROMPT]")
-            summary = ollama.analyze("You summarize build failure investigations.", final_prompt, full_context)
-            print(f"\n[DEEP] Final diagnosis:\n{summary}\n")
+                if debug:
+                    print(f"\n[DEEP PROMPT]\n{final_prompt}\n[/DEEP PROMPT]")
+                summary = ollama.analyze("You summarize build failure investigations.", final_prompt, full_context)
+                print(f"\n[DEEP] Final diagnosis:\n{summary}\n")
 
         except Exception as e:
             print(f"[DEEP ERROR] {e}")
