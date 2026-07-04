@@ -982,6 +982,7 @@ IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
 PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM — do not add, remove, or modify anything beyond the specific fix.
 Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise.
 Make all necessary changes now, then stop.
+Make only ONE edit to each file. Do NOT rewrite or re-edit a file you have already modified in this session. Plan your change carefully, apply it once, then stop.
 
 AGENTS.md instructions (follow these):
 {fix_context}"""},
@@ -1026,6 +1027,7 @@ IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
 PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM — do not add, remove, or modify anything beyond the specific fix.
 Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise.
 Make all necessary changes now, then stop.
+Make only ONE edit to each file. Do NOT rewrite or re-edit a file you have already modified in this session. Plan your change carefully, apply it once, then stop.
 
 AGENTS.md instructions (follow these):
 {fix_context}"""}

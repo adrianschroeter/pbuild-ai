@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import hashlib
 import json
 import os
 import sys
@@ -194,6 +195,21 @@ class OllamaAnalyzer:
     def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False):
         max_rounds = max_rounds if max_rounds > 0 else 999999
         all_results = []
+        _file_versions = {}
+        _blocked_files = set()
+        _WRITE_TOOLS = {"write_file", "edit_file"}
+        # Record initial versions of all spec files so reverts to original are caught
+        if workspace_dir:
+            try:
+                for _sf in Path(workspace_dir).glob("*.spec"):
+                    try:
+                        _init = manager.read_file_safe(_sf)
+                        _init_hash = hashlib.md5(_init.encode()).hexdigest()
+                        _file_versions[_sf.name] = [_init_hash]
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         for round_idx in range(max_rounds):
             if self._chat_supported:
                 payload = {
@@ -291,8 +307,104 @@ class OllamaAnalyzer:
                 if self.debug:
                     print(f"[AI] Tool call: {name}({args_preview})", flush=True)
 
-            round_results = execute_tool_calls(round_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive, debug=self.debug)
-            for (name, inp), r in zip(round_calls, round_results):
+            # Anti-oscillation: pre-filter write/edit calls to detect reverts, no-ops, and blocked files
+            _filtered_calls = []
+            _skipped_results = []
+            _all_skipped = True
+            for name, tool_input in round_calls:
+                if name not in _WRITE_TOOLS:
+                    _filtered_calls.append((name, tool_input))
+                    _all_skipped = False
+                    continue
+                _path = tool_input.get("path", "")
+                _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
+                if _path in _blocked_files:
+                    _msg = f"SKIP: {_path} is blocked (reverted a previous change). No further edits accepted."
+                    _skipped_results.append(((name, tool_input), _msg))
+                    print(f"[FIX] {_msg}", flush=True)
+                    continue
+                if name == "write_file":
+                    _new_content = tool_input.get("content", "")
+                    _new_hash = hashlib.md5(_new_content.encode()).hexdigest()
+                    if _resolved and _resolved.exists():
+                        try:
+                            _current = manager.read_file_safe(_resolved)
+                            if hashlib.md5(_current.encode()).hexdigest() == _new_hash:
+                                _msg = f"OK: File unchanged: {_path}"
+                                _skipped_results.append(((name, tool_input), _msg))
+                                print(f"[FIX] {_msg}", flush=True)
+                                continue
+                        except Exception:
+                            pass
+                    _versions = _file_versions.get(_path, [])
+                    if _new_hash in _versions:
+                        _blocked_files.add(_path)
+                        _msg = f"SKIP: write_file to {_path} reverts to a previous version. File is now blocked."
+                        _skipped_results.append(((name, tool_input), _msg))
+                        print(f"[FIX] {_msg}", flush=True)
+                        continue
+                    _filtered_calls.append((name, tool_input))
+                    _all_skipped = False
+                elif name == "edit_file":
+                    if not _resolved or not _resolved.exists():
+                        _filtered_calls.append((name, tool_input))
+                        _all_skipped = False
+                        continue
+                    _old_string = tool_input.get("old_string", "")
+                    _new_string = tool_input.get("new_string", "")
+                    if not _old_string:
+                        _filtered_calls.append((name, tool_input))
+                        _all_skipped = False
+                        continue
+                    try:
+                        _current = manager.read_file_safe(_resolved)
+                    except Exception:
+                        _filtered_calls.append((name, tool_input))
+                        _all_skipped = False
+                        continue
+                    if _current.count(_old_string) != 1:
+                        _filtered_calls.append((name, tool_input))
+                        _all_skipped = False
+                        continue
+                    _new_content = _current.replace(_old_string, _new_string, 1)
+                    _new_hash = hashlib.md5(_new_content.encode()).hexdigest()
+                    _versions = _file_versions.get(_path, [])
+                    if _new_hash in _versions:
+                        _blocked_files.add(_path)
+                        _msg = f"SKIP: edit_file to {_path} reverts to a previous version. File is now blocked."
+                        _skipped_results.append(((name, tool_input), _msg))
+                        print(f"[FIX] {_msg}", flush=True)
+                        continue
+                    _filtered_calls.append((name, tool_input))
+                    _all_skipped = False
+
+            if _all_skipped and _filtered_calls == [] and all_results:
+                # Add skipped results to all_results and messages before breaking
+                for name, tool_input in round_calls:
+                    _skip_msg = next((r for (n, i), r in _skipped_results if i is tool_input), "SKIP: tool call skipped")
+                    all_results.append(f"{name}: {_skip_msg}")
+                    messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
+                    messages.append({"role": "tool", "content": str(_skip_msg), "name": name})
+                print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
+                break
+
+            round_results = execute_tool_calls(_filtered_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive, debug=self.debug)
+            # Merge executed and skipped results in original round_calls order
+            _executed_map = {}
+            for (name, inp), r in zip(_filtered_calls, round_results):
+                _executed_map[id(inp)] = r
+            _skipped_map = {}
+            for (name, inp), r in _skipped_results:
+                _skipped_map[id(inp)] = r
+            _merged_results = []
+            for name, inp in round_calls:
+                if id(inp) in _executed_map:
+                    _merged_results.append((name, inp, _executed_map[id(inp)]))
+                elif id(inp) in _skipped_map:
+                    _merged_results.append((name, inp, _skipped_map[id(inp)]))
+                else:
+                    _merged_results.append((name, inp, "Error: tool call not executed"))
+            for name, inp, r in _merged_results:
                 if name == "read_file":
                     line_count = r.count('\n')
                     display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
@@ -302,16 +414,32 @@ class OllamaAnalyzer:
                     if not self.debug:
                         continue
                     display = r[:500] + "..." if len(r) > 500 else r
-                elif r.startswith("[Fetched "):
+                elif r.startswith("[Fetched ") or r.startswith("web_fetch: [Fetched "):
                     display = r.split("\n", 1)[0]
                 else:
                     display = r[:500] + "..." if len(r) > 500 else r
                 print(f"[FIX] {display}", flush=True)
-            all_results.extend(f"{name}: {r}" for (name, _), r in zip(round_calls, round_results))
+            all_results.extend(f"{name}: {r}" for name, _, r in _merged_results)
+
+            # Record file versions after successful write/edit
+            for name, inp, r in _merged_results:
+                if name in _WRITE_TOOLS and r.startswith("OK:"):
+                    _path = inp.get("path", "")
+                    if _path:
+                        _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
+                        if _resolved and _resolved.exists():
+                            try:
+                                _content = manager.read_file_safe(_resolved)
+                                _hash = hashlib.md5(_content.encode()).hexdigest()
+                                if _path not in _file_versions:
+                                    _file_versions[_path] = []
+                                _file_versions[_path].append(_hash)
+                            except Exception:
+                                pass
 
             messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
             _injected_edit_help = False
-            for (name, inp), content in zip(round_calls, round_results):
+            for name, inp, content in _merged_results:
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
                 messages.append({"role": "tool", "content": str(content), "name": name})
