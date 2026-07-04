@@ -309,18 +309,22 @@ class OllamaAnalyzer:
 
             # Anti-oscillation: pre-filter write/edit calls to detect reverts, no-ops, and blocked files
             _filtered_calls = []
+            _filtered_indices = []
             _skipped_results = []
+            _skipped_indices = []
             _all_skipped = True
-            for name, tool_input in round_calls:
+            for _ci, (name, tool_input) in enumerate(round_calls):
                 if name not in _WRITE_TOOLS:
                     _filtered_calls.append((name, tool_input))
+                    _filtered_indices.append(_ci)
                     _all_skipped = False
                     continue
                 _path = tool_input.get("path", "")
                 _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
                 if _path in _blocked_files:
                     _msg = f"SKIP: {_path} is blocked (reverted a previous change). No further edits accepted."
-                    _skipped_results.append(((name, tool_input), _msg))
+                    _skipped_results.append(_msg)
+                    _skipped_indices.append(_ci)
                     print(f"[FIX] {_msg}", flush=True)
                     continue
                 if name == "write_file":
@@ -331,7 +335,8 @@ class OllamaAnalyzer:
                             _current = manager.read_file_safe(_resolved)
                             if hashlib.md5(_current.encode()).hexdigest() == _new_hash:
                                 _msg = f"OK: File unchanged: {_path}"
-                                _skipped_results.append(((name, tool_input), _msg))
+                                _skipped_results.append(_msg)
+                                _skipped_indices.append(_ci)
                                 print(f"[FIX] {_msg}", flush=True)
                                 continue
                         except Exception:
@@ -340,30 +345,36 @@ class OllamaAnalyzer:
                     if _new_hash in _versions:
                         _blocked_files.add(_path)
                         _msg = f"SKIP: write_file to {_path} reverts to a previous version. File is now blocked."
-                        _skipped_results.append(((name, tool_input), _msg))
+                        _skipped_results.append(_msg)
+                        _skipped_indices.append(_ci)
                         print(f"[FIX] {_msg}", flush=True)
                         continue
                     _filtered_calls.append((name, tool_input))
+                    _filtered_indices.append(_ci)
                     _all_skipped = False
                 elif name == "edit_file":
                     if not _resolved or not _resolved.exists():
                         _filtered_calls.append((name, tool_input))
+                        _filtered_indices.append(_ci)
                         _all_skipped = False
                         continue
                     _old_string = tool_input.get("old_string", "")
                     _new_string = tool_input.get("new_string", "")
                     if not _old_string:
                         _filtered_calls.append((name, tool_input))
+                        _filtered_indices.append(_ci)
                         _all_skipped = False
                         continue
                     try:
                         _current = manager.read_file_safe(_resolved)
                     except Exception:
                         _filtered_calls.append((name, tool_input))
+                        _filtered_indices.append(_ci)
                         _all_skipped = False
                         continue
                     if _current.count(_old_string) != 1:
                         _filtered_calls.append((name, tool_input))
+                        _filtered_indices.append(_ci)
                         _all_skipped = False
                         continue
                     _new_content = _current.replace(_old_string, _new_string, 1)
@@ -372,38 +383,39 @@ class OllamaAnalyzer:
                     if _new_hash in _versions:
                         _blocked_files.add(_path)
                         _msg = f"SKIP: edit_file to {_path} reverts to a previous version. File is now blocked."
-                        _skipped_results.append(((name, tool_input), _msg))
+                        _skipped_results.append(_msg)
+                        _skipped_indices.append(_ci)
                         print(f"[FIX] {_msg}", flush=True)
                         continue
                     _filtered_calls.append((name, tool_input))
+                    _filtered_indices.append(_ci)
                     _all_skipped = False
 
             if _all_skipped and _filtered_calls == [] and all_results:
-                # Add skipped results to all_results and messages before breaking
-                for name, tool_input in round_calls:
-                    _skip_msg = next((r for (n, i), r in _skipped_results if i is tool_input), "SKIP: tool call skipped")
+                for _si, _ci in enumerate(_skipped_indices):
+                    name, inp = round_calls[_ci]
+                    _skip_msg = _skipped_results[_si]
                     all_results.append(f"{name}: {_skip_msg}")
-                    messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
-                    messages.append({"role": "tool", "content": str(_skip_msg), "name": name})
+                messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
+                for _si, _ci in enumerate(_skipped_indices):
+                    name, inp = round_calls[_ci]
+                    messages.append({"role": "tool", "content": str(_skipped_results[_si]), "name": name})
                 print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
                 break
 
             round_results = execute_tool_calls(_filtered_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive, debug=self.debug)
-            # Merge executed and skipped results in original round_calls order
-            _executed_map = {}
-            for (name, inp), r in zip(_filtered_calls, round_results):
-                _executed_map[id(inp)] = r
-            _skipped_map = {}
-            for (name, inp), r in _skipped_results:
-                _skipped_map[id(inp)] = r
+            # Merge executed and skipped results in original round_calls order by index
             _merged_results = []
-            for name, inp in round_calls:
-                if id(inp) in _executed_map:
-                    _merged_results.append((name, inp, _executed_map[id(inp)]))
-                elif id(inp) in _skipped_map:
-                    _merged_results.append((name, inp, _skipped_map[id(inp)]))
+            for _ci, (name, inp) in enumerate(round_calls):
+                if _ci in _filtered_indices:
+                    _fi = _filtered_indices.index(_ci)
+                    _merged_results.append((name, inp, round_results[_fi]))
+                elif _ci in _skipped_indices:
+                    _si = _skipped_indices.index(_ci)
+                    _merged_results.append((name, inp, _skipped_results[_si]))
                 else:
-                    _merged_results.append((name, inp, "Error: tool call not executed"))
+                    _path = inp.get("path", "?") if isinstance(inp, dict) else "?"
+                    _merged_results.append((name, inp, f"Error: {name} for {_path} was not executed (skipped by anti-oscillation filter)"))
             for name, inp, r in _merged_results:
                 if name == "read_file":
                     line_count = r.count('\n')
