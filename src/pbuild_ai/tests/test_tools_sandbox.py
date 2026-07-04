@@ -543,6 +543,96 @@ class TestGitPushBlocked(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertNotIn("not allowed", results[0])
 
+    def test_git_without_prefix_allowed(self):
+        """git_command accepts commands without the 'git ' prefix."""
+        results = execute_tool_calls(
+            [("git_command", {"command": "clone https://example.com/repo.git"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("must start with", results[0])
+
+    def test_git_dash_C_subdir_allowed(self):
+        """git -C <subdir> is allowed when subdir is within workspace."""
+        subdir = Path(self.ws) / "myrepo"
+        subdir.mkdir()
+        results = execute_tool_calls(
+            [("git_command", {"command": "git -C myrepo status"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("outside the workspace", results[0])
+
+    def test_git_dash_C_dotdot_blocked(self):
+        """git -C .. is blocked (directory escape)."""
+        results = execute_tool_calls(
+            [("git_command", {"command": "git -C .. status"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("outside the workspace", results[0])
+
+    def test_git_dash_C_absolute_blocked(self):
+        """git -C /etc is blocked (absolute path outside workspace)."""
+        results = execute_tool_calls(
+            [("git_command", {"command": "git -C /etc status"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("outside the workspace", results[0])
+
+    def test_git_dash_C_dotdot_deep_blocked(self):
+        """git -C ../../tmp is blocked (escape via ..)."""
+        results = execute_tool_calls(
+            [("git_command", {"command": "git -C ../../tmp status"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("outside the workspace", results[0])
+
+    def test_git_shell_metachar_semicolon_blocked(self):
+        """Shell metacharacters are blocked to prevent injection."""
+        results = execute_tool_calls(
+            [("git_command", {"command": "git clone foo; rm -rf /"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("metacharacters", results[0])
+
+    def test_git_shell_metachar_pipe_blocked(self):
+        results = execute_tool_calls(
+            [("git_command", {"command": "git status | cat"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("metacharacters", results[0])
+
+    def test_git_shell_metachar_backtick_blocked(self):
+        results = execute_tool_calls(
+            [("git_command", {"command": "git status `whoami`"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("metacharacters", results[0])
+
+    def test_git_dash_C_deep_dotdot_blocked(self):
+        """git -C somedir/../../../ is blocked (escape via nested ..)."""
+        results = execute_tool_calls(
+            [("git_command", {"command": "git -C somedirectory/../../../ status"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("outside the workspace", results[0])
+
+    def test_git_dash_C_subdir_dotdot_to_etc_blocked(self):
+        """git -C subdir/../../../../etc is blocked (escape to /etc)."""
+        results = execute_tool_calls(
+            [("git_command", {"command": "git -C subdir/../../../../etc status"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("outside the workspace", results[0])
+
 
 if __name__ == "__main__":
     unittest.main()

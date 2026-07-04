@@ -678,8 +678,12 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             if not command:
                 results.append("Error: git_command requires a 'command' argument")
                 continue
-            if not command.startswith("git "):
-                results.append("Error: Command must start with 'git '")
+            command = command.strip()
+            if command.startswith("git "):
+                command = command[4:]
+            # Reject shell metacharacters to prevent injection
+            if re.search(r'[;|&$`><\n]', command):
+                results.append("Error: Shell metacharacters (;|&$`><) are not allowed in git_command.")
                 continue
             blocked_patterns = ["push"]
             cmd_parts = command.split()
@@ -688,12 +692,26 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     results.append(f"Error: Git operation '{pattern}' is not allowed. Only local operations like submodule add are permitted.")
                     break
             else:
-                full_cmd = f"cd {workspace} && {command}"
+                # Validate -C <dir> paths to prevent directory escape
+                # git -C handles the directory change natively; we just validate safety
+                if "-C" in cmd_parts:
+                    _c_idx = cmd_parts.index("-C")
+                    if _c_idx + 1 < len(cmd_parts):
+                        _dir_arg = cmd_parts[_c_idx + 1]
+                        _resolved_dir = (workspace / _dir_arg).resolve()
+                        try:
+                            if not _resolved_dir.is_relative_to(workspace):
+                                results.append(f"Error: git -C path '{_dir_arg}' is outside the workspace directory.")
+                                continue
+                        except (ValueError, OSError):
+                            results.append(f"Error: git -C path '{_dir_arg}' is outside the workspace directory.")
+                            continue
+                full_cmd = f"git {command}"
                 try:
                     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
                     result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True, cwd=workspace, env=env)
                     if result.returncode == 0:
-                        print(f"[TOOL] git_command: {command}")
+                        print(f"[TOOL] git_command: git {command}")
                         output = (result.stdout or "") + (result.stderr or "")
                         results.append(output[:10000] if output else "OK")
                     else:

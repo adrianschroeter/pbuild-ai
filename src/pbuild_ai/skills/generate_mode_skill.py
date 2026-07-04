@@ -35,6 +35,7 @@ Follow these rules:
 7. When you are done creating files, call run_tool_script("format_spec_file", []) on the spec directory as your final step to normalize spec formatting.
 8. Tell the user what you created.
 9. Do NOT use HTML or markdown formatting in your text responses — use plain text only. No <b>, <a>, <pre>, or any other tags.
+10. To look at existing openSUSE package specs as a reference, use git_command("git clone https://src.opensuse.org/pool/<pkg>.git") then git_command("git -C <pkg> checkout <branch>") to switch branches inside the cloned repo (the `git -C <dir>` flag runs the command in that directory without needing `cd`). The command argument MUST start with "git ". Branch names have no spaces, typical names are factory, slfo-main, slfo-X.Y, leap-X.Y or Leap-X.Y. X.Y may be the openSUSE Leap version, or the code stream for SLES. SLES 16.0 has slfo-1.2. Do NOT use web_fetch on src.opensuse.org URLs — they return 404.
 
 AGENTS.md instructions (follow these):
 {full_context}"""

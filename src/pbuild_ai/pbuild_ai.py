@@ -429,7 +429,7 @@ if __name__ == "__main__":
     parser.add_argument("--version", action="store_true", help="Show version and exit")
     parser.add_argument("--fix", "-f", action="store_true", help="Main command: apply AI-suggested fixes to build failures and run test builds to verify")
     parser.add_argument("--update", "-u", action="store_true", help="Main command: update to latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
-    parser.add_argument("--generate", default=None, help="Main command: generate a new package from scratch based on the given prompt")
+    parser.add_argument("--generate", "--create", "-g", "-c", default=None, help="Main command: generate a new package from scratch based on the given prompt")
     parser.add_argument("--modify", "-m", default=None, help="Main command: send a modification prompt + sources to Ollama, apply changes locally, then exit (no build)")
     parser.add_argument("--root", default=None, help="Root directory for pbuild (passed as --root to pbuild)")
     parser.add_argument("--show-buildlog", "-L", action="store_true", help="Show the pbuild build log output")
