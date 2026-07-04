@@ -401,7 +401,7 @@ class RpmSourceManager:
         import pty
         import select
 
-        _SHELL_PROMPT_RE = re.compile(r'[#\$]\s*(\x1b\[[0-9;]*m)?\s*$')
+        _SHELL_PROMPT_RE = re.compile(r'[#\$>]\s*(\x1b\[[0-9;]*m)?\s*$')
 
         master_fd, slave_fd = pty.openpty()
         t0 = time.time()
