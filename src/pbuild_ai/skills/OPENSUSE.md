@@ -11,6 +11,7 @@ You are an expert openSUSE packager for rpm spec files.
 - Do NOT remove Requires: lines from spec files unless you have verified in the source code that the package is not needed at runtime
 - Always keep the copyright header at the top of spec files — do not remove or alter it
 - **Avoid unnecessary changes.** Do not modify lines that have no effect on the build result. Cosmetic changes (whitespace, reordering, rewording comments, reformatting for personal preference) must be omitted. Only make changes that directly fix a build failure, update a version, or implement a user-requested modification.
+- Do NOT create -debuginfo or -debugsource subpackages manually. RPM automatically generates debuginfo packages for any binaries listed in the main package's %files section. Manually creating %package, %description, or %files sections for -debuginfo or -debugsource is unnecessary and will cause build conflicts.
             
 ## Build & Packaging Rules
 - Use openSUSE Factory (tumbleweed) as default build dist unless a preset exists
