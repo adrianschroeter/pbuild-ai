@@ -8,7 +8,7 @@ The main functionality is either:
 * Modify sources via a natural-language prompt (`--modify`)
 * Run builds and fix possible build failures (`--fix`)
 * Update sources to current upstream version and verify (`--update`)
-* Generate a new package from scratch (`--generate`)
+* Generate a new package from scratch (`--generate` / `--create`)
 
 pbuild-ai is safe by default — it only allows modifications to local
 package sources.
@@ -206,12 +206,13 @@ variable. Defaults to `http://localhost:11434`.
 Sets the Ollama model name. Overrides the `OLLAMA_MODEL` environment
 variable. Defaults to `gemma4`.
 
-### `--generate PROMPT`
+### `--generate PROMPT` / `--create PROMPT`
 
-Creates a new openSUSE RPM package from scratch. The given prompt
-describes what to package. pbuild-ai researches upstream sources via
-web fetch, asks clarifying questions, and writes spec files and
-supporting files into the workspace directory.
+Creates a new openSUSE RPM package from scratch. `--create` is an alias
+for `--generate`. The given prompt describes what to package.
+pbuild-ai researches upstream sources via web fetch, asks clarifying
+questions, and writes spec files and supporting files into the workspace
+directory.
 
 Combine with `--fix` to automatically test-build and fix failures after
 generation. Without `--fix`, no build is performed.
