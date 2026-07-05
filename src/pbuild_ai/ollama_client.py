@@ -409,7 +409,11 @@ class OllamaAnalyzer:
             for _ci, (name, inp) in enumerate(round_calls):
                 if _ci in _filtered_indices:
                     _fi = _filtered_indices.index(_ci)
-                    _merged_results.append((name, inp, round_results[_fi]))
+                    if _fi < len(round_results):
+                        _merged_results.append((name, inp, round_results[_fi]))
+                    else:
+                        _path = inp.get("path", "?") if isinstance(inp, dict) else "?"
+                        _merged_results.append((name, inp, f"Error: {name} for {_path} produced no result"))
                 elif _ci in _skipped_indices:
                     _si = _skipped_indices.index(_ci)
                     _merged_results.append((name, inp, _skipped_results[_si]))
