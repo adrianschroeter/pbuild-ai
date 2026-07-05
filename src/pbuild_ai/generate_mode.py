@@ -76,7 +76,7 @@ def _check_archives_for_skills(ctx, evaluated_archives, injected_skills, message
 
 
 def _apply_matching_skills(ctx, filename, content, injected_skills, messages):
-    matching = ctx.skill_manager.get_skills_for(filename, content, None)
+    matching = ctx.skill_manager.get_skills_for(filename, content, ctx.generate_prompt)
     for skill in matching:
         skill_name = getattr(skill, 'SKILL_NAME', '?')
         if skill_name in injected_skills:
