@@ -1195,6 +1195,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     print(f"[FIX WARNING] Circular fix detected: spec content matches attempt {_prev_att}. The LLM is reverting a previous change.", flush=True)
                     if _match_count >= 2:
                         print(f"[FIX ERROR] Spec has cycled back to a previous version {_match_count} times. Aborting to prevent infinite loop.", flush=True)
+                        ollama.print_stats(manager, ctx.program_start, skill_manager)
                         sys.exit(1)
                 _spec_version_hashes.append((fix_attempt, _spec_hash))
             if not changed and not tool_results:
@@ -1254,6 +1255,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart.")
             label = MAX_ATTEMPTS if not unlimited else "unlimited"
             print(f"[FIX ERROR] All {label} fix attempts exhausted. Build still failing.")
+            ollama.print_stats(manager, ctx.program_start, skill_manager)
             sys.exit(1)
 
         return build_success2
