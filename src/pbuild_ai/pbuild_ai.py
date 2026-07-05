@@ -182,6 +182,81 @@ def _extract_source_tarball_hint(spec_content: str, spec_path, workspace_dir: st
     return ""
 
 
+def _extract_unpackaged_files(build_output: str) -> str:
+    """Extract the list of 'Installed (but unpackaged) file(s) found:' from RPM build output.
+
+    Returns a formatted block with the complete file list, a per-directory summary,
+    and a mapping of common paths to their RPM macros. Returns empty string if no
+    unpackaged files are found.
+    """
+    if not build_output:
+        return ""
+    # Match the unpackaged files section header
+    _m = re.search(
+        r'Installed\s*\(but\s+unpackaged\)\s+file\(s\)\s+found:\s*\n',
+        build_output, re.I
+    )
+    if not _m:
+        return ""
+    # Collect all absolute paths from lines following the header, stopping at blank line
+    _body = build_output[_m.end():]
+    _files = []
+    for _line in _body.split('\n'):
+        # Strip timestamp prefix like "[   56s]   " then whitespace
+        _stripped = re.sub(r'^\[.*?\]\s*', '', _line).strip()
+        if not _stripped:
+            break  # blank line ends the section
+        if _stripped.startswith('/') and not _stripped.startswith('/usr/src'):
+            _files.append(_stripped)
+        elif not _stripped.startswith('/') and _files:
+            # If we've been collecting files and this line doesn't start with /, stop
+            # (but only if we've already found at least one file)
+            break
+    if not _files:
+        return ""
+    _dirs = {}
+    for _f in _files:
+        _d = str(Path(_f).parent)
+        _dirs.setdefault(_d, []).append(_f)
+    _macros = {
+        '/usr/bin':        '%{_bindir}/*',
+        '/usr/sbin':       '%{_sbindir}/*',
+        '/usr/lib':        '%{_libdir}/*',
+        '/usr/lib64':      '%{_libdir}/*',
+        '/usr/share':      '%{_datadir}/*',
+        '/usr/share/man':  '%{_mandir}/*',
+        '/usr/share/info': '%{_infodir}/*',
+        '/usr/share/doc':  '%{_docdir}/*',
+        '/etc':            '%{_sysconfdir}/*',
+    }
+    def _best_macro(path: str) -> str:
+        """Find the best macro for a path by checking parent dirs."""
+        _norm = path.rstrip('/')
+        while _norm:
+            if _norm in _macros:
+                return _macros[_norm]
+            _parent = str(Path(_norm).parent)
+            if _parent == _norm:
+                break
+            _norm = _parent
+        return ""
+    _result = ["UNPACKAGED FILES (every file below MUST be added to %%files):"]
+    for _f in _files:
+        _result.append(f"  {_f}")
+    _result.append("")
+    _result.append(f"Total: {len(_files)} file(s) across {len(_dirs)} director{'y' if len(_dirs) == 1 else 'ies'}:")
+    for _d in sorted(_dirs):
+        _macro = _best_macro(_d.rstrip('/'))
+        _count = len(_dirs[_d])
+        _macro_hint = f"  \u2192 use {_macro}" if _macro else ""
+        _result.append(f"  {_d}/ \u2014 {_count} file(s){_macro_hint}")
+    _result.append("")
+    _result.append("IMPORTANT: Paths like /usr/share/info and /usr/share/man are NOT automatically handled.")
+    _result.append("You MUST add them to %%files explicitly. Prefer the RPM macro form above where available.")
+    _result.append("--- END UNPACKAGED FILES ---")
+    return "\n".join(_result)
+
+
 def _extract_error_context(text, context_lines=3, max_errors=30):
     """Extract lines containing 'error:' plus surrounding context from build output.
     Prepend these before the full log so they survive MAX_PROMPT_CHARS truncation.
@@ -914,6 +989,9 @@ if __name__ == "__main__":
                 "directories not owned by a package",
             ))
             if _files_failure:
+                _unpackaged_block = _extract_unpackaged_files(current_build_out)
+                if _unpackaged_block:
+                    error_context = _unpackaged_block + "\n\n" + error_context
                 _spec_content_now = manager.read_file_safe(spec)
                 _tarball_hint = _extract_source_tarball_hint(_spec_content_now, spec, WORKSPACE_DIR)
                 if _tarball_hint:
@@ -929,6 +1007,15 @@ if __name__ == "__main__":
             _latest_analysis = error_analysis
             print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
             ollama._write_analysis_file(error_analysis)
+            # Demote DEEP_ANALYZE for unpackaged-file-only errors (fix is trivial — just add files to %files)
+            if "[DEEP_ANALYZE]" in error_analysis and _files_failure and not any(
+                p in build_out_lower for p in ("file not found", "unable to find",
+                                               "directories not owned by a package",
+                                               "unresolvable", "nothing provides")
+            ):
+                print(f"[FIX] Unpackaged-files-only error — stripping [DEEP_ANALYZE] request (fix is straightforward: add all files to %files).")
+                error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
+                _latest_analysis = error_analysis
             # Auto-trigger deep-analyze if Ollama requests it and we aren't already in that mode
             if "[DEEP_ANALYZE]" in error_analysis and not DEEP_ANALYZE:
                 print("\n[DEEP ANALYZE] Ollama requested interactive investigation. Opening shell...")
@@ -992,10 +1079,10 @@ Package: {package_name}
 Spec file path: {spec.relative_to(WORKSPACE_DIR)}
 
 Error context:
-{error_context[:5000]}
+{error_context[:6000]}
 
 Error analysis (the specific fix was identified here):
-{error_analysis[:2000]}
+{error_analysis[:3000]}
 
 Current spec content:
 {spec_content[:5000]}
@@ -1004,7 +1091,8 @@ Do NOT explain. Do NOT ask questions. Apply the fix using edit_file or write_fil
 IMPORTANT: Your edit_file/write_file calls must use the EXACT paths from your error analysis above — do not substitute different directories or files.
 Prefer edit_file for targeted changes — it preserves all other lines.
 IMPORTANT: write_file writes the ENTIRE file. Include EVERY line verbatim.
-Keep changes minimal unless stated otherwise."""}
+Keep changes minimal unless stated otherwise.
+NOTE: If this is an 'Installed (but unpackaged) file(s) found:' error, EVERY file listed in the UNPACKAGED FILES section above MUST be added to the %files section. Do NOT skip any files — standard paths like /usr/share/info and /usr/share/man are NOT automatically handled."""}
                 ]
             else:
                 # Refresh system prompt (cross-mode compat: loaded from --modify or old --fix)
