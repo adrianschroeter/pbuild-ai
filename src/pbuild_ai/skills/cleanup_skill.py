@@ -46,8 +46,8 @@ Do NOT modify, remove, or alter the copyright header block (lines starting with 
 ### 10. Avoid unnecessary changes
 Do NOT make cosmetic changes (whitespace, reordering, rewording comments, reformatting for personal preference). Only make changes that directly address the cleanup items above.
 
-### 11. Check Source URLs
-Ensure Source URLs use `%{name}` and `%{version}` macros where possible instead of hardcoded values. Do NOT replace `%{version}` with literal version numbers in URLs.
+### 11. Preserve Source URLs and macros
+Do NOT modify Source URLs — they contain critical information about where to download the source. Keep the exact original URLs as-is, including any macros (`%{name}`, `%{version}`, etc.) they already contain. Do not replace them with literal values or otherwise alter them. Source URLs are valuable metadata that must not be changed.
 
 ### 12. Update .changes file if needed
 If you make significant changes (e.g., converted from obs_scm), add a changelog entry to the `.changes` file noting the cleanup.
