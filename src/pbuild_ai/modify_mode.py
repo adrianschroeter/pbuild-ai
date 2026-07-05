@@ -149,11 +149,11 @@ Skill instructions (follow these):
 
         if saved_messages:
             messages = [{"role": "system", "content": system_content}] + (saved_messages[1:] if len(saved_messages) > 1 else [])
-            messages.append({"role": "user", "content": f"Continuing from previous session. Current spec content:\n{spec_content[:5000]}\n\nApply remaining changes."})
+            messages.append({"role": "user", "content": f"Continuing from previous session. Current spec content (full file — do NOT call read_file for the spec):\n{spec_content}\n\nApply remaining changes."})
         else:
             messages = [
                 {"role": "system", "content": system_content},
-                {"role": "user", "content": f"Spec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content:\n{spec_content[:5000]}\n\nDo NOT explain. Do NOT ask questions. Apply the changes using write_file or edit_file NOW."}
+                {"role": "user", "content": f"Spec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content (full file — do NOT call read_file for the spec):\n{spec_content}\n\nDo NOT explain. Do NOT ask questions. Apply the changes using write_file or edit_file NOW."}
             ]
         modify_max_rounds = 20
         changes_made = False

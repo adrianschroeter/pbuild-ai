@@ -1074,8 +1074,8 @@ Error context:
 Error analysis (the specific fix was identified here):
 {error_analysis[:3000]}
 
-Current spec content:
-{spec_content[:5000]}
+Current spec content (full file — use this, do NOT call read_file for the spec):
+{spec_content}
 
 Do NOT explain. Do NOT ask questions. Apply the fix using edit_file or write_file NOW.
 IMPORTANT: Your edit_file/write_file calls must use the EXACT paths from your error analysis above — do not substitute different directories or files.
@@ -1152,8 +1152,8 @@ Here is the new error context:
 {_build_attempted_fixes_context()}Error (from analysis):
 {error_analysis[:2000]}
 
-Current spec:
-{spec_content[:5000]}
+Current spec (full file — use this, do NOT call read_file for the spec):
+{spec_content}
 
 The analysis identified the fix as:
 {_fix_snippet or '(see error analysis above)'}
