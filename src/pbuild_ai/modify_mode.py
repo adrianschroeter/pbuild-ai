@@ -140,8 +140,6 @@ def run_modify_mode(ctx):
 
 The spec file content is ALREADY provided below in the user message. Do NOT call read_file — the content is right here.
 
-You have these tools: edit_file, write_file, read_file, web_fetch, git_command.
-
 To make changes, prefer edit_file for small targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: when using edit_file, include enough surrounding lines (full target line + 1-2 lines before/after) so old_string matches EXACTLY ONE location. Use write_file only for large rewrites or new files. IMPORTANT: write_file writes the ENTIRE file — you must include ALL lines. PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM; do not add, remove, or modify anything beyond the specific change. Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise. If you are unsure or need to choose between options, ask the user by responding with your question — you will get their answer in the next round.
 
 User request: {ctx.modify_prompt}{hint}

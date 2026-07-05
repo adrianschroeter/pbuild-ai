@@ -1053,18 +1053,8 @@ if __name__ == "__main__":
                 messages = [
                     {"role": "system", "content": f"""You are an RPM packager assistant. Fix build failures by using tools.
 
-You MUST call one or more of these tools NOW to make changes:
-- edit_file(path, old_string, new_string): targeted search-and-replace (PREFER this for small changes). Include enough surrounding lines (full target line + 1-2 lines context) so old_string matches EXACTLY ONE location.
-- write_file(path, content): write a file (use only for large rewrites or new files)
-- read_file(path, offset?, limit?): read a file (optionally read a portion via offset/limit in characters)
-- read_file_from_archive(archive_path, file_path, offset?, limit?): read a file inside a tar/zip archive (optionally partial read)
-- web_fetch(url): fetch an HTTPS URL
-- git_command(command): run a git command
-- run_tool_script(script_name, args): run a script from tool-scripts/
-
-The spec file is already provided in the message below. Use read_file with the given path to read it locally. Do NOT use web_fetch to fetch spec files from any remote git hosting site (src.opensuse.org, src.fedoraproject.org, github.com, etc.).
+Use the available tools to make changes. Use read_file with the given path to read it locally. Do NOT use web_fetch to fetch spec files from any remote git hosting site (src.opensuse.org, src.fedoraproject.org, github.com, etc.).
 When you need to inspect source files, use read_file_from_archive with the local source tarball. Do NOT use web_fetch to fetch source files from upstream websites.
-Call the tools to make changes. You may need to read files first, then call edit_file or write_file.
 Prefer edit_file for targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: include enough surrounding lines so old_string matches ONLY ONE location.
 IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
 PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM — do not add, remove, or modify anything beyond the specific fix.
@@ -1099,18 +1089,8 @@ NOTE: If this is an 'Installed (but unpackaged) file(s) found:' error, EVERY fil
                 if messages and messages[0].get("role") == "system":
                     messages[0] = {"role": "system", "content": f"""You are an RPM packager assistant. Fix build failures by using tools.
 
-You MUST call one or more of these tools NOW to make changes:
-- edit_file(path, old_string, new_string): targeted search-and-replace (PREFER this for small changes). Include enough surrounding lines (full target line + 1-2 lines context) so old_string matches EXACTLY ONE location.
-- write_file(path, content): write a file (use only for large rewrites or new files)
-- read_file(path, offset?, limit?): read a file (optionally read a portion via offset/limit in characters)
-- read_file_from_archive(archive_path, file_path, offset?, limit?): read a file inside a tar/zip archive (optionally partial read)
-- web_fetch(url): fetch an HTTPS URL
-- git_command(command): run a git command
-- run_tool_script(script_name, args): run a script from tool-scripts/
-
-The spec file is already provided in the message below. Use read_file with the given path to read it locally. Do NOT use web_fetch to fetch spec files from any remote git hosting site (src.opensuse.org, src.fedoraproject.org, github.com, etc.).
+Use the available tools to make changes. Use read_file with the given path to read it locally. Do NOT use web_fetch to fetch spec files from any remote git hosting site (src.opensuse.org, src.fedoraproject.org, github.com, etc.).
 When you need to inspect source files, use read_file_from_archive with the local source tarball. Do NOT use web_fetch to fetch source files from upstream websites.
-Call the tools to make changes. You may need to read files first, then call edit_file or write_file.
 Prefer edit_file for targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: include enough surrounding lines so old_string matches ONLY ONE location.
 IMPORTANT: write_file writes the ENTIRE file. You must include ALL lines.
 PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM — do not add, remove, or modify anything beyond the specific fix.

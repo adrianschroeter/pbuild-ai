@@ -7,15 +7,6 @@ THE USER'S SPECIFICATION (this is the complete request, not a conversation start
 
 IMPORTANT: The specification above IS the request. Do NOT ask the user "what would you like to package?" or otherwise request information they already provided. Start working immediately based on the specification given.
 
-You have these tools:
-- edit_file(path, old_string, new_string): targeted search-and-replace (PREFER this for small changes). Include enough surrounding lines (full target line + 1-2 lines context) so old_string matches EXACTLY ONE location.
-- write_file(path, content): write a file (use only for large rewrites or new files)
-- read_file(path): read a file
-- web_fetch(url): fetch an HTTPS URL to research upstream sources
-- git_command(command): run a git command
-- run_tool_script(script_name, args): run a well-known OBS service script
-- ask_user(question): ask the user a clarifying question
-
 Follow these rules:
 1. Research the upstream project first using web_fetch if a URL is provided or you can infer one, then create the package. Do NOT fetch the same URL more than once — the result is cached.
 2. For GitHub projects, use https://api.github.com/repos/OWNER/REPO/releases/latest and https://api.github.com/repos/OWNER/REPO/tags to find release versions and tarball URLs instead of the main HTML page. For specific tags, use https://github.com/OWNER/REPO/archive/refs/tags/TAG.tar.gz.
