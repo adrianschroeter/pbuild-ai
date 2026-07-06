@@ -112,6 +112,14 @@ _ENVIRONMENT_ERROR_PATTERNS = [
     "corrupted",
     "stale",
     "VFS: Unable to mount root",
+    # Download / mirror failures
+    "download failed",
+    "read timeout",
+    "connection timed out",
+    "connection refused",
+    "resolve failed",
+    "retrying https://",
+    "STDERR:",
 ]
 
 def _is_environment_error(build_out: str) -> bool:
@@ -986,10 +994,13 @@ if __name__ == "__main__":
                     error_context += f"\n\nBuild log:\n{log_content}"
                 else:
                     print(f"[DIAG] Warning: {log_content}")
-                    # No log found — check unresolvable in build output, otherwise abort (single-mode only)
+                    # No log found — check unresolvable or env error in build output
                     if not PROJECT_MODE and not ("unresolvable" in build_out_lower or "nothing provides" in build_out_lower):
-                        print("[BUG] No build log and no unresolvable deps detected. This is likely a bug in pbuild-ai or pbuild. Aborting.")
-                        sys.exit(1)
+                        if _is_environment_error(current_build_out):
+                            print(f"[DIAG] Infrastructure issue detected (no build log). Will retry.")
+                        else:
+                            print("[BUG] No build log and no unresolvable deps detected. This is likely a bug in pbuild-ai or pbuild. Aborting.")
+                            sys.exit(1)
                     error_context = current_build_out
             _files_failure = any(p in build_out_lower for p in (
                 "file not found", "unable to find", "unpackaged file",
