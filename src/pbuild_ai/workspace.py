@@ -187,14 +187,18 @@ class RpmSourceManager:
             err += "\n".join(stdout.split('\n')[-100:]) if stdout else "No output"
             return False, err
 
-    def run_orphan_build(self, dist="tumbleweed", stream_output=False, force_clean=False):
+    def run_orphan_build(self, dist=None, preset=None, stream_output=False, force_clean=False):
         cmd = ["pbuild", "--orphan", "--release", "0"]
         if self.root_dir:
             cmd.extend(["--root", self.root_dir])
         if not (self.do_clean or force_clean):
             cmd.append("--no-clean")
-        if dist:
+        if preset:
+            cmd.extend(["--preset", preset])
+        elif dist:
             cmd.extend(["--dist", dist])
+        else:
+            cmd.extend(["--dist", "tumbleweed"])
         if self.vm_type:
             cmd.extend(["--vm-type", self.vm_type])
         if self.vm_memory:
@@ -388,6 +392,8 @@ class RpmSourceManager:
             cmd.append("--no-clean")
         if self.preset and package_name:
             cmd.extend(["--preset", self.preset])
+        elif package_name:
+            cmd.extend(["--dist", "tumbleweed"])
         if self.vm_type:
             cmd.extend(["--vm-type", self.vm_type])
         if self.vm_memory:
@@ -584,7 +590,7 @@ Summarize the root cause of the {package_name} build failure and what fix is nee
 
         return True, "\n".join(collected.strip().split('\n')[-100:])
 
-    def run_full_project_build(self, stream_output=False, force_clean=False):
+    def run_full_project_build(self, stream_output=False, force_clean=False, dist=None):
         cmd = ["pbuild", "--abort-on-fail"]
         if self.root_dir:
             cmd.extend(["--root", self.root_dir])
@@ -592,6 +598,8 @@ Summarize the root cause of the {package_name} build failure and what fix is nee
             cmd.append("--no-clean")
         if self.preset:
             cmd.extend(["--preset", self.preset])
+        elif dist:
+            cmd.extend(["--dist", dist])
         if self.vm_type:
             cmd.extend(["--vm-type", self.vm_type])
         if self.vm_memory:

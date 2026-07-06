@@ -374,35 +374,36 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
         PACKAGE_FILTER = ctx.package_filter
         PROJECT_MODE = ctx.project_mode
         PRESET = ctx.preset
+        _DIST = ctx.dist
         SHOW_BUILDLOG = ctx.show_buildlog
 
         if PACKAGE_FILTER:
             package_name = spec.stem
             print(f"[INFO] Building single package: {package_name}...")
-            build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
+            build_success, build_out = manager.run_project_build(package_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG)
         elif PROJECT_MODE:
             package_name = spec.stem
             print(f"[INFO] Building {package_name} from project directory...")
-            build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG)
+            build_success, build_out = manager.run_project_build(package_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG)
         else:
             print("[INFO] Single package mode (no _manifest found). Running orphan build...")
-            build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG)
+            build_success, build_out = manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG)
 
         INCOMPLETE_SETUP_MSG = "It seems that there was an incomplete setup of /"
         if not build_success and INCOMPLETE_SETUP_MSG in build_out:
             print(f"[RETRY] Incomplete setup detected. Retrying with --clean...")
             if PACKAGE_FILTER or PROJECT_MODE:
-                build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
+                build_success, build_out = manager.run_project_build(package_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
             else:
-                build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
+                build_success, build_out = manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
 
         if not build_success:
             if not manager.build_phase_reached(package_name=spec.stem):
                 print(f"[RETRY] Build did not reach build phase. Retrying with --clean...")
                 if PACKAGE_FILTER or PROJECT_MODE:
-                    build_success, build_out = manager.run_project_build(package_name, preset=PRESET, stream_output=SHOW_BUILDLOG, force_clean=True)
+                    build_success, build_out = manager.run_project_build(package_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
                 else:
-                    build_success, build_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
+                    build_success, build_out = manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
                 if build_success:
                     print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
                 else:
@@ -424,9 +425,9 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
         if ctx.fix_mode and not build_success:
             pkg_name = package_name if 'package_name' in dir() else spec.stem
             if PROJECT_MODE:
-                rebuild_func = lambda p, force_clean=False: manager.run_project_build(p, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
+                rebuild_func = lambda p, force_clean=False: manager.run_project_build(p, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
             else:
-                rebuild_func = lambda p, force_clean=False: manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=force_clean)
+                rebuild_func = lambda p, force_clean=False: manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
             run_fix_loop_func(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
 
     return error_prompt
@@ -531,7 +532,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--update-only", action="store_true", help="Update sources to the latest upstream version, then exit (no test build). Use --update-only=VERSION for a specific version.")
     parser.add_argument("--update-version", default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--preset", default=None, help="Preset name to pass to pbuild")
+    parser.add_argument("--preset", default=None, help="Preset name to pass to pbuild (e.g. tumbleweed)")
+    parser.add_argument("--dist", default=None, help="Distribution to build for (passed as --dist to pbuild, alternative to --preset)")
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
     parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from Ollama")
     parser.add_argument("--fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, resets for each package)")
@@ -568,6 +570,7 @@ if __name__ == "__main__":
         vm_type=args.vm_type,
         vm_memory=args.vm_memory,
         preset=args.preset,
+        dist=args.dist,
         allow_tool_scripts=args.allow_tool_scripts,
         debug=args.debug,
         deep_analyze=args.deep_analyze,
@@ -596,6 +599,10 @@ if __name__ == "__main__":
     FIX_MODE = ctx.fix_mode
     SHOW_BUILDLOG = ctx.show_buildlog
     PRESET = ctx.preset
+    DIST = ctx.dist
+    if PRESET and DIST:
+        print(f"[INFO] Both --preset={PRESET} and --dist={DIST} given. Using --preset.")
+        DIST = None
     DO_CLEAN = ctx.do_clean
     ALLOW_TOOL_SCRIPTS = ctx.allow_tool_scripts
     DEBUG = ctx.debug
@@ -899,7 +906,7 @@ if __name__ == "__main__":
                         dep_prompt = DEFAULT_SPEC_PROMPT
                     dep_spec_analysis = ollama.analyze(dep_prompt, manager.read_file_safe(dep_spec), full_context)
                     print(f"-> AI({ollama.model}) says about {dep_spec.name}:\n{dep_spec_analysis}\n")
-                    dep_success, dep_out = manager.run_project_build(suggested, stream_output=SHOW_BUILDLOG)
+                    dep_success, dep_out = manager.run_project_build(suggested, preset=PRESET, dist=DIST, stream_output=SHOW_BUILDLOG)
                     if dep_success:
                         print(f"[DEP] '{suggested}' built successfully. Continuing with current package.")
                         return True
@@ -1032,9 +1039,9 @@ if __name__ == "__main__":
             if _is_environment_error(current_build_out):
                 print(f"[RETRY] Environment/VM issue detected. Retrying with --clean...")
                 if PROJECT_MODE:
-                    _retry_ok, _retry_out = manager.run_project_build(package_name, stream_output=SHOW_BUILDLOG, force_clean=True)
+                    _retry_ok, _retry_out = manager.run_project_build(package_name, preset=PRESET, dist=DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
                 else:
-                    _retry_ok, _retry_out = manager.run_orphan_build(stream_output=SHOW_BUILDLOG, force_clean=True)
+                    _retry_ok, _retry_out = manager.run_orphan_build(preset=PRESET, dist=DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
                 if _retry_ok:
                     print(f"\n[OK] Build succeeded after --clean retry.")
                     build_success2 = True
@@ -1338,7 +1345,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 
         for attempt in range(1, max_attempts + 1):
             print(f"\n[PROJECT BUILD] Full project build (attempt {attempt}/{max_attempts})...")
-            all_success, all_out = manager.run_full_project_build(stream_output=SHOW_BUILDLOG)
+            all_success, all_out = manager.run_full_project_build(stream_output=SHOW_BUILDLOG, dist=DIST)
             if all_success:
                 print("\n[OK] All packages built successfully.")
                 return True
@@ -1411,7 +1418,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 
             if not manager.build_phase_reached(package_name=failed_pkg):
                 print(f"[PROJECT BUILD] Build did not reach build phase. Retrying {failed_pkg} with --clean...")
-                build_ok, build_out2 = manager.run_project_build(failed_pkg, stream_output=SHOW_BUILDLOG, force_clean=True)
+                build_ok, build_out2 = manager.run_project_build(failed_pkg, preset=PRESET, dist=DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
                 if build_ok:
                     print(f"\n[OK] {failed_pkg} succeeded after --clean retry.")
                     continue
@@ -1420,7 +1427,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     print(f"[PROJECT BUILD] Clean build also failed. Proceeding with fix loop.")
 
             if not run_fix_loop(spec, failed_pkg, all_out, error_prompt,
-                lambda p, force_clean=False: manager.run_project_build(p, stream_output=SHOW_BUILDLOG, force_clean=force_clean)):
+                lambda p, force_clean=False: manager.run_project_build(p, preset=PRESET, dist=DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)):
                 return False
 
         return True

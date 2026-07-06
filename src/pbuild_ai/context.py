@@ -32,6 +32,7 @@ class PbuildContext:
     vm_type: Optional[str] = None
     vm_memory: Optional[str] = None
     preset: Optional[str] = None
+    dist: Optional[str] = None
     allow_tool_scripts: bool = False
     deep_analyze: bool = False
     fix_attempts: int = 25
