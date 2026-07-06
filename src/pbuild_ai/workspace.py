@@ -414,6 +414,7 @@ class RpmSourceManager:
         proc = subprocess.Popen(cmd, cwd=self.base_dir,
                                stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
                                close_fds=True)
+        os.close(slave_fd)  # Close parent's copy so PTY master sees EOF on child exit
 
         def pty_read(timeout=10, wait_prompt=False):
             nonlocal collected
@@ -451,11 +452,24 @@ class RpmSourceManager:
             os.write(master_fd, (text + "\n").encode('utf-8'))
 
         def _wait_for_shell(timeout=600):
-            """Read PTY output until a shell prompt appears or timeout."""
+            """Read PTY output until a shell prompt appears, process exit, or timeout."""
             nonlocal collected
             print(f"[DEEP] Waiting for build to fail and shell to open (timeout {timeout}s)...")
             end = time.time() + timeout
             while time.time() < end:
+                # Check if pbuild exited before select timeout
+                if proc.poll() is not None:
+                    collected_all = collected
+                    _lower = collected_all.lower()
+                    if "unresolvable" in _lower or "nothing provides" in _lower:
+                        print(f"\n[DEEP] pbuild exited early (code {proc.returncode}) — unresolvable dependencies detected.")
+                        for _line in collected_all.split("\n"):
+                            if "unresolvable" in _line.lower() or "nothing provides" in _line.lower():
+                                print(f"  [DEP] {_line.strip()}")
+                    else:
+                        print(f"\n[DEEP] pbuild exited early (code {proc.returncode}) — build setup failed before shell could open.")
+                    print(f"[DEEP] Bailing out of shell wait. Use --fix to resolve build setup issues.")
+                    return False
                 r, _, _ = select.select([master_fd], [], [], 1.0)
                 if r:
                     try:
@@ -472,6 +486,9 @@ class RpmSourceManager:
                                 return True
                     except OSError:
                         break
+            if proc.poll() is not None:
+                print(f"\n[DEEP] pbuild exited (code {proc.returncode}) during shell wait. Bailing out.")
+                return False
             print(f"\n[DEEP] Timed out waiting for shell prompt. Proceeding anyway.")
             return False
 
