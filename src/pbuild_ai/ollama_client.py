@@ -27,6 +27,35 @@ from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.tools import execute_tool_calls
 
 
+def normalize_tool_calls(tool_calls):
+    """Convert Ollama-format tool_calls to OpenAI-compatible format.
+
+    Each tool call gets an id and type field; arguments is serialized to a
+    JSON string if it is a dict.  Works with Ollama (which accepts this
+    format since 0.3.0) and any OpenAI-compatible server.
+    """
+    normalized = []
+    for i, tc in enumerate(tool_calls):
+        fn = tc.get("function", {})
+        args = fn.get("arguments", {})
+        if not isinstance(args, str):
+            args = json.dumps(args) if args is not None else "{}"
+        normalized.append({
+            "id": f"call_{i}",
+            "type": "function",
+            "function": {
+                "name": fn.get("name", ""),
+                "arguments": args,
+            }
+        })
+    return normalized
+
+
+def format_tool_result(tool_call_id, content):
+    """Build an OpenAI-compatible tool-result message."""
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": str(content)}
+
+
 class OllamaAnalyzer:
     def __init__(self, host=None, model="default", debug=False, timeout=None):
         self.host = (host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
@@ -396,10 +425,10 @@ class OllamaAnalyzer:
                     name, inp = round_calls[_ci]
                     _skip_msg = _skipped_results[_si]
                     all_results.append(f"{name}: {_skip_msg}")
-                messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
+                _normalized_tc = normalize_tool_calls(message['tool_calls'])
+                messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": _normalized_tc})
                 for _si, _ci in enumerate(_skipped_indices):
-                    name, inp = round_calls[_ci]
-                    messages.append({"role": "tool", "content": str(_skipped_results[_si]), "name": name})
+                    messages.append(format_tool_result(_normalized_tc[_ci]["id"], _skipped_results[_si]))
                 print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
                 break
 
@@ -453,12 +482,13 @@ class OllamaAnalyzer:
                             except Exception:
                                 pass
 
-            messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
+            _normalized_tc = normalize_tool_calls(message['tool_calls'])
+            messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": _normalized_tc})
             _injected_edit_help = False
-            for name, inp, content in _merged_results:
+            for idx, (name, inp, content) in enumerate(_merged_results):
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                messages.append({"role": "tool", "content": str(content), "name": name})
+                messages.append(format_tool_result(_normalized_tc[idx]["id"], content))
                 if not _injected_edit_help and name == "edit_file" and ("old_string not found" in str(content) or "old_string found" in str(content)):
                     _path = inp.get("path", "")
                     _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
