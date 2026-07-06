@@ -1131,6 +1131,8 @@ Here is the new error context:
                 print(f"[FIX ERROR] {tool_results}")
             elif tool_results:
                 for r in tool_results:
+                    if not r or r.endswith(": "):
+                        continue
                     if r.startswith("read_file: ") and not r.startswith("read_file: Error"):
                         line_count = r.count('\n')
                         display = f"read_file: ({line_count} lines)"

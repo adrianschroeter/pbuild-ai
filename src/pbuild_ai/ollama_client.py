@@ -449,6 +449,8 @@ class OllamaAnalyzer:
                     _path = inp.get("path", "?") if isinstance(inp, dict) else "?"
                     _merged_results.append((name, inp, f"Error: {name} for {_path} was not executed (skipped by anti-oscillation filter)"))
             for name, inp, r in _merged_results:
+                if not r:
+                    continue
                 if name == "read_file":
                     line_count = r.count('\n')
                     display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
@@ -463,7 +465,7 @@ class OllamaAnalyzer:
                 else:
                     display = r[:500] + "..." if len(r) > 500 else r
                 print(f"[FIX] {display}", flush=True)
-            all_results.extend(f"{name}: {r}" for name, _, r in _merged_results)
+            all_results.extend(f"{name}: {r}" for name, _, r in _merged_results if r)
 
             # Record file versions after successful write/edit
             for name, inp, r in _merged_results:
