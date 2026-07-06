@@ -16,6 +16,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -177,11 +178,38 @@ class OllamaAnalyzer:
 
     def _write_analysis_file(self, response_text):
         if self.manager and hasattr(self.manager, '_last_log_path') and self.manager._last_log_path:
-            analyze_path = Path(str(self.manager._last_log_path) + ".analyze")
+            base = str(self.manager._last_log_path)
+            analyze_path = Path(base + '.analyze')
             analyze_path.parent.mkdir(parents=True, exist_ok=True)
             filtered = self._strip_spec_from_analysis(response_text)
             analyze_path.write_text(filtered, encoding='utf-8')
             print(f"[BUILD LOG] Wrote {len(filtered)} bytes to {analyze_path}")
+            self._write_diff_file(base)
+
+    def _write_diff_file(self, base):
+        """Write a unified diff of uncommitted source changes alongside the build log."""
+        diff_path = Path(base + '.diff')
+        try:
+            ws = self.manager.base_dir if hasattr(self.manager, 'base_dir') else None
+            if not ws:
+                return
+            r = subprocess.run(
+                ["git", "diff"],
+                cwd=ws, capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                diff_path.write_text(r.stdout, encoding='utf-8')
+                print(f"[BUILD LOG] Wrote {len(r.stdout)} bytes to {diff_path}")
+            else:
+                r2 = subprocess.run(
+                    ["git", "diff", "--staged"],
+                    cwd=ws, capture_output=True, text=True, timeout=30,
+                )
+                if r2.returncode == 0 and r2.stdout.strip():
+                    diff_path.write_text(r2.stdout, encoding='utf-8')
+                    print(f"[BUILD LOG] Wrote {len(r2.stdout)} bytes to {diff_path}")
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
 
     @staticmethod
     def _strip_spec_from_analysis(text):

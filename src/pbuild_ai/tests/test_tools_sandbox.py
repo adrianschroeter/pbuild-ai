@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -747,6 +748,62 @@ class TestParseFailedPackage(unittest.TestCase):
 
     def test_empty_string(self):
         self.assertIsNone(self.parse(""))
+
+
+class TestWriteDiffFile(unittest.TestCase):
+    """_write_diff_file writes a .diff beside the build log when there are git changes."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_test_diff_")
+        (Path(self.tmpdir) / ".git").mkdir()  # fake git repo marker
+        self.fake_log = Path(self.tmpdir) / "build-1.log"
+        self.fake_log.write_text("build log content")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_analyzer(self):
+        from pbuild_ai.ollama_client import OllamaAnalyzer
+        analyzer = OllamaAnalyzer()
+        analyzer.manager = mock.MagicMock()
+        analyzer.manager._last_log_path = str(self.fake_log)
+        analyzer.manager.base_dir = self.tmpdir
+        return analyzer
+
+    def test_diff_written_when_git_diff_has_content(self):
+        with mock.patch('subprocess.run') as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "--- a/foo.spec\n+++ b/foo.spec\n@@ -1 +1 @@\n-old\n+new\n"
+            analyzer = self._make_analyzer()
+            analyzer._write_diff_file(str(self.fake_log))
+        diff_path = Path(str(self.fake_log) + ".diff")
+        self.assertTrue(diff_path.exists())
+        content = diff_path.read_text()
+        self.assertIn("foo.spec", content)
+
+    def test_no_diff_when_no_git_changes(self):
+        with mock.patch('subprocess.run') as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = ""
+            analyzer = self._make_analyzer()
+            analyzer._write_diff_file(str(self.fake_log))
+        diff_path = Path(str(self.fake_log) + ".diff")
+        self.assertFalse(diff_path.exists())
+
+    def test_diff_silent_on_git_error(self):
+        with mock.patch('subprocess.run', side_effect=FileNotFoundError):
+            analyzer = self._make_analyzer()
+            analyzer._write_diff_file(str(self.fake_log))  # must not raise
+        diff_path = Path(str(self.fake_log) + ".diff")
+        self.assertFalse(diff_path.exists())
+
+    def test_diff_silent_on_git_error(self):
+        with mock.patch('subprocess.run', side_effect=FileNotFoundError):
+            analyzer = self._make_analyzer()
+            analyzer._write_diff_file(str(self.fake_log))  # must not raise
+        diff_path = Path(str(self.fake_log) + ".diff")
+        self.assertFalse(diff_path.exists())
 
 
 if __name__ == "__main__":
