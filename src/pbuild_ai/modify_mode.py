@@ -22,7 +22,7 @@ import urllib.request
 from pathlib import Path
 
 from pbuild_ai.network import is_safe_url
-from pbuild_ai.ollama_client import chat_completion, normalize_tool_calls, format_tool_result
+from pbuild_ai.ollama_client import chat_completion
 from pbuild_ai.tools import execute_tool_calls
 
 
@@ -219,12 +219,11 @@ Skill instructions (follow these):
                     print(f"[MODIFY] {display}", flush=True)
                     if spec.name in r and (r.startswith("OK: Wrote ") or r.startswith("OK: Edited ") or r.startswith("OK: Removed ") or r.startswith("OK: Renamed ")):
                         changes_made = True
-                normalized = normalize_tool_calls(message['tool_calls'])
-                messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": normalized})
-                for idx, ((name, _), content) in enumerate(zip(round_calls, round_results)):
+                messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
+                for (name, _), content in zip(round_calls, round_results):
                     if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                         content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                    messages.append(format_tool_result(content, name=name))
+                    messages.append({"role": "tool", "content": str(content), "name": name})
                 continue
 
             text = (message.get('content') or '').strip()

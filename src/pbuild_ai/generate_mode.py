@@ -21,7 +21,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from pbuild_ai.ollama_client import chat_completion, normalize_tool_calls, format_tool_result
+from pbuild_ai.ollama_client import chat_completion
 from pbuild_ai.tools import execute_tool_calls
 from pbuild_ai.spinner import Spinner, AI_COLOR
 
@@ -230,13 +230,13 @@ The specification for the package to create is in the system prompt above. Start
                     display = r[:500] + "..." if len(r) > 500 else r
                 print(f"[GENERATE] {display}", flush=True)
             response_content = message.get('content', '') or ''
-            normalized = normalize_tool_calls(message['tool_calls'])
-            messages.append({"role": "assistant", "content": response_content, "tool_calls": normalized})
-            for idx, ((name, _), content) in enumerate(zip(round_calls, round_results)):
+            tc_arg = dict(tool_calls=message['tool_calls'])
+            messages.append({"role": "assistant", "content": response_content, **tc_arg})
+            for (name, _), content in zip(round_calls, round_results):
                 tool_name = "web_fetch" if name == "_skip" else name
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                messages.append(format_tool_result(content, name=tool_name))
+                messages.append({"role": "tool", "content": str(content), "name": tool_name})
             spec_files = sorted(Path(ctx.workspace_dir).rglob("*.spec"))
             for spec_path in spec_files:
                 spec_str = str(spec_path)

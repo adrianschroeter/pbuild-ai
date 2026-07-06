@@ -28,30 +28,6 @@ from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.tools import execute_tool_calls
 
 
-def normalize_tool_calls(tool_calls):
-    """Return tool_calls in Ollama native format (no id/type).
-
-    Ollamaʼs ``/api/chat`` endpoint expects ``arguments`` as a JSON
-    string when serialized, but accepts both dict and string forms.
-    We keep the dict form for maximum compatibility.
-    """
-    normalized = []
-    for i, tc in enumerate(tool_calls):
-        fn = tc.get("function", {})
-        normalized.append({
-            "function": {
-                "name": fn.get("name", ""),
-                "arguments": fn.get("arguments", {}),
-            }
-        })
-    return normalized
-
-
-def format_tool_result(content, name=""):
-    """Build a tool-result message in Ollama native format."""
-    return {"role": "tool", "name": name, "content": str(content)}
-
-
 class OllamaAnalyzer:
     def __init__(self, host=None, model="default", debug=False, timeout=None):
         self.host = (host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
@@ -448,11 +424,10 @@ class OllamaAnalyzer:
                     name, inp = round_calls[_ci]
                     _skip_msg = _skipped_results[_si]
                     all_results.append(f"{name}: {_skip_msg}")
-                _normalized_tc = normalize_tool_calls(message['tool_calls'])
-                messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": _normalized_tc})
+                messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
                 for _si, _ci in enumerate(_skipped_indices):
-                    _name = round_calls[_ci][0]
-                    messages.append(format_tool_result(_skipped_results[_si], name=_name))
+                    name, inp = round_calls[_ci]
+                    messages.append({"role": "tool", "content": str(_skipped_results[_si]), "name": name})
                 print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
                 break
 
@@ -506,13 +481,12 @@ class OllamaAnalyzer:
                             except Exception:
                                 pass
 
-            _normalized_tc = normalize_tool_calls(message['tool_calls'])
-            messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": _normalized_tc})
+            messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
             _injected_edit_help = False
-            for idx, (name, inp, content) in enumerate(_merged_results):
+            for name, inp, content in _merged_results:
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                messages.append(format_tool_result(content, name=name))
+                messages.append({"role": "tool", "content": str(content), "name": name})
                 if not _injected_edit_help and name == "edit_file" and ("old_string not found" in str(content) or "old_string found" in str(content)):
                     _path = inp.get("path", "")
                     _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
@@ -605,18 +579,30 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
         if message.get('content', '').strip() or message.get('tool_calls'):
             return result
 
+        # Collect model-level diagnostics for the error message
+        _model_name = result.get('model', '?')
+        _done_reason = result.get('done_reason', '?')
+        _eval_count = result.get('eval_count', '?')
+
         if attempt < 2:
-            print(f"[OLLAMA] Empty response (retry {attempt+2}/3, message keys: "
+            print(f"[OLLAMA] Empty response (retry {attempt+2}/3, "
+                  f"model={_model_name}, eval_count={_eval_count}, "
+                  f"done_reason={_done_reason}, message keys: "
                   f"{list(message.keys())})...")
             if debug:
                 print(f"[DEBUG] Response ({len(raw)} bytes): {raw[:1000]}", flush=True)
             time.sleep(2)
         else:
-            reason = ""
+            hint = ""
             if message.get('content') == '' and not message.get('tool_calls'):
-                reason = " (model returned empty content with no tool calls)"
+                hint = " (model returned empty content with no tool calls)"
+                if isinstance(_eval_count, int) and _eval_count <= 1:
+                    hint += (" -- the model produced no meaningful tokens. "
+                             "This model may not support tool/function calling. "
+                             "Try a model that supports tools (e.g. qwen2.5, llama3, mistral).")
             print(f"[OLLAMA ERROR] Empty response after 3 attempts."
-                  f"{reason} Message keys: {list(message.keys())}.")
+                  f"{hint} Model: {_model_name}, eval_count: {_eval_count}, "
+                  f"done_reason: {_done_reason}.")
             if debug:
                 print(f"[DEBUG] Full response ({len(raw)} bytes):\n{raw}", flush=True)
             sys.exit(2)
