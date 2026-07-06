@@ -634,5 +634,74 @@ class TestGitPushBlocked(unittest.TestCase):
         self.assertIn("outside the workspace", results[0])
 
 
+class TestToolCallNormalization(unittest.TestCase):
+    """Tool call messages must survive json.dump/load round-trip (Ollama /api/chat)."""
+
+    def test_normalize_tool_calls_adds_id_and_type(self):
+        from pbuild_ai.ollama_client import normalize_tool_calls
+        raw = [{"function": {"name": "edit_file", "arguments": {"path": "x.spec"}}}]
+        result = normalize_tool_calls(raw)
+        self.assertEqual(result[0]["id"], "call_0")
+        self.assertEqual(result[0]["type"], "function")
+        self.assertEqual(result[0]["function"]["name"], "edit_file")
+
+    def test_normalize_tool_calls_preserves_arguments_as_dict(self):
+        from pbuild_ai.ollama_client import normalize_tool_calls
+        args = {"path": "x.spec", "old_string": "foo", "new_string": "bar"}
+        raw = [{"function": {"name": "edit_file", "arguments": args}}]
+        result = normalize_tool_calls(raw)
+        self.assertIsInstance(result[0]["function"]["arguments"], dict)
+        self.assertEqual(result[0]["function"]["arguments"], args)
+
+    def test_normalize_tool_calls_round_trips_via_json(self):
+        """Simulate the json.dumps + json.loads that happens in chat_completion."""
+        import json
+        from pbuild_ai.ollama_client import normalize_tool_calls
+        args = {"path": "x.spec", "old_string": "foo"}
+        raw = [{"function": {"name": "edit_file", "arguments": args}},
+               {"function": {"name": "read_file", "arguments": {"path": "y.spec"}}}]
+        normalized = normalize_tool_calls(raw)
+        payload = {"messages": [{"role": "assistant", "content": "", "tool_calls": normalized}]}
+        round_tripped = json.loads(json.dumps(payload))
+        tc = round_tripped["messages"][0]["tool_calls"]
+        self.assertEqual(len(tc), 2)
+        self.assertEqual(tc[0]["id"], "call_0")
+        self.assertEqual(tc[1]["id"], "call_1")
+        self.assertIsInstance(tc[0]["function"]["arguments"], dict)
+        self.assertEqual(tc[0]["function"]["arguments"]["path"], "x.spec")
+
+    def test_format_tool_result_has_tool_call_id_and_name(self):
+        from pbuild_ai.ollama_client import format_tool_result
+        msg = format_tool_result("call_0", "1 match replaced", name="edit_file")
+        self.assertEqual(msg["role"], "tool")
+        self.assertEqual(msg["tool_call_id"], "call_0")
+        self.assertEqual(msg["name"], "edit_file")
+        self.assertEqual(msg["content"], "1 match replaced")
+
+    def test_format_tool_result_content_is_always_str(self):
+        from pbuild_ai.ollama_client import format_tool_result
+        msg = format_tool_result("call_0", 42, name="foo")
+        self.assertIsInstance(msg["content"], str)
+        self.assertEqual(msg["content"], "42")
+
+    def test_tool_messages_round_trip_via_json(self):
+        """Full message list (assistant + tool) must survive json.dumps."""
+        import json
+        from pbuild_ai.ollama_client import normalize_tool_calls, format_tool_result
+        raw = [{"function": {"name": "edit_file", "arguments": {"path": "x.spec"}}}]
+        normalized = normalize_tool_calls(raw)
+        messages = [
+            {"role": "user", "content": "fix the error"},
+            {"role": "assistant", "content": "", "tool_calls": normalized},
+            format_tool_result("call_0", "OK", name="edit_file"),
+        ]
+        payload = {"model": "test", "messages": messages, "stream": False}
+        round_tripped = json.loads(json.dumps(payload))
+        msgs = round_tripped["messages"]
+        self.assertEqual(msgs[1]["tool_calls"][0]["function"]["name"], "edit_file")
+        self.assertEqual(msgs[2]["tool_call_id"], "call_0")
+        self.assertEqual(msgs[2]["name"], "edit_file")
+
+
 if __name__ == "__main__":
     unittest.main()

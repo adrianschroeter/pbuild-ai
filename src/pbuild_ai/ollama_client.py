@@ -28,32 +28,34 @@ from pbuild_ai.tools import execute_tool_calls
 
 
 def normalize_tool_calls(tool_calls):
-    """Convert Ollama-format tool_calls to OpenAI-compatible format.
+    """Add ``id`` and ``type`` fields to tool_calls for OpenAI compatibility.
 
-    Each tool call gets an id and type field; arguments is serialized to a
-    JSON string if it is a dict.  Works with Ollama (which accepts this
-    format since 0.3.0) and any OpenAI-compatible server.
+    ``arguments`` is kept as a dict (Ollama native `/api/chat` format).
+    OpenAI servers need ``arguments`` as a JSON string, but since the
+    codebase uses the native Ollama endpoint, the dict form is preserved.
+    Switch to ``json.dumps(args)`` when targeting ``/v1/chat/completions``.
     """
     normalized = []
     for i, tc in enumerate(tool_calls):
         fn = tc.get("function", {})
-        args = fn.get("arguments", {})
-        if not isinstance(args, str):
-            args = json.dumps(args) if args is not None else "{}"
         normalized.append({
             "id": f"call_{i}",
             "type": "function",
             "function": {
                 "name": fn.get("name", ""),
-                "arguments": args,
+                "arguments": fn.get("arguments", {}),
             }
         })
     return normalized
 
 
-def format_tool_result(tool_call_id, content):
-    """Build an OpenAI-compatible tool-result message."""
-    return {"role": "tool", "tool_call_id": tool_call_id, "content": str(content)}
+def format_tool_result(tool_call_id, content, name=""):
+    """Build a tool-result message compatible with Ollama and OpenAI.
+
+    Includes both ``tool_call_id`` (OpenAI) and ``name`` (Ollama legacy).
+    Either endpoint ignores the field it does not understand.
+    """
+    return {"role": "tool", "tool_call_id": tool_call_id, "name": name, "content": str(content)}
 
 
 class OllamaAnalyzer:
@@ -428,7 +430,8 @@ class OllamaAnalyzer:
                 _normalized_tc = normalize_tool_calls(message['tool_calls'])
                 messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": _normalized_tc})
                 for _si, _ci in enumerate(_skipped_indices):
-                    messages.append(format_tool_result(_normalized_tc[_ci]["id"], _skipped_results[_si]))
+                    _name = round_calls[_ci][0]
+                    messages.append(format_tool_result(_normalized_tc[_ci]["id"], _skipped_results[_si], name=_name))
                 print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
                 break
 
@@ -488,7 +491,7 @@ class OllamaAnalyzer:
             for idx, (name, inp, content) in enumerate(_merged_results):
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                messages.append(format_tool_result(_normalized_tc[idx]["id"], content))
+                messages.append(format_tool_result(_normalized_tc[idx]["id"], content, name=name))
                 if not _injected_edit_help and name == "edit_file" and ("old_string not found" in str(content) or "old_string found" in str(content)):
                     _path = inp.get("path", "")
                     _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None

@@ -224,7 +224,7 @@ Skill instructions (follow these):
                 for idx, ((name, _), content) in enumerate(zip(round_calls, round_results)):
                     if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                         content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                    messages.append(format_tool_result(normalized[idx]["id"], content))
+                    messages.append(format_tool_result(normalized[idx]["id"], content, name=name))
                 continue
 
             text = (message.get('content') or '').strip()
