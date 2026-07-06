@@ -49,7 +49,7 @@ Package name to focus on (only in project mode when a \fI_manifest\fR file is pr
 .TP
 .B \-\-fix, \-f
 Apply suggested changes and run a test build to verify the fix.
-Repeats up to \fI\-\-fix-attempts\fR times per package.
+Repeats up to \fI\-\-max-fix-attempts\fR times per package.
 Conflicts with \fB\-\-analyze\fR and \fB\-\-changelog\fR.
 In project mode (\fI_manifest\fR present), the full package set is built
 on each attempt. pbuild calculates which packages need rebuilding and only
@@ -131,8 +131,13 @@ Preset name to pass to pbuild.
 .B \-\-allow\-tool\-scripts
 Allow execution of scripts from \fItool-scripts/\fR in the workspace.
 .TP
-.B \-\-fix\-attempts N
-Max fix retry attempts per package (default: 10). Use 0 for unlimited.
+.B \-\-max\-fix\-attempts N
+Max fix retry attempts per package (default: 10, 0 = unlimited).
+.TP
+.B \-\-max\-ai\-rounds N
+Max AI tool-call rounds per fix attempt (default: 15, 0 = unlimited).
+This controls how many times the AI can call tools (read, edit, write)
+within a single fix cycle before moving on.
 .TP
 .B \-\-clean
 Clean build artifacts before building.

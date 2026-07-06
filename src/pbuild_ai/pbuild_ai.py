@@ -536,8 +536,8 @@ if __name__ == "__main__":
     parser.add_argument("--dist", default=None, help="Distribution to build for (passed as --dist to pbuild, alternative to --preset)")
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
     parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from Ollama")
-    parser.add_argument("--fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, resets for each package)")
-    parser.add_argument("--max-rounds", type=int, default=15, help="Max tool-call rounds per fix attempt (default: 15, 0 = unlimited)")
+    parser.add_argument("--max-fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, 0 = unlimited)")
+    parser.add_argument("--max-ai-rounds", type=int, default=15, help="Max AI tool-call rounds per fix attempt (default: 15, 0 = unlimited). Controls how many times the AI can call tools within a single fix cycle.")
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
     parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to Ollama")
     parser.add_argument("--fresh", action="store_true", help="Discard saved .pai.context and start fresh")
@@ -574,7 +574,7 @@ if __name__ == "__main__":
         allow_tool_scripts=args.allow_tool_scripts,
         debug=args.debug,
         deep_analyze=args.deep_analyze,
-        fix_attempts=args.fix_attempts,
+        fix_attempts=args.max_fix_attempts,
         prompt_hint=args.prompt,
         update_version=args.update_version or "" if (args.update or args.update_only) else None,
         update_only=args.update_only,
@@ -587,7 +587,7 @@ if __name__ == "__main__":
         interactive=args.interactive,
         email=args.email or os.environ.get("EMAIL", ""),
         analyze_mode=args.analyze,
-        max_rounds=args.max_rounds,
+        max_rounds=args.max_ai_rounds,
         build_log=args.build_log,
         program_start=time.time(),
     )
