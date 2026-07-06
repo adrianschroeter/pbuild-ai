@@ -638,30 +638,31 @@ class TestGitPushBlocked(unittest.TestCase):
 class TestToolCallNormalization(unittest.TestCase):
     """Tool call messages must survive json.dump/load round-trip (Ollama /api/chat)."""
 
-    def test_normalize_tool_calls_adds_id_and_type(self):
+    def test_normalize_tool_calls_preserves_ollama_format(self):
+        """Ollama native format: no id/type, arguments kept as dict."""
         from pbuild_ai.ollama_client import normalize_tool_calls
         raw = [{"function": {"name": "edit_file", "arguments": {"path": "x.spec"}}}]
         result = normalize_tool_calls(raw)
-        self.assertEqual(result[0]["id"], "call_0")
-        self.assertEqual(result[0]["type"], "function")
+        self.assertNotIn("id", result[0])
+        self.assertNotIn("type", result[0])
         self.assertEqual(result[0]["function"]["name"], "edit_file")
+        self.assertEqual(result[0]["function"]["arguments"], {"path": "x.spec"})
 
-    def test_normalize_tool_calls_serializes_arguments_as_string(self):
+    def test_normalize_tool_calls_preserves_arguments_as_dict(self):
+        """arguments must remain a dict (Ollama native format)."""
         from pbuild_ai.ollama_client import normalize_tool_calls
-        import json
         args = {"path": "x.spec", "old_string": "foo", "new_string": "bar"}
         raw = [{"function": {"name": "edit_file", "arguments": args}}]
         result = normalize_tool_calls(raw)
-        self.assertIsInstance(result[0]["function"]["arguments"], str)
-        self.assertEqual(result[0]["function"]["arguments"], json.dumps(args))
+        self.assertIsInstance(result[0]["function"]["arguments"], dict)
+        self.assertEqual(result[0]["function"]["arguments"], args)
 
-    def test_normalize_tool_calls_preserves_existing_string_arguments(self):
-        """If arguments is already a JSON string, leave it as-is."""
+    def test_normalize_tool_calls_handles_empty_arguments(self):
+        """Missing or empty arguments default to {}."""
         from pbuild_ai.ollama_client import normalize_tool_calls
-        raw = [{"function": {"name": "edit_file", "arguments": '{"path": "x.spec"}'}}]
+        raw = [{"function": {"name": "read_file"}}]
         result = normalize_tool_calls(raw)
-        self.assertIsInstance(result[0]["function"]["arguments"], str)
-        self.assertEqual(result[0]["function"]["arguments"], '{"path": "x.spec"}')
+        self.assertEqual(result[0]["function"]["arguments"], {})
 
     def test_normalize_tool_calls_round_trips_via_json(self):
         """Simulate the json.dumps + json.loads that happens in chat_completion."""
@@ -675,23 +676,25 @@ class TestToolCallNormalization(unittest.TestCase):
         round_tripped = json.loads(json.dumps(payload))
         tc = round_tripped["messages"][0]["tool_calls"]
         self.assertEqual(len(tc), 2)
-        self.assertEqual(tc[0]["id"], "call_0")
-        self.assertEqual(tc[1]["id"], "call_1")
-        # arguments are now JSON strings (OpenAI format)
-        self.assertIsInstance(tc[0]["function"]["arguments"], str)
-        self.assertIn('"path": "x.spec"', tc[0]["function"]["arguments"])
+        # no id/type in native format
+        self.assertNotIn("id", tc[0])
+        self.assertNotIn("type", tc[0])
+        # arguments survive round-trip as dict
+        self.assertIsInstance(tc[0]["function"]["arguments"], dict)
+        self.assertEqual(tc[0]["function"]["arguments"]["path"], "x.spec")
 
-    def test_format_tool_result_has_tool_call_id_and_name(self):
+    def test_format_tool_result_has_name(self):
+        """Ollama native format: name field, no tool_call_id."""
         from pbuild_ai.ollama_client import format_tool_result
-        msg = format_tool_result("call_0", "1 match replaced", name="edit_file")
+        msg = format_tool_result("1 match replaced", name="edit_file")
         self.assertEqual(msg["role"], "tool")
-        self.assertEqual(msg["tool_call_id"], "call_0")
+        self.assertNotIn("tool_call_id", msg)
         self.assertEqual(msg["name"], "edit_file")
         self.assertEqual(msg["content"], "1 match replaced")
 
     def test_format_tool_result_content_is_always_str(self):
         from pbuild_ai.ollama_client import format_tool_result
-        msg = format_tool_result("call_0", 42, name="foo")
+        msg = format_tool_result(42, name="foo")
         self.assertIsInstance(msg["content"], str)
         self.assertEqual(msg["content"], "42")
 
@@ -704,16 +707,15 @@ class TestToolCallNormalization(unittest.TestCase):
         messages = [
             {"role": "user", "content": "fix the error"},
             {"role": "assistant", "content": "", "tool_calls": normalized},
-            format_tool_result("call_0", "OK", name="edit_file"),
+            format_tool_result("OK", name="edit_file"),
         ]
         payload = {"model": "test", "messages": messages, "stream": False}
         round_tripped = json.loads(json.dumps(payload))
         msgs = round_tripped["messages"]
         self.assertEqual(msgs[1]["tool_calls"][0]["function"]["name"], "edit_file")
-        # arguments survive round-trip as JSON string (OpenAI format)
-        self.assertIsInstance(msgs[1]["tool_calls"][0]["function"]["arguments"], str)
-        self.assertEqual(msgs[2]["tool_call_id"], "call_0")
+        self.assertEqual(msgs[1]["tool_calls"][0]["function"]["arguments"], {"path": "x.spec"})
         self.assertEqual(msgs[2]["name"], "edit_file")
+        self.assertNotIn("tool_call_id", msgs[2])
 
 
 class TestParseFailedPackage(unittest.TestCase):

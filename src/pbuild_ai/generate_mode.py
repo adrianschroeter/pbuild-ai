@@ -236,7 +236,7 @@ The specification for the package to create is in the system prompt above. Start
                 tool_name = "web_fetch" if name == "_skip" else name
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                messages.append(format_tool_result(normalized[idx]["id"], content, name=tool_name))
+                messages.append(format_tool_result(content, name=tool_name))
             spec_files = sorted(Path(ctx.workspace_dir).rglob("*.spec"))
             for spec_path in spec_files:
                 spec_str = str(spec_path)

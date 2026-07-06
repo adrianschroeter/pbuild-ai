@@ -29,34 +29,27 @@ from pbuild_ai.tools import execute_tool_calls
 
 
 def normalize_tool_calls(tool_calls):
-    """Add ``id`` and ``type`` fields to tool_calls for OpenAI compatibility.
+    """Return tool_calls in Ollama native format (no id/type).
 
-    ``arguments`` is serialized to a JSON string (OpenAI format).
-    Ollama ``/api/chat`` accepts this format since 0.3.0.
+    Ollamaʼs ``/api/chat`` endpoint expects ``arguments`` as a JSON
+    string when serialized, but accepts both dict and string forms.
+    We keep the dict form for maximum compatibility.
     """
-    import json
     normalized = []
     for i, tc in enumerate(tool_calls):
         fn = tc.get("function", {})
-        args = fn.get("arguments", {})
         normalized.append({
-            "id": f"call_{i}",
-            "type": "function",
             "function": {
                 "name": fn.get("name", ""),
-                "arguments": json.dumps(args) if not isinstance(args, str) else args,
+                "arguments": fn.get("arguments", {}),
             }
         })
     return normalized
 
 
-def format_tool_result(tool_call_id, content, name=""):
-    """Build a tool-result message compatible with Ollama and OpenAI.
-
-    Includes both ``tool_call_id`` (OpenAI) and ``name`` (Ollama legacy).
-    Either endpoint ignores the field it does not understand.
-    """
-    return {"role": "tool", "tool_call_id": tool_call_id, "name": name, "content": str(content)}
+def format_tool_result(content, name=""):
+    """Build a tool-result message in Ollama native format."""
+    return {"role": "tool", "name": name, "content": str(content)}
 
 
 class OllamaAnalyzer:
@@ -459,7 +452,7 @@ class OllamaAnalyzer:
                 messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": _normalized_tc})
                 for _si, _ci in enumerate(_skipped_indices):
                     _name = round_calls[_ci][0]
-                    messages.append(format_tool_result(_normalized_tc[_ci]["id"], _skipped_results[_si], name=_name))
+                    messages.append(format_tool_result(_skipped_results[_si], name=_name))
                 print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
                 break
 
@@ -519,7 +512,7 @@ class OllamaAnalyzer:
             for idx, (name, inp, content) in enumerate(_merged_results):
                 if name == "read_file" and isinstance(content, str) and len(content) > 2000:
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                messages.append(format_tool_result(_normalized_tc[idx]["id"], content, name=name))
+                messages.append(format_tool_result(content, name=name))
                 if not _injected_edit_help and name == "edit_file" and ("old_string not found" in str(content) or "old_string found" in str(content)):
                     _path = inp.get("path", "")
                     _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
@@ -542,7 +535,25 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
     On HTTP/protocol errors or after 3 failed attempts, prints diagnostic info
     and calls sys.exit(2)."""
     payload = {"model": ollama.model, "messages": messages, "tools": tools, "stream": False}
-    data_bytes = json.dumps(payload).encode('utf-8')
+    _payload_str = None
+    data_bytes = b''
+    try:
+        _payload_str = json.dumps(payload)
+        data_bytes = _payload_str.encode('utf-8')
+    except (TypeError, ValueError) as e:
+        # Identify problematic messages
+        for mi, msg in enumerate(messages):
+            for field in ("content", "tool_call_id", "name"):
+                val = msg.get(field)
+                if val is not None and not isinstance(val, (str, type(None))):
+                    print(f"[OLLAMA ERROR] Message {mi} field '{field}' is {type(val).__name__}, not str: {val!r}", flush=True)
+        print(f"[OLLAMA ERROR] Failed to serialize payload: {e}", flush=True)
+        # Dump first few messages for debugging
+        import pprint
+        for mi, msg in enumerate(messages[:3]):
+            pprint.pprint(msg, depth=3)
+        sys.exit(2)
+
     for attempt in range(3):
         try:
             _t0 = time.time()
@@ -562,6 +573,22 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
         except urllib.error.HTTPError as e:
             body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
             print(f"[OLLAMA ERROR] HTTP {e.code}: {e.reason} - {body}")
+            _payload_len = len(data_bytes) if data_bytes else 0
+            print(f"[OLLAMA DEBUG] Payload size: {_payload_len} bytes. Messages: {len(messages)}.")
+            if debug and _payload_str:
+                # Show tool calls + results in last few messages
+                for mi in range(max(0, len(messages)-4), len(messages)):
+                    msg = messages[mi]
+                    role = msg.get("role", "?")
+                    if role == "assistant" and "tool_calls" in msg:
+                        tcs = msg["tool_calls"]
+                        print(f"[DEBUG] msg[{mi}] tool_calls={len(tcs)}: "
+                              f"{[{t['function']['name']: t['function']['arguments'][:100]} for t in tcs]}", flush=True)
+                    elif role == "tool":
+                        tc_id = msg.get("tool_call_id", "?")
+                        name = msg.get("name", "?")
+                        content_len = len(msg.get("content", ""))
+                        print(f"[DEBUG] msg[{mi}] tool_result id={tc_id} name={name} content_len={content_len}", flush=True)
             sys.exit(2)
         except OSError as e:
             if attempt < 2:
