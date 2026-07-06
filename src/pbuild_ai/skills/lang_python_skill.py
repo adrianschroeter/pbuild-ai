@@ -13,7 +13,7 @@ PROMPT_PATTERN = r"(?i)requires a different Python"
 OLLAMA_SPEC_PROMPT = """
 You are an expert in Python RPM packaging for openSUSE.
 Check the following Spec-file. Pay special attention to:
-1. Do NOT use %pyproject_buildrequires, %pyproject_files, or %pyproject_save_files macros — avoid them entirely.
+1. Do NOT use  %py3_build, %py3_install, %pyproject_buildrequires, %pyproject_files, or %pyproject_save_files macros — avoid them entirely.
 2. Use %pyproject_wheel and %pyproject_install instead when the source uses a pyproject.toml.
 3. Generate new spec files by using "py2pack generate MODULE VERSION" command
 4. Use the BuildRequires macros %{python_module MODLE_NAME}
