@@ -31,20 +31,20 @@ from pbuild_ai.tools import execute_tool_calls
 def normalize_tool_calls(tool_calls):
     """Add ``id`` and ``type`` fields to tool_calls for OpenAI compatibility.
 
-    ``arguments`` is kept as a dict (Ollama native `/api/chat` format).
-    OpenAI servers need ``arguments`` as a JSON string, but since the
-    codebase uses the native Ollama endpoint, the dict form is preserved.
-    Switch to ``json.dumps(args)`` when targeting ``/v1/chat/completions``.
+    ``arguments`` is serialized to a JSON string (OpenAI format).
+    Ollama ``/api/chat`` accepts this format since 0.3.0.
     """
+    import json
     normalized = []
     for i, tc in enumerate(tool_calls):
         fn = tc.get("function", {})
+        args = fn.get("arguments", {})
         normalized.append({
             "id": f"call_{i}",
             "type": "function",
             "function": {
                 "name": fn.get("name", ""),
-                "arguments": fn.get("arguments", {}),
+                "arguments": json.dumps(args) if not isinstance(args, str) else args,
             }
         })
     return normalized
@@ -581,9 +581,15 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
         if attempt < 2:
             print(f"[OLLAMA] Empty response (retry {attempt+2}/3, message keys: "
                   f"{list(message.keys())})...")
+            if debug:
+                print(f"[DEBUG] Response ({len(raw)} bytes): {raw[:1000]}", flush=True)
             time.sleep(2)
         else:
-            print(f"[OLLAMA ERROR] Empty response after 3 attempts. "
-                  f"Message keys: {list(message.keys())}. "
-                  f"Content: {message.get('content')!r}")
+            reason = ""
+            if message.get('content') == '' and not message.get('tool_calls'):
+                reason = " (model returned empty content with no tool calls)"
+            print(f"[OLLAMA ERROR] Empty response after 3 attempts."
+                  f"{reason} Message keys: {list(message.keys())}.")
+            if debug:
+                print(f"[DEBUG] Full response ({len(raw)} bytes):\n{raw}", flush=True)
             sys.exit(2)

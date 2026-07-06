@@ -646,13 +646,22 @@ class TestToolCallNormalization(unittest.TestCase):
         self.assertEqual(result[0]["type"], "function")
         self.assertEqual(result[0]["function"]["name"], "edit_file")
 
-    def test_normalize_tool_calls_preserves_arguments_as_dict(self):
+    def test_normalize_tool_calls_serializes_arguments_as_string(self):
         from pbuild_ai.ollama_client import normalize_tool_calls
+        import json
         args = {"path": "x.spec", "old_string": "foo", "new_string": "bar"}
         raw = [{"function": {"name": "edit_file", "arguments": args}}]
         result = normalize_tool_calls(raw)
-        self.assertIsInstance(result[0]["function"]["arguments"], dict)
-        self.assertEqual(result[0]["function"]["arguments"], args)
+        self.assertIsInstance(result[0]["function"]["arguments"], str)
+        self.assertEqual(result[0]["function"]["arguments"], json.dumps(args))
+
+    def test_normalize_tool_calls_preserves_existing_string_arguments(self):
+        """If arguments is already a JSON string, leave it as-is."""
+        from pbuild_ai.ollama_client import normalize_tool_calls
+        raw = [{"function": {"name": "edit_file", "arguments": '{"path": "x.spec"}'}}]
+        result = normalize_tool_calls(raw)
+        self.assertIsInstance(result[0]["function"]["arguments"], str)
+        self.assertEqual(result[0]["function"]["arguments"], '{"path": "x.spec"}')
 
     def test_normalize_tool_calls_round_trips_via_json(self):
         """Simulate the json.dumps + json.loads that happens in chat_completion."""
@@ -668,8 +677,9 @@ class TestToolCallNormalization(unittest.TestCase):
         self.assertEqual(len(tc), 2)
         self.assertEqual(tc[0]["id"], "call_0")
         self.assertEqual(tc[1]["id"], "call_1")
-        self.assertIsInstance(tc[0]["function"]["arguments"], dict)
-        self.assertEqual(tc[0]["function"]["arguments"]["path"], "x.spec")
+        # arguments are now JSON strings (OpenAI format)
+        self.assertIsInstance(tc[0]["function"]["arguments"], str)
+        self.assertIn('"path": "x.spec"', tc[0]["function"]["arguments"])
 
     def test_format_tool_result_has_tool_call_id_and_name(self):
         from pbuild_ai.ollama_client import format_tool_result
@@ -700,6 +710,8 @@ class TestToolCallNormalization(unittest.TestCase):
         round_tripped = json.loads(json.dumps(payload))
         msgs = round_tripped["messages"]
         self.assertEqual(msgs[1]["tool_calls"][0]["function"]["name"], "edit_file")
+        # arguments survive round-trip as JSON string (OpenAI format)
+        self.assertIsInstance(msgs[1]["tool_calls"][0]["function"]["arguments"], str)
         self.assertEqual(msgs[2]["tool_call_id"], "call_0")
         self.assertEqual(msgs[2]["name"], "edit_file")
 
