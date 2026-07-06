@@ -78,7 +78,7 @@ def parse_unresolved_package_from_log(log: str) -> str | None:
     """Extract the unresolvable package name from 'nothing provides' errors."""
     if not log:
         return None
-    m = re.search(r"nothing provides\s+(\S+)", log, re.IGNORECASE)
+    m = re.search(r"nothing provides\s+([\w][\w\-\.\+]*)", log, re.IGNORECASE)
     if m:
         return m.group(1)
     return None
