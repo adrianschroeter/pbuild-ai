@@ -703,5 +703,51 @@ class TestToolCallNormalization(unittest.TestCase):
         self.assertEqual(msgs[2]["name"], "edit_file")
 
 
+class TestParseFailedPackage(unittest.TestCase):
+    """parse_failed_package must extract the failing package stem from build output."""
+
+    def setUp(self):
+        from pbuild_ai.parsing import parse_failed_package
+        self.parse = parse_failed_package
+
+    def test_failed_keyword(self):
+        out = "something failed for python3-foo\n"
+        self.assertEqual(self.parse(out), "python3-foo")
+
+    def test_failure_keyword(self):
+        out = "Build failure in bar-1.0\n"
+        self.assertEqual(self.parse(out), "bar")
+
+    def test_building_line(self):
+        out = "building foo.spec\nsucceeded: 1\nunresolvable: 1\n"
+        self.assertEqual(self.parse(out), "foo")
+
+    def test_building_before_unresolvable(self):
+        out = ("[PID] building foo.spec\n"
+               "[PID] something normal\n"
+               "[PID] unresolvable: nothing provides bar\n")
+        self.assertEqual(self.parse(out), "foo")
+
+    def test_unresolvable_with_needed_by(self):
+        out = ("[PID] unresolvable: nothing provides libxyz\n"
+               "needed by python3-foo-1.0\n")
+        self.assertEqual(self.parse(out), "python3-foo")
+
+    def test_unresolvable_with_required_by(self):
+        out = "unresolvable: nothing provides libxyz required by bar-2.0\n"
+        self.assertEqual(self.parse(out), "bar")
+
+    def test_unresolvable_no_package_found(self):
+        out = "succeeded: 2\nunresolvable: 1\n"
+        self.assertIsNone(self.parse(out))
+
+    def test_unknown_output_returns_none(self):
+        out = "some random build output\nno matches here\n"
+        self.assertIsNone(self.parse(out))
+
+    def test_empty_string(self):
+        self.assertIsNone(self.parse(""))
+
+
 if __name__ == "__main__":
     unittest.main()

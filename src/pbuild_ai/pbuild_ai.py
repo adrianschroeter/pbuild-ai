@@ -1334,6 +1334,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         """
         spec_map = {s.stem: s for s in spec_files}
         max_attempts = 50
+        last_failed_pkg = None
 
         for attempt in range(1, max_attempts + 1):
             print(f"\n[PROJECT BUILD] Full project build (attempt {attempt}/{max_attempts})...")
@@ -1348,10 +1349,23 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 
             failed_pkg = parse_failed_package(all_out)
             if not failed_pkg or failed_pkg not in spec_map:
-                print(f"\n[ERROR] Could not identify failing package. Build output:\n{all_out[:2000]}")
-                return False
+                fallback = None
+                if last_failed_pkg and last_failed_pkg in spec_map:
+                    fallback = last_failed_pkg
+                    print(f"[PROJECT BUILD] Could not identify failed package from log. Trying previously fixed package '{fallback}'...")
+                else:
+                    candidates = [s.stem for s in spec_files]
+                    if candidates:
+                        fallback = candidates[0]
+                        print(f"[PROJECT BUILD] Could not identify failed package from log. Trying '{fallback}'...")
+                if fallback:
+                    failed_pkg = fallback
+                else:
+                    print(f"\n[ERROR] Could not identify failing package. Build output:\n{all_out[:2000]}")
+                    return False
 
             spec = spec_map[failed_pkg]
+            last_failed_pkg = failed_pkg
             print(f"\n[PROJECT BUILD] Package '{failed_pkg}' failed. Running fix loop...")
             ollama.reset_context()
             ollama.reset_stats()

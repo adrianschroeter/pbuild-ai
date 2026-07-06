@@ -60,15 +60,84 @@ def apply_build_order(spec_files, workspace_dir, package_filter, agents_md_conte
         spec_files[:] = reordered
 
 
+def _strip_spec_suffix(name):
+    """Normalise a matched package name to its spec stem.
+
+    Strips ``.spec`` / ``.rpm`` suffixes and trailing version numbers
+    (``-1.0``) so the result matches ``Path.stem`` of the spec file.
+    Only strips ``-MAJOR.MINOR`` patterns to avoid mangling names like
+    ``python3-foo`` (where ``-3`` is part of the name).
+    """
+    for suffix in ('.spec', '.rpm'):
+        if name.lower().endswith(suffix):
+            name = name[:-len(suffix)]
+    name = re.sub(r'-\d+\.\d+[^-]*$', '', name)
+    return name
+
+
+def _pkg_match(line):
+    """Return first package-name match in *line* (word chars, dots, dashes, plusses)."""
+    m = re.search(r'([\w][\w\-\.\+]*)', line)
+    return _strip_spec_suffix(m.group(1)) if m else None
+
+
+def _skip_prepositions(match_iter):
+    """Yield matches from *match_iter* but skip common English prepositions/articles."""
+    SKIP = {'for', 'in', 'to', 'of', 'at', 'on', 'by', 'the', 'a', 'an', 'during', 'from'}
+    for m in match_iter:
+        word = m.group(1).lower()
+        if word not in SKIP:
+            return _strip_spec_suffix(m.group(1))
+    return None
+
+
 def parse_failed_package(build_out):
-    for line in build_out.split('\n'):
-        m = re.search(r'(?:failed|failure).*?([\w][\w\-\.\+]*)', line, re.I)
+    """Extract the failing package name from build output.
+
+    Tries (in order):
+    1. Lines containing ``failed`` / ``failure``.
+    2. ``unresolvable`` lines – looks for a ``building`` line just before
+       the unresolvable line, or for ``needed by`` / ``required by`` in
+       the unresolvable message itself (current or next line).
+    3. The last ``building`` / ``##`` line (most recently started pkg).
+    4. Any ``building`` / ``Processing`` line mentioning a package.
+    Returns the package stem or *None*.
+    """
+    lines = build_out.split('\n')
+
+    for line in lines:
+        it = re.finditer(r'(?:failed|failure)\s+(?:\w+\s+){0,3}([\w][\w\-\.\+]*)', line, re.I)
+        result = _skip_prepositions(it)
+        if result:
+            return result
+
+    for idx, line in enumerate(lines):
+        if re.search(r'unresolvable', line, re.I):
+            pkg = _package_before_line(lines, idx)
+            if pkg:
+                return pkg
+            m = re.search(r'(?:needed by|required by)\s+([\w][\w\-\.\+]*)', line, re.I)
+            if m:
+                return _strip_spec_suffix(m.group(1))
+            if idx + 1 < len(lines):
+                m = re.search(r'(?:needed by|required by)\s+([\w][\w\-\.\+]*)', lines[idx + 1], re.I)
+                if m:
+                    return _strip_spec_suffix(m.group(1))
+
+    for line in reversed(lines):
+        for prefix in ('building', '##', 'Processing'):
+            m = re.search(rf'{prefix}\s+([\w][\w\-\.\+]*)', line, re.I)
+            if m:
+                return _strip_spec_suffix(m.group(1))
+    return None
+
+
+def _package_before_line(lines, idx):
+    """Look backwards from *idx* for a ``building`` / ``Processing`` line."""
+    for i in range(idx - 1, -1, -1):
+        m = re.search(r'(?:building|Processing)\s+([\w][\w\-\.\+]*)', lines[i], re.I)
         if m:
-            return m.group(1)
-    for line in reversed(build_out.split('\n')):
-        m = re.search(r'(?:building|##)\s+([\w][\w\-\.\+]*)', line, re.I)
-        if m:
-            return m.group(1)
+            return _strip_spec_suffix(m.group(1))
     return None
 
 
