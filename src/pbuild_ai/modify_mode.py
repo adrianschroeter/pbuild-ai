@@ -221,9 +221,12 @@ Skill instructions (follow these):
                         changes_made = True
                 messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
                 for (name, _), content in zip(round_calls, round_results):
-                    if name == "read_file" and isinstance(content, str) and len(content) > 2000:
+                    content = str(content)
+                    if len(content) > 2000:
+                        if ctx.debug:
+                            print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> 2000 chars", flush=True)
                         content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                    messages.append({"role": "tool", "content": str(content), "name": name})
+                    messages.append({"role": "tool", "content": content, "name": name})
                 continue
 
             text = (message.get('content') or '').strip()

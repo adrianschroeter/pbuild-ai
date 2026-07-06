@@ -234,9 +234,12 @@ The specification for the package to create is in the system prompt above. Start
             messages.append({"role": "assistant", "content": response_content, **tc_arg})
             for (name, _), content in zip(round_calls, round_results):
                 tool_name = "web_fetch" if name == "_skip" else name
-                if name == "read_file" and isinstance(content, str) and len(content) > 2000:
+                content = str(content)
+                if len(content) > 2000:
+                    if ctx.debug:
+                        print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> 2000 chars", flush=True)
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                messages.append({"role": "tool", "content": str(content), "name": tool_name})
+                messages.append({"role": "tool", "content": content, "name": tool_name})
             spec_files = sorted(Path(ctx.workspace_dir).rglob("*.spec"))
             for spec_path in spec_files:
                 spec_str = str(spec_path)

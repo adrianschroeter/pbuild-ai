@@ -750,6 +750,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             if not allow_tool_scripts:
                 if (workspace / "tool-scripts").is_dir():
                     results.append("Warning: run_tool_script requires --allow-tool-scripts")
+                else:
+                    results.append("")
                 continue
             script_path = workspace / "tool-scripts" / script_name
             if not manager._is_safe_path(script_path):

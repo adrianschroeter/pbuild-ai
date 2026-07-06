@@ -484,9 +484,12 @@ class OllamaAnalyzer:
             messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
             _injected_edit_help = False
             for name, inp, content in _merged_results:
-                if name == "read_file" and isinstance(content, str) and len(content) > 2000:
+                content = str(content)
+                if len(content) > 2000:
+                    if self.debug:
+                        print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> 2000 chars", flush=True)
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
-                messages.append({"role": "tool", "content": str(content), "name": name})
+                messages.append({"role": "tool", "content": content, "name": name})
                 if not _injected_edit_help and name == "edit_file" and ("old_string not found" in str(content) or "old_string found" in str(content)):
                     _path = inp.get("path", "")
                     _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
