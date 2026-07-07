@@ -499,7 +499,12 @@ class RpmSourceManager:
             return pty_read(timeout, wait_prompt=True)
 
         try:
-            _wait_for_shell()
+            _shell_ready = _wait_for_shell()
+            if not _shell_ready:
+                _collected_lower = collected.lower()
+                if "unresolvable" in _collected_lower or "nothing provides" in _collected_lower:
+                    print("[DEEP] Unresolvable dependencies — build environment cannot be created. Skipping investigation.")
+                    return True, "\n".join(collected.strip().split('\n')[-100:])
             _send_and_wait("cd ~/rpmbuild/BUILD/*-build/ 2>/dev/null || cd ~/rpmbuild/BUILD/*/ 2>/dev/null || true")
             _send_and_wait("pwd && ls -la")
 

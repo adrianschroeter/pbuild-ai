@@ -971,10 +971,13 @@ if __name__ == "__main__":
         elif PROMPT_HINT:
             print(f"[FIX] No saved context found, but --prompt will be included in the fix context.")
         if DEEP_ANALYZE:
-            print(f"\n[DEEP ANALYZE] Opening interactive shell for {spec.stem}...")
-            manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
-            print("[DEEP ANALYZE] Shell exited. Terminating pbuild and releasing build root...")
-            time.sleep(3)
+            if "unresolvable" in current_build_out.lower() or "nothing provides" in current_build_out.lower():
+                print(f"\n[DEEP ANALYZE] Unresolvable dependencies in build output — build environment cannot be created. Skipping deep shell.")
+            else:
+                print(f"\n[DEEP ANALYZE] Opening interactive shell for {spec.stem}...")
+                manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
+                print("[DEEP ANALYZE] Shell exited. Terminating pbuild and releasing build root...")
+                time.sleep(3)
         while fix_attempt < MAX_ATTEMPTS:
             fix_attempt += 1
             attempt_label = fix_attempt if not unlimited else "∞"
@@ -1036,17 +1039,22 @@ if __name__ == "__main__":
                 _latest_analysis = error_analysis
             # Auto-trigger deep-analyze if Ollama requests it and we aren't already in that mode
             if "[DEEP_ANALYZE]" in error_analysis and not DEEP_ANALYZE:
-                print("\n[DEEP ANALYZE] Ollama requested interactive investigation. Opening shell...")
-                manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
-                time.sleep(3)
-                print("[DEEP ANALYZE] Shell exited. Re-analyzing with collected data...")
-                deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
-                _fixes_ctx = _build_attempted_fixes_context()
-                error_analysis = ollama.analyze(error_prompt, _fixes_ctx + error_context, deep_context)
-                error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
-                _latest_analysis = error_analysis
-                print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
-                ollama._write_analysis_file(error_analysis)
+                if "unresolvable" in build_out_lower or "nothing provides" in build_out_lower:
+                    print("\n[DEEP ANALYZE] Ollama requested deep analyze but build has unresolvable deps — environment cannot be created. Skipping shell.")
+                    error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
+                    _latest_analysis = error_analysis
+                else:
+                    print("\n[DEEP ANALYZE] Ollama requested interactive investigation. Opening shell...")
+                    manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
+                    time.sleep(3)
+                    print("[DEEP ANALYZE] Shell exited. Re-analyzing with collected data...")
+                    deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
+                    _fixes_ctx = _build_attempted_fixes_context()
+                    error_analysis = ollama.analyze(error_prompt, _fixes_ctx + error_context, deep_context)
+                    error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
+                    _latest_analysis = error_analysis
+                    print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
+                    ollama._write_analysis_file(error_analysis)
             if _is_environment_error(current_build_out):
                 print(f"[RETRY] Environment/VM issue detected. Retrying with --clean...")
                 if PROJECT_MODE:
