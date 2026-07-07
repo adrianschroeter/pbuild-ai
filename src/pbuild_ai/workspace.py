@@ -40,6 +40,7 @@ def _extract_shell_command(text: str) -> str | None:
         line = re.sub(r'^\*{1,2}(.+?)\*{1,2}(?:\s|$)', r'\1 ', line, count=1)
         line = re.sub(r'^#+\s+', '', line)
         line = re.sub(r'^[-*+]\s+', '', line)
+        line = re.sub(r'^\d+\.\s+', '', line)
         line = line.strip()
         if not line:
             continue

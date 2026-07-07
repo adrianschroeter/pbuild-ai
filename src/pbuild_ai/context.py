@@ -78,7 +78,7 @@ class PbuildContext:
         "'Out of memory', 'Cannot allocate memory', 'vm.max_map_count'): suggest "
         "increasing VM memory via 'pbuild --vm-memory 4096' or higher, or setting "
         "parallel jobs to 1 via 'pbuild --jobs 1'.\n\n"
-        "If you see 'fg: no job control' together with a literal '%{macro_name' "
+        "If you see 'fg: no job control' together with a literal '%{macro_name' or '%macro_name' "
         "in the build output (the macro was not expanded by RPM): the macro is not "
         "defined. Either replace the macro usage, or add a BuildRequires for the "
         "package that provides it. Common examples: %suse_update_config needs "
