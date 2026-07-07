@@ -156,27 +156,60 @@ class OllamaAnalyzer:
             self._write_diff_file(base)
 
     def _write_diff_file(self, base):
-        """Write a unified diff of uncommitted source changes alongside the build log."""
+        """Write a unified diff of uncommitted source changes alongside the build log.
+        Only includes files under the work directory (spec, patches, scripts) —
+        excludes build artifacts, results, logs, and other generated files."""
         diff_path = Path(base + '.diff')
         try:
             ws = self.manager.base_dir if hasattr(self.manager, 'base_dir') else None
             if not ws:
                 return
-            r = subprocess.run(
-                ["git", "diff"],
-                cwd=ws, capture_output=True, text=True, timeout=30,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                diff_path.write_text(r.stdout, encoding='utf-8')
-                print(f"[BUILD LOG] Wrote {len(r.stdout)} bytes to {diff_path}")
-            else:
-                r2 = subprocess.run(
-                    ["git", "diff", "--staged"],
-                    cwd=ws, capture_output=True, text=True, timeout=30,
-                )
-                if r2.returncode == 0 and r2.stdout.strip():
-                    diff_path.write_text(r2.stdout, encoding='utf-8')
-                    print(f"[BUILD LOG] Wrote {len(r2.stdout)} bytes to {diff_path}")
+
+            _source_extensions = {'.spec', '.patch', '.diff', '.tar', '.tar.gz', '.tar.bz2',
+                                 '.tar.xz', '.gz', '.bz2', '.xz', '.zip', '.py', '.sh',
+                                 '.cfg', '.conf', '.desktop', '.png', '.svg', '.xml',
+                                 '.service', '.timer', '.target', '.socket', '.path',
+                                 '.mount', '.pc', '.css', '.js', '.m4', '.am', '.ac',
+                                 '.in', '.c', '.h', '.cpp', '.hpp', '.rs', '.go',
+                                 '.rb', '.pl', '.pm', '.java', '.txt', '.md', '.rst'}
+
+            def _is_source_file(path: str) -> bool:
+                parts = path.split('/')
+                # Exclude common build/result/log directories
+                if any(p.startswith('_build.') or p == 'results' or p == 'docs'
+                       for p in parts):
+                    return False
+                # Exclude log/diff/analyze files
+                if any(path.endswith(ext) for ext in ('.log', '.analyze', '.pai.context')):
+                    return False
+                # Must have a recognized source extension (allow any file in root)
+                ext = Path(path).suffix
+                return ext in _source_extensions or len(parts) == 1
+
+            def _get_filtered_diff(staged: bool = False) -> str | None:
+                cmd = ["git", "diff", "--name-only"]
+                if staged:
+                    cmd = ["git", "diff", "--staged", "--name-only"]
+                r = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, timeout=30)
+                if r.returncode != 0 or not r.stdout.strip():
+                    return None
+                files = [f for f in r.stdout.strip().split('\n') if f.strip()]
+                source_files = [f for f in files if _is_source_file(f)]
+                if not source_files:
+                    return None
+                diff_cmd = ["git", "diff"]
+                if staged:
+                    diff_cmd.append("--staged")
+                diff_cmd.extend(["--", *source_files])
+                r2 = subprocess.run(diff_cmd, cwd=ws, capture_output=True, text=True, timeout=30)
+                return r2.stdout if r2.returncode == 0 and r2.stdout.strip() else None
+
+            diff_text = _get_filtered_diff(staged=False)
+            if diff_text is None:
+                diff_text = _get_filtered_diff(staged=True)
+            if diff_text:
+                diff_path.write_text(diff_text, encoding='utf-8')
+                print(f"[BUILD LOG] Wrote {len(diff_text)} bytes to {diff_path}")
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
 
