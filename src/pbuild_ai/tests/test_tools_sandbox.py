@@ -683,11 +683,11 @@ class TestParseFailedPackage(unittest.TestCase):
         self.assertIsNone(self.parse(""))
 
 
-class TestWriteDiffFile(unittest.TestCase):
-    """_write_diff_file writes a .diff beside the build log when there are git changes."""
+class TestWriteToolChanges(unittest.TestCase):
+    """_write_tool_changes writes a .tool_changes beside the build log when files were changed."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_test_diff_")
+        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_test_tool_changes_")
         (Path(self.tmpdir) / ".git").mkdir()  # fake git repo marker
         self.fake_log = Path(self.tmpdir) / "build-1.log"
         self.fake_log.write_text("build log content")
@@ -704,39 +704,175 @@ class TestWriteDiffFile(unittest.TestCase):
         analyzer.manager.base_dir = self.tmpdir
         return analyzer
 
-    def test_diff_written_when_git_diff_has_content(self):
-        with mock.patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "--- a/foo.spec\n+++ b/foo.spec\n@@ -1 +1 @@\n-old\n+new\n"
+    def test_changes_written_when_git_diff_has_content(self):
+        diff_out = "--- a/foo.spec\n+++ b/foo.spec\n@@ -1 +1 @@\n-old\n+new\n"
+        def mock_run(cmd, **kwargs):
+            m = mock.MagicMock()
+            m.returncode = 0
+            m.stdout = diff_out
+            return m
+        with mock.patch('subprocess.run', side_effect=mock_run):
             analyzer = self._make_analyzer()
-            analyzer._write_diff_file(str(self.fake_log))
-        diff_path = Path(str(self.fake_log) + ".diff")
-        self.assertTrue(diff_path.exists())
-        content = diff_path.read_text()
+            analyzer._changed_files = {'foo.spec'}
+            analyzer._write_tool_changes()
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertTrue(changes_path.exists())
+        content = changes_path.read_text()
         self.assertIn("foo.spec", content)
 
-    def test_no_diff_when_no_git_changes(self):
-        with mock.patch('subprocess.run') as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = ""
+    def test_changes_written_with_untracked(self):
+        """Untracked source files should appear as new file additions."""
+        noindex_out = "--- /dev/null\n+++ b/new/foo.spec\n@@ -0,0 +1 @@\n+new\n"
+        call_count = 0
+        def mock_run(cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            m = mock.MagicMock()
+            m.returncode = 0
+            m.stdout = noindex_out if '--no-index' in cmd else ""
+            return m
+        with mock.patch('subprocess.run', side_effect=mock_run):
             analyzer = self._make_analyzer()
-            analyzer._write_diff_file(str(self.fake_log))
-        diff_path = Path(str(self.fake_log) + ".diff")
-        self.assertFalse(diff_path.exists())
+            analyzer._changed_files = {'new/foo.spec'}
+            analyzer._write_tool_changes()
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertTrue(changes_path.exists())
+        content = changes_path.read_text()
+        self.assertIn("new/foo.spec", content)
+        self.assertEqual(call_count, 3)  # plain, staged, no-index
 
-    def test_diff_silent_on_git_error(self):
-        with mock.patch('subprocess.run', side_effect=FileNotFoundError):
+    def test_changes_written_with_untracked_and_modified(self):
+        """Mixed untracked + modified source files produce a combined diff."""
+        diff_out = "--- a/foo.spec\n+++ b/foo.spec\n@@ -1 +1 @@\n-old\n+new\n"
+        noindex_out = "--- /dev/null\n+++ b/new/bar.spec\n@@ -0,0 +1 @@\n+bar\n"
+        def mock_run(cmd, **kwargs):
+            m = mock.MagicMock()
+            m.returncode = 0
+            if '--no-index' in cmd:
+                m.stdout = noindex_out
+            elif 'new/bar.spec' in cmd:
+                m.stdout = ""
+            else:
+                m.stdout = diff_out
+            return m
+        with mock.patch('subprocess.run', side_effect=mock_run):
             analyzer = self._make_analyzer()
-            analyzer._write_diff_file(str(self.fake_log))  # must not raise
-        diff_path = Path(str(self.fake_log) + ".diff")
-        self.assertFalse(diff_path.exists())
+            analyzer._changed_files = {'foo.spec', 'new/bar.spec'}
+            analyzer._write_tool_changes()
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertTrue(changes_path.exists())
+        content = changes_path.read_text()
+        self.assertIn("foo.spec", content)
+        self.assertIn("bar.spec", content)
 
-    def test_diff_silent_on_git_error(self):
-        with mock.patch('subprocess.run', side_effect=FileNotFoundError):
+    def test_filters_build_artifacts(self):
+        """Files under docs/results/ or ending in .log must be excluded."""
+        diff_out = "--- a/foo.spec\n+++ b/foo.spec\n@@ -1 +1 @@\n-old\n+new\n"
+        def mock_run(cmd, **kwargs):
+            m = mock.MagicMock()
+            m.returncode = 0
+            m.stdout = diff_out
+            return m
+        with mock.patch('subprocess.run', side_effect=mock_run):
             analyzer = self._make_analyzer()
-            analyzer._write_diff_file(str(self.fake_log))  # must not raise
-        diff_path = Path(str(self.fake_log) + ".diff")
-        self.assertFalse(diff_path.exists())
+            analyzer._changed_files = {'docs/results/foo/build-1.log', 'foo.spec'}
+            analyzer._write_tool_changes()
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertTrue(changes_path.exists())
+        content = changes_path.read_text()
+        self.assertIn("foo.spec", content)
+        self.assertNotIn("build-1.log", content)
+
+    def test_no_changes_when_no_changed_files(self):
+        analyzer = self._make_analyzer()
+        analyzer._changed_files = set()
+        analyzer._write_tool_changes()
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertFalse(changes_path.exists())
+
+    def test_no_changes_all_filtered_out(self):
+        """Only build artifact changes → no .tool_changes file written."""
+        analyzer = self._make_analyzer()
+        analyzer._changed_files = {'docs/results/foo/build-1.log', 'docs/results.json'}
+        analyzer._write_tool_changes()
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertFalse(changes_path.exists())
+
+    def test_silent_on_git_error(self):
+        analyzer = self._make_analyzer()
+        analyzer._changed_files = {'foo.spec'}
+        with mock.patch('subprocess.run', side_effect=FileNotFoundError):
+            analyzer._write_tool_changes()  # must not raise
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertFalse(changes_path.exists())
+
+    def test_clears_changed_files_after_write(self):
+        """_changed_files must be cleared after a successful .tool_changes write."""
+        diff_out = "--- a/foo.spec\n+++ b/foo.spec\n@@ -1 +1 @@\n-old\n+new\n"
+        def mock_run(cmd, **kwargs):
+            m = mock.MagicMock()
+            m.returncode = 0
+            m.stdout = diff_out
+            return m
+        with mock.patch('subprocess.run', side_effect=mock_run):
+            analyzer = self._make_analyzer()
+            analyzer._changed_files = {'foo.spec'}
+            analyzer._write_tool_changes()
+        self.assertEqual(analyzer._changed_files, set())
+
+    def test_before_contents_shows_only_changes_for_untracked(self):
+        """Untracked file with before_contents should produce a modified-file diff, not a new-file diff."""
+        before = "Name: oterm\nVersion: 1.0\n%description\nTest.\n"
+        after  = "Name: oterm\nVersion: 2.0\n%description\nTest.\n"
+        (Path(self.tmpdir) / "oterm.spec").write_text(after)
+        def mock_run(cmd, **kwargs):
+            m = mock.MagicMock()
+            m.returncode = 0
+            m.stdout = ""  # all git diff attempts return empty (untracked file)
+            return m
+        with mock.patch('subprocess.run', side_effect=mock_run):
+            analyzer = self._make_analyzer()
+            analyzer._changed_files = {'oterm.spec'}
+            analyzer._write_tool_changes(before_contents={'oterm.spec': before})
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertTrue(changes_path.exists())
+        content = changes_path.read_text()
+        # Must show the changed line (not entire file)
+        self.assertIn("-Version: 1.0", content)
+        self.assertIn("+Version: 2.0", content)
+        # Must be a modified diff, NOT a new-file diff
+        self.assertNotIn("/dev/null", content)
+        self.assertNotIn("@@ -0,0", content)
+
+    def test_before_contents_skips_when_content_identical(self):
+        """When before equals after, content-based diff returns nothing."""
+        content = "Name: oterm\nVersion: 1.0\n"
+        (Path(self.tmpdir) / "oterm.spec").write_text(content)
+        def mock_run(cmd, **kwargs):
+            m = mock.MagicMock()
+            m.returncode = 0
+            m.stdout = ""
+            return m
+        with mock.patch('subprocess.run', side_effect=mock_run):
+            analyzer = self._make_analyzer()
+            analyzer._changed_files = {'oterm.spec'}
+            analyzer._write_tool_changes(before_contents={'oterm.spec': content})
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertFalse(changes_path.exists())
+
+    def test_add_changed_file_tracks_relative_path(self):
+        """_add_changed_file converts an absolute path to the relative form used by git diff."""
+        analyzer = self._make_analyzer()
+        abs_path = str(Path(self.tmpdir) / "subdir" / "other.spec")
+        Path(abs_path).parent.mkdir(parents=True, exist_ok=True)
+        analyzer._add_changed_file(abs_path)
+        self.assertIn("subdir/other.spec", analyzer._changed_files)
+
+    def test_add_changed_file_tracks_relative_path_as_is(self):
+        """_add_changed_file keeps an already-relative path unchanged."""
+        analyzer = self._make_analyzer()
+        analyzer._add_changed_file("my.spec")
+        self.assertIn("my.spec", analyzer._changed_files)
 
 
 if __name__ == "__main__":

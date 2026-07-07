@@ -1303,6 +1303,14 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     sys.exit(1)
                 break
 
+            if changed:
+                # Ensure spec edits from rewrite paths are tracked too
+                if str(spec.relative_to(WORKSPACE_DIR)) not in ollama._changed_files:
+                    ollama._add_changed_file(str(spec))
+                ollama._write_tool_changes(
+                    before_contents={str(spec.relative_to(WORKSPACE_DIR)): spec_content}
+                )
+
             if changed and _is_comment_only_change(spec_content, current_spec):
                 print("[INFO] Only comment/whitespace changes — skipping rebuild.")
                 if _ctx_file.exists():

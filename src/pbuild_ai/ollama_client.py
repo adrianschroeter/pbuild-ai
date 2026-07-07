@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import difflib
 import hashlib
 import json
 import os
@@ -42,6 +43,7 @@ class OllamaAnalyzer:
         self._opener.addheaders = [('Connection', 'keep-alive')]
         self._chat_supported = True
         self.manager = None
+        self._changed_files: set[str] = set()
         self.reset_stats()
 
     MAX_PROMPT_CHARS = 80000
@@ -153,13 +155,30 @@ class OllamaAnalyzer:
             filtered = self._strip_spec_from_analysis(response_text)
             analyze_path.write_text(filtered, encoding='utf-8')
             print(f"[BUILD LOG] Wrote {len(filtered)} bytes to {analyze_path}")
-            self._write_diff_file(base)
 
-    def _write_diff_file(self, base):
-        """Write a unified diff of uncommitted source changes alongside the build log.
-        Only includes source files (spec, patches, scripts) — excludes build artifacts,
-        results, logs, and other generated files."""
-        diff_path = Path(base + '.diff')
+    def _add_changed_file(self, abs_or_rel_path):
+        """Track a file modified outside call_with_tools (e.g. via spec rewrite)."""
+        if self.manager and hasattr(self.manager, 'base_dir'):
+            try:
+                p = Path(abs_or_rel_path)
+                if p.is_absolute():
+                    p = p.relative_to(self.manager.base_dir)
+                self._changed_files.add(str(p))
+            except ValueError:
+                pass
+
+    def _write_tool_changes(self, before_contents=None):
+        """Write .tool_changes file next to the current build log with diffs of
+        every source file the LLM modified this round. Only writes when files
+        were actually changed (self._changed_files is non-empty).
+
+        before_contents: optional dict[str, str] mapping relative file paths to
+        their content BEFORE edits — used to generate proper diffs for untracked
+        files (instead of showing the entire file as new via git diff --no-index)."""
+        if not (self.manager and hasattr(self.manager, '_last_log_path') and self.manager._last_log_path):
+            return
+        base = str(self.manager._last_log_path)
+        diff_path = Path(base + '.tool_changes')
         try:
             ws = self.manager.base_dir if hasattr(self.manager, 'base_dir') else None
             if not ws:
@@ -167,39 +186,88 @@ class OllamaAnalyzer:
 
             def _is_source_file(path: str) -> bool:
                 parts = path.split('/')
-                # Exclude common build/result/log directories
                 if any(p.startswith('_build.') or p == 'results' or p == '.pc'
                        for p in parts):
                     return False
-                # Exclude generated/log files
+                filename = parts[-1]
+                if filename.startswith('results.') or filename == 'benchmark-report.html':
+                    return False
                 if any(path.endswith(ext) for ext in ('.log', '.analyze', '.pai.context')):
                     return False
                 return True
 
-            def _get_filtered_diff(staged: bool = False) -> str | None:
-                cmd = ["git", "diff", "--name-only"]
-                if staged:
-                    cmd = ["git", "diff", "--staged", "--name-only"]
-                r = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, timeout=30)
-                if r.returncode != 0 or not r.stdout.strip():
-                    return None
-                files = [f for f in r.stdout.strip().split('\n') if f.strip()]
-                source_files = [f for f in files if _is_source_file(f)]
-                if not source_files:
-                    return None
-                diff_cmd = ["git", "diff"]
-                if staged:
-                    diff_cmd.append("--staged")
-                diff_cmd.extend(["--", *source_files])
-                r2 = subprocess.run(diff_cmd, cwd=ws, capture_output=True, text=True, timeout=30)
-                return r2.stdout if r2.returncode == 0 and r2.stdout.strip() else None
+            if not self._changed_files:
+                print("[DIFF_DEBUG] no files changed by LLM this round")
+                return
 
-            diff_text = _get_filtered_diff(staged=False)
-            if diff_text is None:
-                diff_text = _get_filtered_diff(staged=True)
-            if diff_text:
+            changed = [f for f in self._changed_files if _is_source_file(f)]
+            excluded = [f for f in self._changed_files if not _is_source_file(f)]
+            if excluded:
+                print(f"[DIFF_DEBUG] filtered out (not source): {excluded}")
+            if not changed:
+                print("[DIFF_DEBUG] all changed files are non-source — no diff")
+                return
+
+            before_contents = before_contents or {}
+
+            def _content_based_diff(rel_path):
+                """Generate a unified diff from before/after content snapshots."""
+                before = before_contents.get(rel_path)
+                if before is None:
+                    return None
+                abs_path = Path(ws) / rel_path
+                try:
+                    after = abs_path.read_text(encoding='utf-8')
+                except Exception:
+                    return None
+                if before == after:
+                    return None
+                lines = list(difflib.unified_diff(
+                    before.splitlines(),
+                    after.splitlines(),
+                    fromfile=rel_path,
+                    tofile=rel_path,
+                ))
+                return ''.join(lines) if lines else None
+
+            diff_parts = []
+            for f in sorted(changed):
+                # 1) Try git diff (works for tracked files)
+                r = subprocess.run(
+                    ["git", "diff", "--", f],
+                    cwd=ws, capture_output=True, text=True, timeout=30
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    diff_parts.append(r.stdout)
+                    continue
+                # 2) Try git diff --staged
+                r = subprocess.run(
+                    ["git", "diff", "--staged", "--", f],
+                    cwd=ws, capture_output=True, text=True, timeout=30
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    diff_parts.append(r.stdout)
+                    continue
+                # 3) Try content-based diff (for untracked files with before snapshot)
+                cd = _content_based_diff(f)
+                if cd is not None:
+                    diff_parts.append(cd)
+                    continue
+                # 4) Last resort: show as new file (untracked, no before snapshot)
+                r = subprocess.run(
+                    ["git", "diff", "--no-index", "/dev/null", f],
+                    cwd=ws, capture_output=True, text=True, timeout=30
+                )
+                if r.returncode in (0, 1) and r.stdout.strip():
+                    diff_parts.append(r.stdout)
+
+            if diff_parts:
+                diff_text = '\n'.join(diff_parts)
                 diff_path.write_text(diff_text, encoding='utf-8')
                 print(f"[BUILD LOG] Wrote {len(diff_text)} bytes to {diff_path}")
+                self._changed_files.clear()
+            else:
+                print("[DIFF_DEBUG] no diffs could be generated for changed files")
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
 
@@ -249,6 +317,7 @@ class OllamaAnalyzer:
         _file_versions = {}
         _blocked_files = set()
         _WRITE_TOOLS = {"write_file", "edit_file"}
+        self._changed_files = set()
         # Record initial versions of all spec files so reverts to original are caught
         if workspace_dir:
             try:
@@ -495,6 +564,7 @@ class OllamaAnalyzer:
                 if name in _WRITE_TOOLS and r.startswith("OK:"):
                     _path = inp.get("path", "")
                     if _path:
+                        self._changed_files.add(_path)
                         _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
                         if _resolved and _resolved.exists():
                             try:
