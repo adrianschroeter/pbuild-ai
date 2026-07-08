@@ -206,6 +206,29 @@ variable. Defaults to `http://localhost:11434`.
 Sets the Ollama model name. Overrides the `OLLAMA_MODEL` environment
 variable. Defaults to `gemma4`.
 
+### `--ollama-option KEY=VALUE`
+
+Pass a model parameter to Ollama (repeatable). Supported keys include
+`temperature`, `num_ctx`, `top_p`, `stop`, `seed`, etc. Common use cases:
+
+```bash
+# Reduce creativity for more deterministic fixes
+pbuild-ai --fix bc --ollama-option temperature=0.1
+
+# Increase context window for large spec files
+pbuild-ai --fix bc --ollama-option num_ctx=16384
+
+# Disable thinking/reasoning (for models that support it, e.g. gemma4, qwen3)
+pbuild-ai --fix bc --ollama-option thinking=false
+
+# Reduce maximum tokens to predict
+pbuild-ai --fix bc --ollama-option num_predict=2048
+```
+
+Values are automatically coerced: strings containing `.` become floats,
+integer-like strings become ints, and `true`/`false`/`yes`/`no` become
+booleans. Everything else is passed as a string.
+
 ### `--generate PROMPT` / `--create PROMPT`
 
 Creates a new openSUSE RPM package from scratch. `--create` is an alias

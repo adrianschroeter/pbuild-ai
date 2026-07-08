@@ -47,6 +47,7 @@ class PbuildContext:
     ollama_server: Optional[str] = None  # --openai-server
     ollama_model_arg: Optional[str] = None
     ollama_timeout: int = 900  # --ollama-timeout
+    ollama_options: dict = field(default_factory=dict)  # --ollama-option
     email: str = ""
     analyze_mode: bool = False
     max_rounds: int = 15

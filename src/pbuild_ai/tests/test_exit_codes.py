@@ -44,6 +44,7 @@ class TestGenerateModeExitCode(unittest.TestCase):
         )
         ctx.ollama = MagicMock()
         ctx.ollama.model = "test-model"
+        ctx.ollama.options = {}
         ctx.ollama.chat_api_url = "http://localhost:99999"
         ctx.manager = MagicMock()
         ctx.manager.read_file_safe.return_value = "dummy"
@@ -86,6 +87,7 @@ class TestModifyModeExitCode(unittest.TestCase):
         )
         ctx.ollama = MagicMock()
         ctx.ollama.model = "test-model"
+        ctx.ollama.options = {}
         ctx.ollama.chat_api_url = "http://localhost:99999"
         ctx.manager = MagicMock()
         ctx.manager.read_file_safe.return_value = "Name: testpkg\nVersion: 1.0\n\n%description\nTest.\n"

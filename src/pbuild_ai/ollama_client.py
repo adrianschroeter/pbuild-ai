@@ -30,11 +30,12 @@ from pbuild_ai.tools import execute_tool_calls
 
 
 class OllamaAnalyzer:
-    def __init__(self, host=None, model="default", debug=False, timeout=None):
+    def __init__(self, host=None, model="default", debug=False, timeout=None, options=None):
         self.host = (host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
         self.model = model
         self.debug = debug
         self.timeout = timeout if timeout is not None else int(os.environ.get("OLLAMA_TIMEOUT", "900"))
+        self.options = options or {}
         self.api_url = f"{self.host}/api/generate"
         self.chat_api_url = f"{self.host}/api/chat"
         self._context = None
@@ -78,12 +79,15 @@ class OllamaAnalyzer:
                 system += content + '\n'
             elif content:
                 prompt_parts.append(f"{role}: {content}")
-        return {
+        payload = {
             "model": self.model,
             "system": system.strip() or None,
             "prompt": '\n'.join(prompt_parts) if prompt_parts else '.',
-            "stream": False
+            "stream": False,
         }
+        if self.options:
+            payload["options"] = self.options
+        return payload
 
     def _request(self, url, payload):
         if payload.get("context") is None:
@@ -137,6 +141,8 @@ class OllamaAnalyzer:
             full_prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
         full_prompt = full_prompt[:self.MAX_PROMPT_CHARS]
         payload = {"model": self.model, "prompt": full_prompt, "stream": False}
+        if self.options:
+            payload["options"] = self.options
         self._context = None
         try:
             result = self._request(self.api_url, payload)
@@ -338,8 +344,10 @@ class OllamaAnalyzer:
                     "model": self.model,
                     "messages": messages,
                     "tools": tools,
-                    "stream": False
+                    "stream": False,
                 }
+                if self.options:
+                    payload["options"] = self.options
                 if self._chat_context is not None:
                     payload["context"] = self._chat_context
             else:
@@ -609,6 +617,9 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
     On HTTP/protocol errors or after 3 failed attempts, prints diagnostic info
     and calls sys.exit(2)."""
     payload = {"model": ollama.model, "messages": messages, "tools": tools, "stream": False}
+    _opts = getattr(ollama, "options", None) or {}
+    if _opts:
+        payload["options"] = _opts
     _payload_str = None
     data_bytes = b''
     try:

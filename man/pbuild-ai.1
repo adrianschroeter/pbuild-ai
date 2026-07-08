@@ -160,6 +160,17 @@ Defaults to \fBhttp://localhost:11434\fR.
 .B \-\-model NAME
 Ollama model name. Overrides the \fBOLLAMA_MODEL\fR environment variable.
 Default: \fBdefault\fR (server-defined fallback).
+.TP
+.B \-\-ollama\-option KEY=VALUE
+Pass a model parameter to Ollama (repeatable). Common keys:
+\fBtemperature\fR (creativity, default ~0.7), \fBnum_ctx\fR (context window
+size, e.g. 8192), \fBnum_predict\fR (max output tokens),
+\fBtop_p\fR, \fBseed\fR, \fBstop\fR.
+For reasoning/thinking models, use \fBthinking=false\fR to disable
+thinking.
+Example: \fB\-\-ollama\-option temperature=0.1 \-\-ollama\-option num_ctx=16384\fR.
+Values are coerced: floats for strings containing \fB.\fR, ints for
+integer-like strings, booleans for \fBtrue\fR/\fBfalse\fR/\fByes\fR/\fBno\fR.
 .SH ENVIRONMENT
 .TP
 .B OLLAMA_HOST
@@ -222,6 +233,12 @@ pbuild\-ai \-\-all .
 .TP
 Build with a custom Ollama model:
 pbuild\-ai \-\-model llama3 bc
+.TP
+Build with low temperature for more deterministic fixes and larger context:
+pbuild\-ai \-\-fix bc \-\-ollama\-option temperature=0.1 \-\-ollama\-option num_ctx=16384
+.TP
+Disable thinking mode (for models that support it):
+pbuild\-ai \-\-fix bc \-\-ollama\-option thinking=false
 .SH AGENTS.md
 Your package or project may contain an \fIAGENTS.md\fR file to give hints
 on how to process or update. Packages listed there under a "skip" rule
