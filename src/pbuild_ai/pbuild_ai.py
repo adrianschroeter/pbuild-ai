@@ -1066,7 +1066,12 @@ if __name__ == "__main__":
                 error_analysis = _prev_error_analysis
             else:
                 _fixes_ctx = _build_attempted_fixes_context()
-                error_analysis = ollama.analyze(error_prompt, _fixes_ctx + error_context, full_context)
+                _spec_review = getattr(manager, '_spec_analysis', '')
+                _error_analysis_ctx = (
+                    f"--- Initial spec review ---\n{_spec_review[:3000]}\n\n" + _fixes_ctx + error_context
+                    if _spec_review else _fixes_ctx + error_context
+                )
+                error_analysis = ollama.analyze(error_prompt, _error_analysis_ctx, full_context)
                 _prev_error_context = error_context
                 _prev_error_analysis = error_analysis
             _latest_analysis = error_analysis
@@ -1143,9 +1148,12 @@ Make only ONE edit to each file. Do NOT rewrite or re-edit a file you have alrea
 
 AGENTS.md instructions (follow these):
 {fix_context}"""},
-                 {"role": "user", "content": f"""The build for {spec.name} failed.
+                    {"role": "user", "content": f"""The build for {spec.name} failed.
 Package: {package_name}
 Spec file path: {spec.relative_to(WORKSPACE_DIR)}
+
+Initial spec review (the root cause was identified here):
+{getattr(manager, '_spec_analysis', '')[:3000]}
 
 Error context:
 {error_context[:6000]}
@@ -1973,6 +1981,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
                         spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
                         print(f"-> AI({ollama.model}) says:\n{spec_analysis}\n")
+                        manager._spec_analysis = spec_analysis
                         if not FIX_MODE or manager.has_prior_failed_build() or PROMPT_HINT:
                             manager.fix_file_content(spec, fix_func)
 

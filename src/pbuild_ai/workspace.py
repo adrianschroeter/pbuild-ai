@@ -96,13 +96,12 @@ class RpmSourceManager:
         if cmd and cmd[0] == "pbuild":
             _cleanup_stale_build_processes()
         if stream_output:
-            proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+            proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', bufsize=1)
             lines = []
             spinner = Spinner(prefix="[BUILD]", color=YELLOW)
             spinner.start()
             try:
-                for raw in proc.stdout:
-                    line = raw.decode('utf-8', errors='replace')
+                for line in proc.stdout:
                     lines.append(line)
                     try:
                         print(line, end='', flush=True)
