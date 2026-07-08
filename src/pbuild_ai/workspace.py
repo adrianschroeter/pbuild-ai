@@ -98,17 +98,12 @@ class RpmSourceManager:
         if stream_output:
             proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', bufsize=1)
             lines = []
-            spinner = Spinner(prefix="[BUILD]", color=YELLOW)
-            spinner.start()
-            try:
-                for line in proc.stdout:
-                    lines.append(line)
-                    try:
-                        print(line, end='', flush=True)
-                    except BlockingIOError:
-                        pass
-            finally:
-                spinner.stop()
+            for line in proc.stdout:
+                lines.append(line)
+                try:
+                    print(line, end='', flush=True)
+                except BlockingIOError:
+                    pass
             proc.wait()
             output = ''.join(lines)
             self._write_build_log(output)
