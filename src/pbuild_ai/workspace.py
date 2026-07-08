@@ -467,6 +467,11 @@ class RpmSourceManager:
                         for _line in collected_all.split("\n"):
                             if "unresolvable" in _line.lower() or "nothing provides" in _line.lower():
                                 print(f"  [DEP] {_line.strip()}")
+                        return "UNRESOLVABLE"
+                    elif "no buildstatus set" in _lower or "failed to get" in _lower:
+                        print(f"\n[DEEP] pbuild exited early (code {proc.returncode}) — build environment setup failure.")
+                        print(f"[DEEP] VM/KVM build root stale — retry with --clean instead of --no-clean.")
+                        return "ENV_FAILURE"
                     else:
                         print(f"\n[DEEP] pbuild exited early (code {proc.returncode}) — build setup failed before shell could open.")
                     print(f"[DEEP] Bailing out of shell wait. Use --fix to resolve build setup issues.")
@@ -501,11 +506,20 @@ class RpmSourceManager:
 
         try:
             _shell_ready = _wait_for_shell()
+            if _shell_ready == "ENV_FAILURE":
+                print("[DEEP] Build environment cannot be created (stale build root). Skipping investigation.")
+                return False, "BUILD_ENV_SETUP_FAILURE"
+            if _shell_ready == "UNRESOLVABLE":
+                print("[DEEP] Unresolvable dependencies — build environment cannot be created. Skipping investigation.")
+                return True, "\n".join(collected.strip().split('\n')[-100:])
             if not _shell_ready:
                 _collected_lower = collected.lower()
                 if "unresolvable" in _collected_lower or "nothing provides" in _collected_lower:
                     print("[DEEP] Unresolvable dependencies — build environment cannot be created. Skipping investigation.")
                     return True, "\n".join(collected.strip().split('\n')[-100:])
+                if "no buildstatus set" in _collected_lower or "failed to get" in _collected_lower:
+                    print("[DEEP] Build environment setup failure detected. Skipping investigation.")
+                    return False, "BUILD_ENV_SETUP_FAILURE"
             _send_and_wait("cd ~/rpmbuild/BUILD/*-build/ 2>/dev/null || cd ~/rpmbuild/BUILD/*/ 2>/dev/null || true")
             _send_and_wait("pwd && ls -la")
 
