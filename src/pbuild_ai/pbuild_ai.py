@@ -1001,10 +1001,9 @@ if __name__ == "__main__":
                         current_build_out = _retry_out
                 print("[DEEP ANALYZE] Shell exited. Terminating pbuild and releasing build root...")
                 time.sleep(3)
-        if _deep_retry_ok:
-            build_success2 = True
-        else:
-            while fix_attempt < MAX_ATTEMPTS:
+        while fix_attempt < MAX_ATTEMPTS:
+            if _deep_retry_ok:
+                break
             fix_attempt += 1
             attempt_label = fix_attempt if not unlimited else "∞"
             print(f"\n[FIX MODE] Attempt {attempt_label}/{MAX_ATTEMPTS if not unlimited else '∞'} — Diagnosing build failure...")

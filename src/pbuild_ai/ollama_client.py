@@ -262,7 +262,7 @@ class OllamaAnalyzer:
                     diff_parts.append(r.stdout)
 
             if diff_parts:
-                diff_text = '\n'.join(diff_parts)
+                diff_text = ''.join(diff_parts)
                 diff_path.write_text(diff_text, encoding='utf-8')
                 print(f"[BUILD LOG] Wrote {len(diff_text)} bytes to {diff_path}")
                 self._changed_files.clear()

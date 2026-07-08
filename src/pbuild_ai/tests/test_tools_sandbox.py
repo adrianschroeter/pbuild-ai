@@ -860,6 +860,34 @@ class TestWriteToolChanges(unittest.TestCase):
         changes_path = Path(str(self.fake_log) + ".tool_changes")
         self.assertFalse(changes_path.exists())
 
+    def test_multiple_diff_parts_have_single_newline_separator(self):
+        """Multiple diffs in .tool_changes must be joined without extra blank lines."""
+        diff1 = "--- a/foo.spec\n+++ b/foo.spec\n@@ -1 +1 @@\n-old\n+new\n"
+        diff2 = "--- a/bar.spec\n+++ b/bar.spec\n@@ -1 +1 @@\n-old\n+new\n"
+        call_idx = 0
+        def mock_run(cmd, **kwargs):
+            nonlocal call_idx
+            m = mock.MagicMock()
+            m.returncode = 0
+            if '--no-index' in cmd:
+                m.stdout = ""
+            elif call_idx < 2 and '--staged' not in cmd:
+                m.stdout = diff1 if call_idx == 0 else diff2
+                call_idx += 1
+            else:
+                m.stdout = ""
+            return m
+        with mock.patch('subprocess.run', side_effect=mock_run):
+            analyzer = self._make_analyzer()
+            analyzer._changed_files = {'foo.spec', 'bar.spec'}
+            analyzer._write_tool_changes()
+        changes_path = Path(str(self.fake_log) + ".tool_changes")
+        self.assertTrue(changes_path.exists())
+        content = changes_path.read_text()
+        self.assertIn("foo.spec", content)
+        self.assertIn("bar.spec", content)
+        self.assertNotIn("\n\n-", content, msg="Should not have blank lines between diff hunks")
+
     def test_add_changed_file_tracks_relative_path(self):
         """_add_changed_file converts an absolute path to the relative form used by git diff."""
         analyzer = self._make_analyzer()
