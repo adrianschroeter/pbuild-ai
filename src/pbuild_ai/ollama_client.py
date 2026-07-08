@@ -228,7 +228,9 @@ class OllamaAnalyzer:
                     fromfile=rel_path,
                     tofile=rel_path,
                 ))
-                return ''.join(lines) if lines else None
+                if not lines:
+                    return None
+                return '\n'.join(line.rstrip('\n') for line in lines) + '\n'
 
             diff_parts = []
             for f in sorted(changed):
@@ -262,7 +264,7 @@ class OllamaAnalyzer:
                     diff_parts.append(r.stdout)
 
             if diff_parts:
-                diff_text = ''.join(diff_parts)
+                diff_text = '\n'.join(p.rstrip('\n') for p in diff_parts) + '\n'
                 diff_path.write_text(diff_text, encoding='utf-8')
                 print(f"[BUILD LOG] Wrote {len(diff_text)} bytes to {diff_path}")
                 self._changed_files.clear()
