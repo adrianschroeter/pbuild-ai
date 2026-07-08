@@ -29,16 +29,17 @@ The `%changelog` section should NOT exist in the .spec file. Changelog entries g
 
 ### 5. Ensure proper tag ordering
 Standard spec tags should appear in this order:
-- Name, Version, Release, Summary, License, Group (optional), URL, Source0..N, Patch0..N, BuildRequires, Requires, %description, %prep, %build, %install, %check, %files, %changelog
+- Name, Version, Release, Summary, License, Group (obsolete), URL, Source0..N, Patch0..N, BuildRequires, Requires, %description, %prep, %build, %install, %check, %files, %changelog
 
 ### 6. Single dependency per line
 Each `BuildRequires:` and `Requires:` line must have exactly one dependency.
 
-### 7. Remove ?dist macro usage
-Replace `%{?dist}` or `?dist` with `~` in the Release or Version tag. openSUSE supports `~` natively.
+### 7. Version: handling
+openSUSE supports `~` in Version: tags. This can be used for pre-releases, eg 1.0~beta1. The final 1.0 will be newer as 1.0~beta1. 1.0beta1 would be otherwise newer then final 1.0 for rpm.
 
-### 8. Remove deprecated BuildRoot tag
-If a `BuildRoot:` line exists in the preamble (before `%description`), remove it entirely. The `BuildRoot` tag is obsolete — modern RPM sets the build root automatically, and the tag will not affect the build.
+### 8. Remove deprecated tags
+If a `BuildRoot:` line exists in the preamble (before `%description`), remove it entirely. The `BuildRoot` tag is obsolete — modern RPM sets the build root automatically, and the tag will not affect the build. Also a %changelog section is not used on openSUSE when we have a PACKAGE.changes file.
+Remove `%{?dist}` or `%dist` macros, it is not used by openSUSE.
 
 ### 9. Preserve copyright header
 Do NOT modify, remove, or alter the copyright header block (lines starting with `#` at the top of the spec).
