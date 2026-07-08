@@ -104,20 +104,16 @@ def _is_source_or_build_path(name: str) -> bool:
 
 def _cleanup_stale_build_processes():
     """Kill any orphaned pbuild or qemu processes that may hold the build root lock.
-    Called before starting a new build to prevent 'Failed to get write lock' errors."""
-    for name in ("pbuild", "qemu-system"):
-        try:
-            subprocess.run(
-                ["pkill", "-e", name],
-                capture_output=True, timeout=10
-            )
-        except subprocess.TimeoutExpired:
+    Uses -x (exact match) for pbuild to avoid killing pbuild-ai itself."""
+    for name, opts in (("pbuild", ["-x"]), ("qemu-system-", [])):
+        for sig in ("", "-9"):
             try:
-                subprocess.run(["pkill", "-9", name], capture_output=True, timeout=5)
+                cmd = ["pkill"] + opts + ([sig] if sig else []) + ["-e", name]
+                subprocess.run(cmd, capture_output=True, timeout=10 if not sig else 5)
             except subprocess.TimeoutExpired:
-                pass
-        except FileNotFoundError:
-            pass  # pkill not available
+                continue
+            except FileNotFoundError:
+                break  # pkill not available — skip all remaining attempts
 
 
 _ENVIRONMENT_ERROR_PATTERNS = [
