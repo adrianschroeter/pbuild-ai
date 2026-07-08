@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import time
+import signal
 from pathlib import Path
 
 from pbuild_ai.spinner import Spinner, YELLOW
@@ -91,6 +92,9 @@ class RpmSourceManager:
         self.build_log_path = Path(build_log_path).resolve() if build_log_path else None
 
     def _run_captured(self, cmd, cwd, stream_output=False):
+        from pbuild_ai.pbuild_ai import _cleanup_stale_build_processes
+        if cmd and cmd[0] == "pbuild":
+            _cleanup_stale_build_processes()
         if stream_output:
             proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
             lines = []
@@ -381,6 +385,8 @@ class RpmSourceManager:
             return False, err
 
     def run_deep_analyze_shell(self, package_name=None, ollama=None, full_context=None, project_mode=False, debug=False, deep_analyze_prompt=""):
+        from pbuild_ai.pbuild_ai import _cleanup_stale_build_processes
+        _cleanup_stale_build_processes()
         cmd = ["pbuild"]
         if self.root_dir:
             cmd.extend(["--root", self.root_dir])
@@ -414,7 +420,7 @@ class RpmSourceManager:
         t0 = time.time()
         proc = subprocess.Popen(cmd, cwd=self.base_dir,
                                stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-                               close_fds=True)
+                               close_fds=True, start_new_session=True)
         os.close(slave_fd)  # Close parent's copy so PTY master sees EOF on child exit
 
         def pty_read(timeout=10, wait_prompt=False):
@@ -610,11 +616,13 @@ Summarize the root cause of the {package_name} build failure and what fix is nee
                 time.sleep(1)
             except:
                 pass
-            proc.terminate()
+            # Kill entire process group (pbuild + all children like qemu)
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
             try:
                 proc.wait(timeout=10)
             except:
-                proc.kill()
+                os.killpg(pgid, signal.SIGKILL)
             proc.wait()
             try:
                 os.close(master_fd)

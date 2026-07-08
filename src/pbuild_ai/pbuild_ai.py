@@ -25,6 +25,7 @@ import time
 import shutil
 import difflib
 import datetime
+import signal
 from pathlib import Path
 from pbuild_ai.spinner import _color, AI_COLOR
 
@@ -99,6 +100,24 @@ def _is_source_or_build_path(name: str) -> bool:
     if name.startswith('/'):
         return True
     return False
+
+
+def _cleanup_stale_build_processes():
+    """Kill any orphaned pbuild or qemu processes that may hold the build root lock.
+    Called before starting a new build to prevent 'Failed to get write lock' errors."""
+    for name in ("pbuild", "qemu-system"):
+        try:
+            subprocess.run(
+                ["pkill", "-e", name],
+                capture_output=True, timeout=10
+            )
+        except subprocess.TimeoutExpired:
+            try:
+                subprocess.run(["pkill", "-9", name], capture_output=True, timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        except FileNotFoundError:
+            pass  # pkill not available
 
 
 _ENVIRONMENT_ERROR_PATTERNS = [
