@@ -154,6 +154,27 @@ def build_tools_list(interactive=False):
         {
             "type": "function",
             "function": {
+                "name": "apply_patch",
+                "description": "Apply a unified diff patch to an existing file in the workspace. PREFER this over multiple edit_file calls when you need to make multiple changes to the same file — it applies all hunks in a single tool call, saving multiple round trips. The diff must be in standard unified diff format (as produced by `diff -u`). Each hunk's context lines are validated before applying.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file to patch (relative to workspace root)"
+                        },
+                        "diff": {
+                            "type": "string",
+                            "description": "Unified diff content containing one or more hunks to apply"
+                        }
+                    },
+                    "required": ["path", "diff"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "read_file",
                 "description": "Read the content of a file in the workspace directory. Optionally read a portion of the file by specifying offset and/or limit (both in characters). Only files within the workspace are allowed.",
                 "parameters": {
@@ -528,6 +549,123 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                             print(f"[TOOL] format_spec_file: normalized {path}")
                 except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
                     pass
+        elif tool_name == "apply_patch":
+            path = tool_input.get("path")
+            diff_text = tool_input.get("diff", "")
+            if not path:
+                results.append(f"Error: apply_patch: missing 'path'. Got keys: {list(tool_input.keys())}.")
+                continue
+            if not diff_text:
+                results.append(f"Error: apply_patch: missing 'diff'. Got keys: {list(tool_input.keys())}.")
+                continue
+            file_path = resolve_path(path, workspace_dir)
+            if file_path is None or not manager._is_safe_path(file_path):
+                results.append(f"Error: {path} is outside the workspace directory.")
+                continue
+            try:
+                if file_path.resolve().is_relative_to(workspace / "tool-scripts"):
+                    results.append(f"Error: Cannot patch files in tool-scripts/ directory: {path}")
+                    continue
+            except ValueError:
+                pass
+            if not file_path.exists():
+                results.append(f"Error: File not found: {path}")
+                continue
+            try:
+                content = manager.read_file_safe(file_path)
+            except Exception as e:
+                results.append(f"Error reading file: {e}")
+                continue
+            # Parse unified diff hunks and apply
+            hunk_re = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
+            hunks = []
+            for line in diff_text.split('\n'):
+                m = hunk_re.match(line)
+                if m:
+                    hunks.append({
+                        'old_start': int(m.group(1)),
+                        'old_count': int(m.group(2)) if m.group(2) else 1,
+                        'new_start': int(m.group(3)),
+                        'new_count': int(m.group(4)) if m.group(4) else 1,
+                        'lines': [],
+                    })
+                elif hunks:
+                    if line.startswith('\\'):
+                        continue
+                    hunks[-1]['lines'].append(line)
+            if not hunks:
+                results.append(f"Error: apply_patch: no valid hunks found in diff for {path}")
+                continue
+            # Validate and apply hunks bottom-to-top so line numbers stay valid
+            result_lines = content.split('\n')
+            for hunk in reversed(hunks):
+                old_start = hunk['old_start']
+                lines = hunk['lines']
+                # Build old-section sequence (context + removed) and new-section (context + added)
+                old_section = []
+                new_section = []
+                for line in lines:
+                    if len(line) == 0:
+                        continue
+                    prefix = line[0]
+                    rest = line[1:]
+                    if prefix == '-':
+                        old_section.append(rest)
+                    elif prefix == '+':
+                        new_section.append(rest)
+                    elif prefix == ' ':
+                        old_section.append(rest)
+                        new_section.append(rest)
+                file_idx = old_start - 1
+                if file_idx < 0:
+                    results.append(f"Error: apply_patch: hunk start line {old_start} is before file start in {path}")
+                    break
+                if file_idx + len(old_section) > len(result_lines):
+                    results.append(f"Error: apply_patch: hunk at line {old_start} extends past end of file in {path}")
+                    break
+                for i, expected in enumerate(old_section):
+                    actual = result_lines[file_idx + i]
+                    if actual != expected:
+                        results.append(
+                            f"Error: apply_patch: context mismatch at line {file_idx + i + 1} in {path}: "
+                            f"expected {expected!r}, got {actual!r}"
+                        )
+                        break
+                else:
+                    # All matched — apply the replacement
+                    result_lines[file_idx:file_idx + len(old_section)] = new_section
+                    continue
+                break
+            else:
+                # All hunks applied successfully
+                new_content = '\n'.join(result_lines)
+                if content == new_content:
+                    results.append(f"OK: No change (patch resulted in identical content for {path})")
+                    continue
+                # Preserve copyright header in .spec files (same as write_file)
+                if file_path.suffix == '.spec':
+                    old_header, _ = _extract_header(content)
+                    new_header, new_rest = _extract_header(new_content)
+                    if old_header and new_header and old_header != new_header:
+                        new_content = old_header + '\n' + new_rest
+                        print(f"[TOOL] Preserved copyright header in {path}")
+                show_diff(content, new_content, file_path, prefix="[TOOL]")
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+                print(f"[TOOL] apply_patch: {path} ({len(hunks)} hunk(s) applied)")
+                results.append(f"OK: Patched {path}")
+                if file_path.suffix == '.spec':
+                    _spec_dir = file_path.parent
+                    fmt_cmd = [_FORMAT_SPEC_FILE_PATH, str(file_path.parent)]
+                    try:
+                        fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
+                        if fmt_result.returncode == 0:
+                            formatted = file_path.read_text(encoding='utf-8')
+                            if formatted != new_content:
+                                show_diff(new_content, formatted, file_path, prefix="[TOOL]")
+                                print(f"[TOOL] format_spec_file: normalized {path}")
+                    except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
+                        pass
         elif tool_name == "read_file":
             path = tool_input.get("path")
             if not path:

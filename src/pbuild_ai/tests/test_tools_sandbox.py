@@ -937,5 +937,190 @@ class TestWriteToolChanges(unittest.TestCase):
         self.assertIn("my.spec", analyzer._changed_files)
 
 
+class TestApplyPatch(unittest.TestCase):
+    """Test the apply_patch tool."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_test_patch_")
+        self.ws = Path(self.tmpdir).resolve()
+        self.manager = RpmSourceManager(str(self.ws))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _safe_file(self, name, content=""):
+        p = self.ws / name
+        p.write_text(content)
+        return p
+
+    def _make_diff(self, old_start, old_count, new_start, new_count, context=(), removed=(), added=()):
+        """Build a unified diff string for testing."""
+        lines = [f"@@ -{old_start},{old_count} +{new_start},{new_count} @@"]
+        # Interleave context, removed, added lines in the order they appear
+        max_len = max(len(context), len(removed), len(added))
+        for i in range(max_len):
+            if i < len(context):
+                lines.append(f" {context[i]}")
+            if i < len(removed):
+                lines.append(f"-{removed[i]}")
+            if i < len(added):
+                lines.append(f"+{added[i]}")
+        return '\n'.join(lines)
+
+    def test_apply_patch_single_hunk(self):
+        self._safe_file("test.txt", "line1\nline2\nline3\n")
+        diff = self._make_diff(2, 1, 2, 1, removed=["line2"], added=["line2_modified"])
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "test.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Patched", results[0])
+        content = (self.ws / "test.txt").read_text()
+        self.assertEqual(content, "line1\nline2_modified\nline3\n")
+
+    def test_apply_patch_multiple_hunks(self):
+        self._safe_file("multi.txt", "line1\nline2\nline3\nline4\nline5\n")
+        hunk1 = self._make_diff(1, 1, 1, 1, removed=["line1"], added=["line1_updated"])
+        hunk2 = self._make_diff(4, 1, 4, 1, removed=["line4"], added=["line4_updated"])
+        diff = hunk1 + '\n' + hunk2
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "multi.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Patched", results[0])
+        content = (self.ws / "multi.txt").read_text()
+        self.assertEqual(content, "line1_updated\nline2\nline3\nline4_updated\nline5\n")
+
+    def test_apply_patch_with_context_lines(self):
+        self._safe_file("ctx.txt", "apple\nbanana\ncherry\ndate\n")
+        diff = self._make_diff(
+            2, 2, 2, 2,
+            context=["banana"],
+            removed=["cherry"],
+            added=["coconut"],
+        )
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "ctx.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Patched", results[0])
+        content = (self.ws / "ctx.txt").read_text()
+        self.assertEqual(content, "apple\nbanana\ncoconut\ndate\n")
+
+    def test_apply_patch_insert_lines(self):
+        self._safe_file("insert.txt", "start\nend\n")
+        diff = self._make_diff(
+            2, 0, 2, 2,
+            added=["middle1", "middle2"],
+        )
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "insert.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Patched", results[0])
+        content = (self.ws / "insert.txt").read_text()
+        self.assertEqual(content, "start\nmiddle1\nmiddle2\nend\n")
+
+    def test_apply_patch_delete_lines(self):
+        self._safe_file("delete.txt", "keep\nremove\nkeep\n")
+        diff = self._make_diff(2, 1, 2, 0, removed=["remove"])
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "delete.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Patched", results[0])
+        content = (self.ws / "delete.txt").read_text()
+        self.assertEqual(content, "keep\nkeep\n")
+
+    def test_apply_patch_blocked_outside_workspace(self):
+        diff = self._make_diff(1, 1, 1, 1, removed=["root"], added=["pwned"])
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "/etc/passwd", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("outside the workspace", results[0])
+
+    def test_apply_patch_dotdot_blocked(self):
+        diff = self._make_diff(1, 1, 1, 1, removed=["old"], added=["new"])
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "../escape.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("outside the workspace", results[0])
+
+    def test_apply_patch_file_not_found(self):
+        diff = self._make_diff(1, 1, 1, 1, removed=["old"], added=["new"])
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "nonexistent.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("File not found", results[0])
+
+    def test_apply_patch_invalid_diff_no_hunks(self):
+        self._safe_file("nodiff.txt", "content\n")
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "nodiff.txt", "diff": "not a valid diff"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("no valid hunks", results[0])
+
+    def test_apply_patch_context_mismatch(self):
+        self._safe_file("mismatch.txt", "lineA\nlineB\nlineC\n")
+        diff = self._make_diff(2, 1, 2, 1, removed=["lineX"], added=["lineY"])
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "mismatch.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("context mismatch", results[0])
+
+    def test_apply_patch_no_op(self):
+        self._safe_file("noop.txt", "same\n")
+        diff = self._make_diff(1, 1, 1, 1, removed=["same"], added=["same"])
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "noop.txt", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("No change", results[0])
+
+    def test_apply_patch_tool_scripts_blocked(self):
+        (self.ws / "tool-scripts").mkdir()
+        (self.ws / "tool-scripts" / "script.sh").write_text("old_content\n")
+        diff = self._make_diff(1, 1, 1, 1, removed=["old_content"], added=["pwned"])
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "tool-scripts/script.sh", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Cannot patch files in tool-scripts", results[0])
+
+    def test_apply_patch_missing_path(self):
+        results = execute_tool_calls(
+            [("apply_patch", {"diff": "@@ -1,1 +1,1 @@\n-old\n+new\n"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("missing 'path'", results[0])
+
+    def test_apply_patch_missing_diff(self):
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "foo.txt"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("missing 'diff'", results[0])
+
+
 if __name__ == "__main__":
     unittest.main()
