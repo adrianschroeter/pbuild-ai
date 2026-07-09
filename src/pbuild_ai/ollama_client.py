@@ -88,6 +88,22 @@ class OllamaAnalyzer:
         self._context = None
         self._chat_context = None
 
+    def _apply_options_and_format(self, payload):
+        """Inject Ollama options and format into payload.
+
+        By default format=json is sent on every request. Models can opt out
+        by setting format=text in their config (e.g. via models.yaml or
+        --ollama-option format=text). The 'format' key is removed from
+        options since it is not a model option — it is a top-level field.
+        """
+        opts = self.options.copy() if self.options else {}
+        fmt = opts.pop("format", None)
+        if fmt != "text":
+            payload["format"] = "json"
+        if opts:
+            payload["options"] = opts
+        return payload
+
     def reset_stats(self):
         self.ai_calls = 0
         self.ai_time = 0.0
@@ -120,8 +136,7 @@ class OllamaAnalyzer:
             "prompt": '\n'.join(prompt_parts) if prompt_parts else '.',
             "stream": False,
         }
-        if self.options:
-            payload["options"] = self.options
+        self._apply_options_and_format(payload)
         return payload
 
     def _request(self, url, payload):
@@ -176,8 +191,7 @@ class OllamaAnalyzer:
             full_prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
         full_prompt = full_prompt[:self.MAX_PROMPT_CHARS]
         payload = {"model": self.model, "prompt": full_prompt, "stream": False}
-        if self.options:
-            payload["options"] = self.options
+        self._apply_options_and_format(payload)
         self._context = None
         try:
             result = self._request(self.api_url, payload)
@@ -381,8 +395,7 @@ class OllamaAnalyzer:
                     "tools": tools,
                     "stream": False,
                 }
-                if self.options:
-                    payload["options"] = self.options
+                self._apply_options_and_format(payload)
                 if self._chat_context is not None:
                     payload["context"] = self._chat_context
             else:
@@ -656,7 +669,10 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
     On HTTP/protocol errors or after 3 failed attempts, prints diagnostic info
     and calls sys.exit(2)."""
     payload = {"model": ollama.model, "messages": messages, "tools": tools, "stream": False}
-    _opts = getattr(ollama, "options", None) or {}
+    _opts = (ollama.options or {}).copy()
+    fmt = _opts.pop("format", None)
+    if fmt != "text":
+        payload["format"] = "json"
     if _opts:
         payload["options"] = _opts
     _payload_str = None
