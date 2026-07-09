@@ -16,6 +16,7 @@
 import json
 import os
 import re
+import signal
 import sys
 import time
 import urllib.request
@@ -158,6 +159,31 @@ Skill instructions (follow these):
             ]
         modify_max_rounds = 20
         changes_made = False
+
+        # Save conversation context on SIGINT/SIGTERM (Ctrl+C)
+        def _modify_interrupt_handler(signum, frame):
+            if messages and _ctx_file:
+                try:
+                    _ctx_file.write_text(json.dumps({
+                        "version": 1,
+                        "mode": "modify",
+                        "spec_path": str(spec.relative_to(ctx.workspace_dir)),
+                        "messages": messages,
+                        "spec_content": spec_content,
+                        "modify_prompt": ctx.modify_prompt,
+                        "timestamp": time.time(),
+                        "interrupted": True,
+                    }, indent=2))
+                    print(f"\n[MODIFY] Saved conversation context to {_ctx_file.name} before interrupt.")
+                except Exception:
+                    pass
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os._exit(130)
+
+        _prev_sigint = signal.signal(signal.SIGINT, _modify_interrupt_handler)
+        _prev_sigterm = signal.signal(signal.SIGTERM, _modify_interrupt_handler)
+
         for round_idx in range(modify_max_rounds):
             result = chat_completion(ctx.ollama, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 

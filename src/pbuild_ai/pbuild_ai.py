@@ -983,6 +983,29 @@ if __name__ == "__main__":
         _initial_spec_hash = _hashlib.md5(manager.read_file_safe(spec).encode()).hexdigest()
         _spec_version_hashes = [(0, _initial_spec_hash)]
 
+        # Save conversation context on SIGINT/SIGTERM (Ctrl+C)
+        def _interrupt_handler(signum, frame):
+            if messages is not None and _ctx_file:
+                try:
+                    _ctx_file.write_text(json.dumps({
+                        "version": 1,
+                        "mode": "fix",
+                        "spec_path": str(spec.relative_to(WORKSPACE_DIR)),
+                        "package_name": package_name,
+                        "messages": messages,
+                        "timestamp": time.time(),
+                        "interrupted": True,
+                    }, indent=2))
+                    print(f"\n[FIX] Saved conversation context to {_ctx_file.name} before interrupt.")
+                except Exception:
+                    pass
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os._exit(130)
+
+        _prev_sigint = signal.signal(signal.SIGINT, _interrupt_handler)
+        _prev_sigterm = signal.signal(signal.SIGTERM, _interrupt_handler)
+
         def _build_attempted_fixes_context():
             if not _attempted_fixes:
                 return ""
