@@ -22,7 +22,7 @@ import urllib.request
 from pathlib import Path
 
 from pbuild_ai.network import is_safe_url
-from pbuild_ai.ollama_client import chat_completion
+from pbuild_ai.ollama_client import chat_completion, prune_messages
 from pbuild_ai.tools import execute_tool_calls
 
 
@@ -141,6 +141,7 @@ def run_modify_mode(ctx):
 The spec file content is ALREADY provided below in the user message. Do NOT call read_file — the content is right here.
 
 To make changes, prefer edit_file for small targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: when using edit_file, include enough surrounding lines (full target line + 1-2 lines before/after) so old_string matches EXACTLY ONE location. For multiple changes to the same file, prefer apply_patch — it accepts a unified diff and applies all hunks in a single tool call, avoiding multiple round trips. Use write_file only for large rewrites or new files. IMPORTANT: write_file writes the ENTIRE file — you must include ALL lines. PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM; do not add, remove, or modify anything beyond the specific change. Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise. If you are unsure or need to choose between options, ask the user by responding with your question — you will get their answer in the next round.
+Note: only the last 2 tool-calling rounds are kept in context — older messages are pruned each round. Do not rely on history beyond the most recent exchange. If you need information you provided earlier, include it again in your current output.
 
 User request: {ctx.modify_prompt}{hint}
 
@@ -227,6 +228,7 @@ Skill instructions (follow these):
                             print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> 2000 chars", flush=True)
                         content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
                     messages.append({"role": "tool", "content": content, "name": name})
+                prune_messages(messages, keep_rounds=2)
                 continue
 
             text = (message.get('content') or '').strip()

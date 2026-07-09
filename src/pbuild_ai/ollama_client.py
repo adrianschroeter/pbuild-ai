@@ -29,6 +29,41 @@ from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.tools import execute_tool_calls
 
 
+def prune_messages(messages, keep_rounds=2):
+    """Keep system prompt and the last N assistant rounds (each round = assistant
+    message + its tool result messages). Older messages are dropped to limit
+    context size and avoid re-tokenizing the full conversation history on
+    every round.
+
+    Returns the pruned list. Does NOT modify the input list in place.
+    """
+    if len(messages) <= 3:
+        return messages[:]
+
+    # Find positions of all assistant messages (with or without tool_calls)
+    assistant_positions = [
+        i for i, m in enumerate(messages) if m.get('role') == 'assistant'
+    ]
+
+    if len(assistant_positions) <= keep_rounds:
+        return messages[:]
+
+    keep_from = assistant_positions[-keep_rounds]
+
+    # Always keep system message
+    preserved = [messages[0]]
+    # Keep original user message if present and before the cutoff
+    for m in messages[1:keep_from]:
+        if m.get('role') == 'user' and not m.get('tool_call_id'):
+            preserved.append(m)
+            break
+
+    # Add everything from the cutoff point onwards
+    preserved.extend(messages[keep_from:])
+
+    return preserved
+
+
 class OllamaAnalyzer:
     def __init__(self, host=None, model="default", debug=False, timeout=None, options=None):
         self.host = (host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
@@ -606,6 +641,10 @@ class OllamaAnalyzer:
                             print(f"[FIX] Injected file content to help edit_file retry for {_path}", flush=True)
                         except Exception:
                             pass
+
+            # Prune old messages to keep context manageable — keep system
+            # prompt (index 0) and the last 2 assistant rounds.
+            messages[:] = prune_messages(messages, keep_rounds=2)
 
         print(f"[AI] Reached max rounds ({max_rounds}).", flush=True)
         return all_results

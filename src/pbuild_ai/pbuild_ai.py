@@ -1163,6 +1163,7 @@ PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM — do not add, remove, or mod
 Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise.
 Make all necessary changes now, then stop.
 Make only ONE edit to each file. Do NOT rewrite or re-edit a file you have already modified in this session. Plan your change carefully, apply it once, then stop.
+Note: only the last 2 tool-calling rounds are kept in context — older messages are pruned each round. Do not rely on history beyond the most recent exchange. If you need information you provided earlier, include it again in your current output.
 
 AGENTS.md instructions (follow these):
 {fix_context}"""},
@@ -1202,6 +1203,7 @@ PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM — do not add, remove, or mod
 Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise.
 Make all necessary changes now, then stop.
 Make only ONE edit to each file. Do NOT rewrite or re-edit a file you have already modified in this session. Plan your change carefully, apply it once, then stop.
+Note: only the last 2 tool-calling rounds are kept in context — older messages are pruned each round. Do not rely on history beyond the most recent exchange. If you need information you provided earlier, include it again in your current output.
 
 AGENTS.md instructions (follow these):
 {fix_context}"""}

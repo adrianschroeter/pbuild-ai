@@ -21,7 +21,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from pbuild_ai.ollama_client import chat_completion
+from pbuild_ai.ollama_client import chat_completion, prune_messages
 from pbuild_ai.tools import execute_tool_calls
 from pbuild_ai.spinner import Spinner, AI_COLOR
 
@@ -126,7 +126,8 @@ Follow these rules:
 5. If the upstream provides source archives, set Source0 to the download URL and Source1..N for additional files.
 6. You MAY also create supporting files (patches, .desktop, sysconfig, tmpfiles.d, etc.) as needed.
 7. When you are done creating files, call run_tool_script("format_spec_file", []) on the spec directory as your final step to normalize spec formatting.
-8. When you are done, tell the user what you created.
+8. Note: only the last 2 tool-calling rounds are kept in context — older messages are pruned each round. Do not rely on history beyond the most recent exchange. If you need information you provided earlier, include it again in your current output.
+9. When you are done, tell the user what you created.
 9. Do NOT use HTML or markdown formatting in your text responses — use plain text only. No <b>, <a>, <pre>, or any other tags.
 
 AGENTS.md instructions (follow these):
@@ -240,6 +241,7 @@ The specification for the package to create is in the system prompt above. Start
                         print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> 2000 chars", flush=True)
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
                 messages.append({"role": "tool", "content": content, "name": tool_name})
+            prune_messages(messages, keep_rounds=2)
             spec_files = sorted(Path(ctx.workspace_dir).rglob("*.spec"))
             for spec_path in spec_files:
                 spec_str = str(spec_path)
