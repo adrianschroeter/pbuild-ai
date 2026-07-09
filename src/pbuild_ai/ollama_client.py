@@ -203,6 +203,10 @@ class OllamaAnalyzer:
             result = self._request(self.api_url, payload)
             self._context = result.get("context")
             response_text = result.get('response', '').strip()
+            # Some thinking/CoT models (e.g. qwen3.6) put the JSON output
+            # in the 'thinking' field when format=json is active.
+            if not response_text and result.get('thinking'):
+                response_text = result.get('thinking', '').strip()
             # When format=json is sent, the model outputs JSON text.
             # Try to extract meaningful content from the JSON structure.
             if payload.get("format") == "json" and response_text:
