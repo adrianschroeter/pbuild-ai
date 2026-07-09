@@ -88,17 +88,23 @@ class OllamaAnalyzer:
         self._context = None
         self._chat_context = None
 
-    def _apply_options_and_format(self, payload):
+    def _apply_options_and_format(self, payload, tool_calling=False):
         """Inject Ollama options and format into payload.
 
-        By default format=json is sent on every request. Models can opt out
-        by setting format=text in their config (e.g. via models.yaml or
-        --ollama-option format=text). The 'format' key is removed from
-        options since it is not a model option — it is a top-level field.
+        By default format=json is sent on every /api/generate request.
+        Tool-calling requests (/api/chat with tools) skip format=json
+        because it conflicts with the native tool_calls response format.
+
+        Models can opt out entirely by setting format=text in their config
+        (e.g. via models.yaml or --ollama-option format=text).
+        The 'format' key is removed from options since it is not a model
+        option — it is a top-level field.
         """
         opts = self.options.copy() if self.options else {}
         fmt = opts.pop("format", None)
-        if fmt != "text":
+        if fmt == "text":
+            pass
+        elif not tool_calling:
             payload["format"] = "json"
         if opts:
             payload["options"] = opts
@@ -197,6 +203,17 @@ class OllamaAnalyzer:
             result = self._request(self.api_url, payload)
             self._context = result.get("context")
             response_text = result.get('response', '').strip()
+            # When format=json is sent, the model outputs JSON text.
+            # Try to extract meaningful content from the JSON structure.
+            if payload.get("format") == "json" and response_text:
+                try:
+                    parsed = json.loads(response_text)
+                    if isinstance(parsed, dict):
+                        texts = [v for v in parsed.values() if isinstance(v, str) and len(v) > 20]
+                        if texts:
+                            response_text = max(texts, key=len)
+                except (json.JSONDecodeError, ValueError):
+                    pass
             return response_text
         except Exception as e:
             print(f"[OLLAMA ERROR] {e}")
@@ -395,7 +412,7 @@ class OllamaAnalyzer:
                     "tools": tools,
                     "stream": False,
                 }
-                self._apply_options_and_format(payload)
+                self._apply_options_and_format(payload, tool_calling=True)
                 if self._chat_context is not None:
                     payload["context"] = self._chat_context
             else:
@@ -671,7 +688,9 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
     payload = {"model": ollama.model, "messages": messages, "tools": tools, "stream": False}
     _opts = (ollama.options or {}).copy()
     fmt = _opts.pop("format", None)
-    if fmt != "text":
+    if fmt == "text":
+        pass
+    elif not tools:
         payload["format"] = "json"
     if _opts:
         payload["options"] = _opts
