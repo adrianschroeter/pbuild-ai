@@ -218,6 +218,16 @@ class OllamaAnalyzer:
                             response_text = max(texts, key=len)
                 except (json.JSONDecodeError, ValueError):
                     pass
+            # If the response is empty (or only contains empty JSON), show a clean message
+            if not response_text:
+                response_text = "(model returned empty response)"
+            else:
+                try:
+                    parsed = json.loads(response_text)
+                    if isinstance(parsed, dict) and not any(v for v in parsed.values() if isinstance(v, str) and v.strip()):
+                        response_text = "(model returned empty response)"
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
             return response_text
         except Exception as e:
             print(f"[OLLAMA ERROR] {e}")

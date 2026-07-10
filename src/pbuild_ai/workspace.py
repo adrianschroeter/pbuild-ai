@@ -58,8 +58,14 @@ def _extract_shell_command(text: str) -> str | None:
         # Skip lines that are too long for a single shell command
         if len(line) > 500:
             continue
+        # Skip JSON key-value fragments (e.g. "thought": {, "analysis": [)
+        if re.search(r'"[a-zA-Z_]+"\s*[:=]', line):
+            continue
+        # Skip lines that start with RPM macro characters or shell comments
+        if re.match(r'^[%#]', line):
+            continue
         # Validate it looks like a shell command
-        if not re.match(r'^[a-z./$\'"#0-9%_]', line) and not re.match(r'^[A-Z_][A-Z_0-9]*=', line):
+        if not re.match(r'^[a-z./$\'0-9_]', line) and not re.match(r'^[A-Z_][A-Z_0-9]*=', line):
             continue
         return line
     return None

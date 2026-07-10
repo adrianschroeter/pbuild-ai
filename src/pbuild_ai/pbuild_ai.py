@@ -1011,8 +1011,8 @@ if __name__ == "__main__":
                 return ""
             lines = ["PREVIOUSLY ATTEMPTED FIXES (ALL FAILED — do NOT suggest these again):"]
             for _att, _diff, _err in _attempted_fixes:
-                _diff_short = _diff.replace('\n', ' | ')[:200] if _diff else '(no diff)'
-                _err_short = (_err or '')[:200].replace('\n', ' | ')
+                _diff_short = _diff.replace('\n', ' | ')[:500] if _diff else '(no diff)'
+                _err_short = (_err or '')[:500].replace('\n', ' | ')
                 lines.append(f"- Attempt {_att}: {_diff_short}")
                 lines.append(f"  Result: {_err_short}")
             return "\n".join(lines) + "\n\n"
@@ -1108,9 +1108,10 @@ if __name__ == "__main__":
             else:
                 _fixes_ctx = _build_attempted_fixes_context()
                 _spec_review = getattr(manager, '_spec_analysis', '')
+                _current_spec_a = manager.read_file_safe(spec)
                 _error_analysis_ctx = (
-                    f"--- Initial spec review ---\n{_spec_review[:3000]}\n\n" + _fixes_ctx + error_context
-                    if _spec_review else _fixes_ctx + error_context
+                    f"--- Initial spec review ---\n{_spec_review[:3000]}\n\n--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + error_context
+                    if _spec_review else f"--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + error_context
                 )
                 error_analysis = ollama.analyze(error_prompt, _error_analysis_ctx, full_context)
                 _prev_error_context = error_context
@@ -1149,7 +1150,8 @@ if __name__ == "__main__":
                         print("[DEEP ANALYZE] Shell exited. Re-analyzing with collected data...")
                         deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
                         _fixes_ctx = _build_attempted_fixes_context()
-                        error_analysis = ollama.analyze(error_prompt, _fixes_ctx + error_context, deep_context)
+                        _current_spec_da = manager.read_file_safe(spec)
+                        error_analysis = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + error_context, deep_context)
                         error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                         _latest_analysis = error_analysis
                         print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '------------------------------------------')}\n")
@@ -1237,6 +1239,9 @@ AGENTS.md instructions (follow these):
 Here is the new error context:
 
 {error_context[:3000]}
+
+--- Current spec content ---
+{spec_content}
 
 {_build_attempted_fixes_context()}Consult the skill rules (OPENSUSE.md / Build & Packaging Rules) in the system prompt for the exact fix pattern — the solution is almost certainly described there. Do NOT repeat any fix listed above — it already failed. Apply a DIFFERENT fix using write_file now."""})
                 MAX_HISTORY = 40
@@ -1451,7 +1456,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     print(f"[RETRY] Clean build also failed. Falling through to re-analysis...")
                     build_out2 = _retry_out
                 _fixes_ctx = _build_attempted_fixes_context()
-                error_analysis2 = ollama.analyze(error_prompt, _fixes_ctx + build_out2, full_context)
+                _current_spec_re = manager.read_file_safe(spec)
+                error_analysis2 = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + build_out2, full_context)
                 _latest_analysis = error_analysis2
                 print(f"\n{_color(AI_COLOR, f'--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---')}\n{error_analysis2}\n{_color(AI_COLOR, '------------------------------------------')}\n")
                 ollama._write_analysis_file(error_analysis2)
