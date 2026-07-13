@@ -1128,6 +1128,12 @@ if __name__ == "__main__":
                 print(f"[FIX] Unpackaged-files-only error — stripping [DEEP_ANALYZE] request (fix is straightforward: add all files to %files).")
                 error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                 _latest_analysis = error_analysis
+            # Demote DEEP_ANALYZE for %prep cd failures (fix is trivial — list_archive + correct dir name)
+            _cd_failure = bool(re.search(r"cd:\s*\S+\s*:\s*No such file or directory", current_build_out)) and "%prep" in current_build_out
+            if "[DEEP_ANALYZE]" in error_analysis and _cd_failure:
+                print("[FIX] cd failure in %prep — stripping [DEEP_ANALYZE] (fix: list_archive to find actual dir name, then correct %setup -n).")
+                error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
+                _latest_analysis = error_analysis
             # Auto-trigger deep-analyze if Ollama requests it and we aren't already in that mode
             if "[DEEP_ANALYZE]" in error_analysis and not DEEP_ANALYZE:
                 if "unresolvable" in build_out_lower or "nothing provides" in build_out_lower:
