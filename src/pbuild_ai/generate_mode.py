@@ -22,7 +22,7 @@ import zipfile
 from pathlib import Path
 
 from pbuild_ai.ollama_client import chat_completion, prune_messages
-from pbuild_ai.tools import execute_tool_calls
+from pbuild_ai.tools import execute_tool_calls, format_tool_display
 from pbuild_ai.spinner import Spinner, AI_COLOR
 
 _ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
@@ -216,19 +216,9 @@ The specification for the package to create is in the system prompt above. Start
                     cache_idx += 1
             round_results = final_results
             for (name, inp), r in zip(round_calls, round_results):
-                if name == "read_file":
-                    line_count = r.count('\n')
-                    display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
-                elif name in ("list_archive", "list_files"):
+                display = format_tool_display(name, inp, r, ctx.debug)
+                if display is None:
                     continue
-                elif name == "read_file_from_archive":
-                    if not ctx.debug:
-                        continue
-                    display = r[:500] + "..." if len(r) > 500 else r
-                elif r.startswith("[Fetched "):
-                    display = r.split("\n", 1)[0]
-                else:
-                    display = r[:500] + "..." if len(r) > 500 else r
                 print(f"[GENERATE] {display}", flush=True)
             response_content = message.get('content', '') or ''
             tc_arg = dict(tool_calls=message['tool_calls'])

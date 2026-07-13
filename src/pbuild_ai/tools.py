@@ -21,6 +21,27 @@ MAX_ARCHIVE_READ_SIZE = 512 * 1024  # 500 KB
 _ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
 
 
+def format_tool_display(name, inp, r, debug):
+    """Format a tool result for user-facing display.
+
+    Returns the display string, or None if the result should be skipped.
+    """
+    if not r:
+        return None
+    if name == "read_file":
+        line_count = r.count('\n')
+        return f"read_file: {inp.get('path', '?')} ({line_count} lines)"
+    if name in ("list_archive", "list_files"):
+        return None
+    if name == "read_file_from_archive":
+        if not debug:
+            return None
+        return r[:500] + "..." if len(r) > 500 else r
+    if r.startswith("[Fetched ") or r.startswith("web_fetch: [Fetched "):
+        return r.split("\n", 1)[0]
+    return r[:500] + "..." if len(r) > 500 else r
+
+
 def _is_safe_archive_path(file_path):
     """Reject path-traversal inside an archive (absolute or ../ components)."""
     if os.path.isabs(file_path):

@@ -26,7 +26,7 @@ from pathlib import Path
 from pbuild_ai.utils import resolve_path
 
 from pbuild_ai.spinner import Spinner, AI_COLOR
-from pbuild_ai.tools import execute_tool_calls
+from pbuild_ai.tools import execute_tool_calls, format_tool_display
 
 
 def prune_messages(messages, keep_rounds=2):
@@ -620,21 +620,9 @@ class OllamaAnalyzer:
                     _path = inp.get("path", "?") if isinstance(inp, dict) else "?"
                     _merged_results.append((name, inp, f"Error: {name} for {_path} was not executed (skipped by anti-oscillation filter)"))
             for name, inp, r in _merged_results:
-                if not r:
+                display = format_tool_display(name, inp, r, self.debug)
+                if display is None:
                     continue
-                if name == "read_file":
-                    line_count = r.count('\n')
-                    display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
-                elif name in ("list_archive", "list_files"):
-                    continue
-                elif name == "read_file_from_archive":
-                    if not self.debug:
-                        continue
-                    display = r[:500] + "..." if len(r) > 500 else r
-                elif r.startswith("[Fetched ") or r.startswith("web_fetch: [Fetched "):
-                    display = r.split("\n", 1)[0]
-                else:
-                    display = r[:500] + "..." if len(r) > 500 else r
                 print(f"[FIX] {display}", flush=True)
             all_results.extend(f"{name}: {r}" for name, _, r in _merged_results if r)
 

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from pbuild_ai.network import is_safe_url
 from pbuild_ai.ollama_client import chat_completion, prune_messages
-from pbuild_ai.tools import execute_tool_calls
+from pbuild_ai.tools import execute_tool_calls, format_tool_display
 
 
 def _expand_url_macros(url, spec_content):
@@ -236,13 +236,9 @@ Skill instructions (follow these):
                     round_results = [f"Error executing tool: {e}"]
                     print(f"[MODIFY TOOL ERROR] {e}")
                 for (name, inp), r in zip(round_calls, round_results):
-                    if name == "read_file":
-                        line_count = r.count('\n')
-                        display = f"read_file: {inp.get('path', '?')} ({line_count} lines)"
-                    elif r.startswith("[Fetched "):
-                        display = r.split("\n", 1)[0]
-                    else:
-                        display = r[:500] + "..." if len(r) > 500 else r
+                    display = format_tool_display(name, inp, r, ctx.debug)
+                    if display is None:
+                        continue
                     print(f"[MODIFY] {display}", flush=True)
                     if spec.name in r and (r.startswith("OK: Wrote ") or r.startswith("OK: Edited ") or r.startswith("OK: Removed ") or r.startswith("OK: Renamed ")):
                         changes_made = True
