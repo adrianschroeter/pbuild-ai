@@ -1625,8 +1625,12 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
             ctx.spec_files = spec_files
 
         # --modify mode: hand sources + prompt to Ollama, apply changes locally
+        modify_ai_calls = 0
+        modify_ai_time = 0.0
         if ctx.modify_prompt:
             run_modify_mode(ctx)
+            modify_ai_calls = ollama.ai_calls
+            modify_ai_time = ollama.ai_time
             if not FIX_MODE:
                 ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 sys.exit(0)  # --modify without --fix: only modifies sources, does not build
@@ -2039,6 +2043,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
             print("[EXIT] Last build attempt failed. Exiting with code 1.")
             sys.exit(1)
 
+        ollama.ai_calls += modify_ai_calls
+        ollama.ai_time += modify_ai_time
         ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
     except Exception as e:
         import traceback
