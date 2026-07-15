@@ -80,7 +80,47 @@ class OllamaAnalyzer:
         self._changed_files: set[str] = set()
         self.reset_stats()
 
-    MAX_PROMPT_CHARS = 80000
+        if self.options.get("num_ctx"):
+            self.max_tokens = int(self.options["num_ctx"])
+        else:
+            self.max_tokens = self._fetch_default_num_ctx() or 32768
+
+    @staticmethod
+    def _estimate_tokens(text):
+        return max(1, len(text) // 4)
+
+    def _fetch_default_num_ctx(self):
+        try:
+            payload = json.dumps({"model": self.model}).encode()
+            req = urllib.request.Request(
+                f"{self.host}/api/show",
+                data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            with self._opener.open(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode())
+            for key, value in data.get("model_info", {}).items():
+                if key.endswith(".context_length"):
+                    return int(value)
+        except Exception:
+            pass
+        return None
+
+    def count_tokens(self, text):
+        if not text:
+            return 0
+        try:
+            payload = json.dumps({"model": self.model, "content": text}).encode()
+            req = urllib.request.Request(
+                f"{self.host}/api/tokenize",
+                data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            with self._opener.open(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode())
+            return len(data.get("tokens", []))
+        except Exception:
+            return self._estimate_tokens(text)
 
     def reset_context(self):
         self._context = None
@@ -158,7 +198,11 @@ class OllamaAnalyzer:
         try:
             model_name = payload.get('model', self.model)
             _psize = payload.get("prompt")
-            _ctx_str = f" ({len(_psize)//1024}k/{self.MAX_PROMPT_CHARS//1024}k)" if _psize else ""
+            if _psize:
+                _tok = self.count_tokens(_psize)
+                _ctx_str = f" ({_tok//1024}k/{self.max_tokens//1024}k tok)"
+            else:
+                _ctx_str = ""
             with Spinner(prefix=f"[AI] {model_name}{_ctx_str}", color=AI_COLOR):
                 with self._opener.open(req, timeout=self.timeout) as response:
                     raw = response.read().decode('utf-8')
@@ -189,13 +233,14 @@ class OllamaAnalyzer:
         return json.loads(raw)
 
     def analyze(self, system_prompt, context_data, agents_md=None):
-        context_data = (context_data or "")[:self.MAX_PROMPT_CHARS]
+        _char_limit = self.max_tokens * 6
+        context_data = (context_data or "")[:_char_limit]
         if agents_md:
             agents_md = agents_md[:20000]
         full_prompt = f"{system_prompt}\n\nHere is the context:\n{context_data}"
         if agents_md:
             full_prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
-        full_prompt = full_prompt[:self.MAX_PROMPT_CHARS]
+        full_prompt = full_prompt[:_char_limit]
         payload = {"model": self.model, "prompt": full_prompt, "stream": False}
         self._apply_options_and_format(payload)
         self._context = None

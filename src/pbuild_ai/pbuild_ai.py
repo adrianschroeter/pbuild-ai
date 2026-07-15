@@ -2050,11 +2050,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         analysis_context = full_context
                         if PROMPT_HINT:
                             analysis_context = f"{analysis_context}\n\n--- User Hint ---\n{PROMPT_HINT}"
-                        _total = len(spec_prompt) + len("\n\nHere is the context:\n") + len(_spec_content)
-                        if analysis_context:
-                            _total += len("\n\n--- AGENTS.md ---\n") + len(analysis_context)
-                        _max = ollama.MAX_PROMPT_CHARS
-                        print(f"[AI] Analyzing Spec-file: {spec.name}... ({min(_total, _max)//1024}k/{_max//1024}k)")
+                        _tok = ollama.count_tokens(spec_prompt + "\n\nHere is the context:\n" + _spec_content + (f"\n\n--- AGENTS.md ---\n{analysis_context}" if analysis_context else ""))
+                        print(f"[AI] Analyzing Spec-file: {spec.name}... ({_tok//1024}k/{ollama.max_tokens//1024}k tok)")
                         spec_analysis = ollama.analyze(spec_prompt, _spec_content, analysis_context)
                         print(f"-> AI({ollama.model}) says:\n{spec_analysis}\n")
                         manager._spec_analysis = spec_analysis
