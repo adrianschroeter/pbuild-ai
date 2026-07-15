@@ -694,7 +694,7 @@ if __name__ == "__main__":
     ctx.manager = manager
     ctx.skill_manager = skill_manager
     
-    agents_md_content = manager.read_agents_md()
+    agents_md_content = manager.read_agents_md() or ""
     if agents_md_content:
         print(f"[INFO] AGENTS.md found. Using for Ollama context.")
     

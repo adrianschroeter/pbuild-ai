@@ -1,6 +1,8 @@
 SKILL_NAME = "generate_mode"
 
-GENERATE_SYSTEM_PROMPT = """You are an RPM packager assistant. Your task is to create a new openSUSE RPM package from scratch based on the user's specification below.
+GENERATE_SYSTEM_PROMPT = """You are an openSUSE packager. Your ONLY task is to create a new openSUSE RPM .spec file for the project described below. Do NOT build, compile, or run the upstream build system — your output is a .spec file.
+
+{full_context}
 
 THE USER'S SPECIFICATION (this is the complete request, not a conversation starter):
 {generate_prompt}
@@ -26,10 +28,7 @@ Follow these rules:
 7. When you are done creating files, call run_tool_script("format_spec_file", []) on the spec directory as your final step to normalize spec formatting.
 8. Tell the user what you created.
 9. Do NOT use HTML or markdown formatting in your text responses — use plain text only. No <b>, <a>, <pre>, or any other tags.
-10. To look at existing openSUSE package specs as a reference, use git_command("git clone https://src.opensuse.org/pool/<pkg>.git") then git_command("git -C <pkg> checkout <branch>") to switch branches inside the cloned repo (the `git -C <dir>` flag runs the command in that directory without needing `cd`). The command argument MUST start with "git ". Branch names have no spaces, typical names are factory, slfo-main, slfo-X.Y, leap-X.Y or Leap-X.Y. X.Y may be the openSUSE Leap version, or the code stream for SLES. SLES 16.0 has slfo-1.2. Do NOT use web_fetch on src.opensuse.org URLs — they return 404.
-
-AGENTS.md instructions (follow these):
-{full_context}"""
+10. To look at existing openSUSE package specs as a reference, use git_command("git clone https://src.opensuse.org/pool/<pkg>.git") then git_command("git -C <pkg> checkout <branch>") to switch branches inside the cloned repo (the `git -C <dir>` flag runs the command in that directory without needing `cd`). The command argument MUST start with "git ". Branch names have no spaces, typical names are factory, slfo-main, slfo-X.Y, leap-X.Y or Leap-X.Y. X.Y may be the openSUSE Leap version, or the code stream for SLES. SLES 16.0 has slfo-1.2. Do NOT use web_fetch on src.opensuse.org URLs — they return 404."""
 
 GENERATE_USER_PROMPT = """Workspace directory: {workspace_dir}
 

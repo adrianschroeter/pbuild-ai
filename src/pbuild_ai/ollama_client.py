@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.utils import resolve_path, ReadCoverageTracker
 from pbuild_ai.tools import execute_tool_calls, format_tool_display
 
