@@ -2070,6 +2070,25 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     elif not ctx.modify_prompt:
                         _spec_content = manager.read_file_safe(spec)
                         analysis_context = full_context
+                        # Check for saved .pai.context from a previous fix session
+                        _pai_ctx = Path(WORKSPACE_DIR) / ".pai.context"
+                        if FIX_MODE and _pai_ctx.exists():
+                            try:
+                                _saved = json.loads(_pai_ctx.read_text())
+                                if _saved.get("spec_path") == str(spec.relative_to(WORKSPACE_DIR)):
+                                    _saved_analysis = _saved.get("error_analysis", "")
+                                    if _saved_analysis:
+                                        analysis_context = (
+                                            f"{analysis_context}\n\n"
+                                            f"--- PREVIOUS FIX SESSION ---\n"
+                                            f"Previous error analysis:\n{_saved_analysis[:2000]}"
+                                        )
+                                        if _saved.get("error_context", ""):
+                                            _err_snippet = _saved["error_context"].replace("\n", " | ")[:500]
+                                            analysis_context += f"\nBuild output: {_err_snippet}"
+                                    print(f"[FIX] Loaded saved context from {_pai_ctx.name} for initial analysis")
+                            except Exception:
+                                pass
                         if PROMPT_HINT:
                             analysis_context = f"{analysis_context}\n\n--- User Hint ---\n{PROMPT_HINT}"
                         _tok = ollama.count_tokens(spec_prompt + "\n\nHere is the context:\n" + _spec_content + (f"\n\n--- AGENTS.md ---\n{analysis_context}" if analysis_context else ""))
