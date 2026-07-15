@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+
 import json
 import os
 import re
@@ -25,7 +26,8 @@ from pathlib import Path
 from pbuild_ai.network import is_safe_url
 from pbuild_ai.ollama_client import chat_completion, prune_messages
 from pbuild_ai.spinner import Spinner, AI_COLOR
-from pbuild_ai.tools import execute_tool_calls, format_tool_display
+from pbuild_ai.tools import execute_tool_calls, format_tool_display, resolve_path
+from pbuild_ai.utils import ReadCoverageTracker
 
 
 def _expand_url_macros(url, spec_content):
@@ -160,6 +162,7 @@ Skill instructions (follow these):
             ]
         modify_max_rounds = 20
         changes_made = False
+        _read_tracker = ReadCoverageTracker()
 
         # Save conversation context on SIGINT/SIGTERM (Ctrl+C)
         def _modify_interrupt_handler(signum, frame):
@@ -234,11 +237,23 @@ Skill instructions (follow these):
                     args_preview = json.dumps(tool_input)[:300]
                     if ctx.debug:
                         print(f"[AI] Tool call: {name}({args_preview})", flush=True)
+
+                # Read dedup: filter covered reads
+                _filtered_read_calls, _read_skipped = _read_tracker.filter_reads(round_calls, ctx.workspace_dir, ctx.manager)
+                if _read_skipped:
+                    for _ci in _read_skipped:
+                        _name, _inp = round_calls[_ci]
+                        print(f"[MODIFY] READ SKIP: {_inp.get('path', _inp.get('file_path', ''))} already read")
+
                 try:
-                    round_results = execute_tool_calls(round_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive, debug=ctx.debug)
+                    _exec_results = execute_tool_calls(_filtered_read_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive, debug=ctx.debug)
                 except Exception as e:
-                    round_results = [f"Error executing tool: {e}"]
+                    _exec_results = [f"Error executing tool: {e}"] * len(_filtered_read_calls)
                     print(f"[MODIFY TOOL ERROR] {e}")
+
+                # Reconstruct round_results in original round_calls order
+                round_results = ReadCoverageTracker.merge_results(round_calls, _exec_results, _read_skipped)
+
                 for (name, inp), r in zip(round_calls, round_results):
                     display = format_tool_display(name, inp, r, ctx.debug)
                     if display is None:
@@ -246,6 +261,10 @@ Skill instructions (follow these):
                     print(f"[MODIFY] {display}", flush=True)
                     if spec.name in r and (r.startswith("OK: Wrote ") or r.startswith("OK: Edited ") or r.startswith("OK: Removed ") or r.startswith("OK: Renamed ")):
                         changes_made = True
+
+                # Update read coverage after execution
+                _read_tracker.update_from_results(round_calls, round_results, ctx.workspace_dir, ctx.manager)
+
                 messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
                 for (name, _), content in zip(round_calls, round_results):
                     content = str(content)

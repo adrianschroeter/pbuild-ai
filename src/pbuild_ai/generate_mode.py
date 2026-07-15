@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+
 import json
 import re
 import subprocess
@@ -22,8 +23,9 @@ import zipfile
 from pathlib import Path
 
 from pbuild_ai.ollama_client import chat_completion, prune_messages
-from pbuild_ai.tools import execute_tool_calls, format_tool_display
+from pbuild_ai.tools import execute_tool_calls, format_tool_display, resolve_path
 from pbuild_ai.spinner import Spinner, AI_COLOR
+from pbuild_ai.utils import ReadCoverageTracker
 
 _ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
 _INDICATOR_FILES = (
@@ -142,6 +144,7 @@ The specification for the package to create is in the system prompt above. Start
     ]
     generate_max_rounds = 50
     fetch_cache = {}
+    _read_tracker = ReadCoverageTracker()
     _evaluated_specs = set()
     _evaluated_archives = set()
     _injected_skills = set()
@@ -195,28 +198,47 @@ The specification for the package to create is in the system prompt above. Start
                 args_preview = json.dumps(tool_input)[:300]
                 if ctx.debug:
                     print(f"[AI] Tool call: {name}({args_preview})", flush=True)
-            try:
-                round_results = execute_tool_calls([(n, i) for n, i in round_calls if n != "_skip"], ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive, debug=ctx.debug)
-            except Exception as e:
-                non_skip_count = sum(1 for n, _ in round_calls if n != "_skip")
-                round_results = [f"Error executing tool: {e}"] * non_skip_count
-                print(f"[GENERATE TOOL ERROR] {e}")
-            final_results = []
-            cache_idx = 0
-            for name, inp in round_calls:
+
+            # Read dedup: skip reads already covered by prior rounds
+            _filtered_read_calls, _read_skipped = _read_tracker.filter_reads(round_calls, ctx.workspace_dir, ctx.manager)
+
+            _skip_entries = {}
+            _exec_calls = []
+            for _ci, (name, inp) in enumerate(_filtered_read_calls):
                 if name == "_skip":
-                    final_results.append(inp["_cached"])
+                    _skip_entries[_ci] = inp["_cached"]
                 else:
-                    if cache_idx < len(round_results):
-                        result = round_results[cache_idx]
-                        if name == "web_fetch" and result.startswith("[Fetched "):
-                            url = inp["url"]
-                            fetch_cache[url] = result
-                    else:
-                        result = f"Error: Missing result for tool call #{cache_idx} ({name})"
-                    final_results.append(result)
-                    cache_idx += 1
-            round_results = final_results
+                    _exec_calls.append((name, inp))
+            if _read_skipped:
+                for _ci in _read_skipped:
+                    _name, _inp = round_calls[_ci]
+                    print(f"[GENERATE] READ SKIP: {_inp.get('path', _inp.get('file_path', ''))} already read")
+
+            try:
+                exec_results = execute_tool_calls(_exec_calls, ctx.manager, ctx.workspace_dir, ctx.allow_tool_scripts, interactive=ctx.interactive, debug=ctx.debug)
+            except Exception as e:
+                exec_results = [f"Error executing tool: {e}"] * len(_exec_calls)
+                print(f"[GENERATE TOOL ERROR] {e}")
+
+            # Reconstruct round_results in original round_calls order
+            # Merge: _skip_entries, _read_skipped, and exec_results
+            round_results = []
+            _ei = 0
+            for _ci, (name, inp) in enumerate(round_calls):
+                if name == "_skip":
+                    round_results.append(inp["_cached"])
+                elif _ci in _read_skipped:
+                    round_results.append(_read_skipped[_ci])
+                else:
+                    _result = exec_results[_ei] if _ei < len(exec_results) else f"Error: Missing result for tool call #{_ci} ({name})"
+                    if name == "web_fetch" and _result.startswith("[Fetched "):
+                        fetch_cache[inp["url"]] = _result
+                    round_results.append(_result)
+                    _ei += 1
+
+            # Update read coverage from results
+            _read_tracker.update_from_results(round_calls, round_results, ctx.workspace_dir, ctx.manager)
+
             for (name, inp), r in zip(round_calls, round_results):
                 display = format_tool_display(name, inp, r, ctx.debug)
                 if display is None:
