@@ -2038,11 +2038,16 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     if ctx.try_build_first:
                         print(f"[INFO] --try-build-first: Skipping AI analysis. Building {spec.name} first...")
                     elif not ctx.modify_prompt:
-                        print(f"[AI] Analyzing Spec-file: {spec.name}...")
+                        _spec_content = manager.read_file_safe(spec)
                         analysis_context = full_context
                         if PROMPT_HINT:
-                            analysis_context = f"{analysis_context}\n\n--- User Hint (prefer this over generic analysis) ---\n{PROMPT_HINT}"
-                        spec_analysis = ollama.analyze(spec_prompt, manager.read_file_safe(spec), analysis_context)
+                            analysis_context = f"{analysis_context}\n\n--- User Hint ---\n{PROMPT_HINT}"
+                        _total = len(spec_prompt) + len("\n\nHere is the context:\n") + len(_spec_content)
+                        if analysis_context:
+                            _total += len("\n\n--- AGENTS.md ---\n") + len(analysis_context)
+                        _max = ollama.MAX_PROMPT_CHARS
+                        print(f"[AI] Analyzing Spec-file: {spec.name}... ({min(_total, _max)//1024}k/{_max//1024}k)")
+                        spec_analysis = ollama.analyze(spec_prompt, _spec_content, analysis_context)
                         print(f"-> AI({ollama.model}) says:\n{spec_analysis}\n")
                         manager._spec_analysis = spec_analysis
                         if not FIX_MODE or manager.has_prior_failed_build() or PROMPT_HINT:

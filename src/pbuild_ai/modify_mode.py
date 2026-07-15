@@ -24,6 +24,7 @@ from pathlib import Path
 
 from pbuild_ai.network import is_safe_url
 from pbuild_ai.ollama_client import chat_completion, prune_messages
+from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.tools import execute_tool_calls, format_tool_display
 
 
@@ -185,7 +186,10 @@ Skill instructions (follow these):
         _prev_sigterm = signal.signal(signal.SIGTERM, _modify_interrupt_handler)
 
         for round_idx in range(modify_max_rounds):
-            result = chat_completion(ctx.ollama, messages, ctx.tools, debug=ctx.debug, track_stats=True)
+            _total = sum(len(msg.get('content', '') or '') for msg in messages)
+            _ctx_str = f" ({_total//1024}k/{ctx.ollama.MAX_PROMPT_CHARS//1024}k)"
+            with Spinner(prefix=f"[AI] {ctx.ollama.model}{_ctx_str}", color=AI_COLOR):
+                result = chat_completion(ctx.ollama, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
             message = result.get('message', {})
             if 'tool_calls' in message and message['tool_calls']:

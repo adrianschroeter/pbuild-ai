@@ -159,7 +159,9 @@ class OllamaAnalyzer:
         )
         try:
             model_name = payload.get('model', self.model)
-            with Spinner(prefix=f"[AI] {model_name}", color=AI_COLOR):
+            _psize = payload.get("prompt")
+            _ctx_str = f" ({len(_psize)//1024}k/{self.MAX_PROMPT_CHARS//1024}k)" if _psize else ""
+            with Spinner(prefix=f"[AI] {model_name}{_ctx_str}", color=AI_COLOR):
                 with self._opener.open(req, timeout=self.timeout) as response:
                     raw = response.read().decode('utf-8')
         except urllib.error.HTTPError as e:

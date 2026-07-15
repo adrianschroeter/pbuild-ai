@@ -146,7 +146,9 @@ The specification for the package to create is in the system prompt above. Start
     _evaluated_archives = set()
     _injected_skills = set()
     for round_idx in range(generate_max_rounds):
-        with Spinner(prefix=f"[AI] {ctx.ollama.model}", color=AI_COLOR):
+        _total = sum(len(msg.get('content', '') or '') for msg in messages)
+        _ctx_str = f" ({_total//1024}k/{ctx.ollama.MAX_PROMPT_CHARS//1024}k)"
+        with Spinner(prefix=f"[AI] {ctx.ollama.model}{_ctx_str}", color=AI_COLOR):
             result = chat_completion(ctx.ollama, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
         message = result.get('message', {})
