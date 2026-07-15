@@ -49,6 +49,7 @@ class PbuildContext:
     ollama_timeout: int = 900  # --ollama-timeout
     ollama_options: dict = field(default_factory=dict)  # --ollama-option
     email: str = ""
+    try_build_first: bool = False
     analyze_mode: bool = False
     max_rounds: int = 15
     build_log: Optional[str] = None
