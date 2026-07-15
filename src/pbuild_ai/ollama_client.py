@@ -407,7 +407,34 @@ class OllamaAnalyzer:
         _file_versions = {}
         _blocked_files = set()
         _WRITE_TOOLS = {"write_file", "edit_file"}
+        _READ_TOOLS = {"read_file", "read_file_from_archive"}
         self._changed_files = set()
+        _read_file_coverage = {}
+        _read_archive_coverage = {}
+
+        def _ranges_covered(ranges, start, end):
+            for rs, re in ranges:
+                if rs <= start and (re is None or (end is not None and re >= end)):
+                    return True
+            return False
+
+        def _ranges_merge(ranges, start, end):
+            new_ranges = [r for r in ranges if not (r[0] <= start and (r[1] is None or (end is not None and r[1] >= end)))]
+            new_ranges.append((start, end))
+            new_ranges.sort()
+            merged = []
+            for rs, re in new_ranges:
+                if merged:
+                    lrs, lre = merged[-1]
+                    if lre is None or (rs is not None and rs <= (lre if lre is not None else rs)):
+                        if re is None:
+                            merged[-1] = (lrs, None)
+                        elif lre is not None and re > lre:
+                            merged[-1] = (lrs, re)
+                        continue
+                merged.append((rs, re))
+            return merged
+
         # Record initial versions of all spec files so reverts to original are caught
         if workspace_dir:
             try:
@@ -525,6 +552,43 @@ class OllamaAnalyzer:
             _skipped_indices = []
             _all_skipped = True
             for _ci, (name, tool_input) in enumerate(round_calls):
+                if name == "read_file":
+                    _path = tool_input.get("path", "")
+                    _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
+                    if _resolved and _resolved.exists():
+                        _offset = tool_input.get("offset")
+                        _limit = tool_input.get("limit")
+                        _start = _offset if _offset is not None else 0
+                        _end = _start + _limit if _limit is not None else None
+                        _prev = _read_file_coverage.get(str(_resolved))
+                        if _prev and _prev["hash"] == hashlib.md5(manager.read_file_safe(_resolved).encode()).hexdigest() and _ranges_covered(_prev["ranges"], _start, _end):
+                            _msg = f"READ SKIP: {_path} already read — see earlier tool result"
+                            _skipped_results.append(_msg)
+                            _skipped_indices.append(_ci)
+                            continue
+                    _filtered_calls.append((name, tool_input))
+                    _filtered_indices.append(_ci)
+                    _all_skipped = False
+                    continue
+                elif name == "read_file_from_archive":
+                    _archive_path = tool_input.get("archive_path", "")
+                    _file_path = tool_input.get("file_path", "")
+                    _arch_resolved = resolve_path(_archive_path, workspace_dir) if workspace_dir else None
+                    if _arch_resolved:
+                        _offset = tool_input.get("offset")
+                        _limit = tool_input.get("limit")
+                        _start = _offset if _offset is not None else 0
+                        _end = _start + _limit if _limit is not None else None
+                        _cache_key = (str(_arch_resolved), _file_path)
+                        if _ranges_covered(_read_archive_coverage.get(_cache_key, []), _start, _end):
+                            _msg = f"READ SKIP: {_archive_path}/{_file_path} already read — see earlier tool result"
+                            _skipped_results.append(_msg)
+                            _skipped_indices.append(_ci)
+                            continue
+                    _filtered_calls.append((name, tool_input))
+                    _filtered_indices.append(_ci)
+                    _all_skipped = False
+                    continue
                 if name not in _WRITE_TOOLS:
                     _filtered_calls.append((name, tool_input))
                     _filtered_indices.append(_ci)
@@ -654,6 +718,35 @@ class OllamaAnalyzer:
                                 _file_versions[_path].append(_hash)
                             except Exception:
                                 pass
+
+            # Update read coverage after successful reads
+            for name, inp, r in _merged_results:
+                if name == "read_file" and r and not r.startswith(("Error", "READ SKIP", "OK:")):
+                    _path = inp.get("path", "")
+                    _resolved = resolve_path(_path, workspace_dir) if workspace_dir else None
+                    if _resolved and _resolved.exists():
+                        _hash = hashlib.md5(manager.read_file_safe(_resolved).encode()).hexdigest()
+                        _offset = inp.get("offset")
+                        _limit = inp.get("limit")
+                        _start = _offset if _offset is not None else 0
+                        _end = _start + _limit if _limit is not None else None
+                        _prev = _read_file_coverage.get(str(_resolved), {"hash": "", "ranges": []})
+                        _read_file_coverage[str(_resolved)] = {
+                            "hash": _hash,
+                            "ranges": _ranges_merge(_prev["ranges"], _start, _end)
+                        }
+                elif name == "read_file_from_archive" and r and not r.startswith(("Error", "READ SKIP", "OK:")):
+                    _archive_path = inp.get("archive_path", "")
+                    _file_path = inp.get("file_path", "")
+                    _arch_resolved = resolve_path(_archive_path, workspace_dir) if workspace_dir else None
+                    if _arch_resolved:
+                        _cache_key = (str(_arch_resolved), _file_path)
+                        _offset = inp.get("offset")
+                        _limit = inp.get("limit")
+                        _start = _offset if _offset is not None else 0
+                        _end = _start + _limit if _limit is not None else None
+                        _prev_ranges = _read_archive_coverage.get(_cache_key, [])
+                        _read_archive_coverage[_cache_key] = _ranges_merge(_prev_ranges, _start, _end)
 
             messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
             _injected_edit_help = False
