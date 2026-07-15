@@ -28,6 +28,22 @@ from pbuild_ai.utils import resolve_path, ReadCoverageTracker
 from pbuild_ai.tools import execute_tool_calls, format_tool_display
 
 
+def _extract_text_from_json(obj, min_length=20):
+    """Recursively collect meaningful text strings from a parsed JSON structure.
+    Walks into nested dicts and lists to find all strings longer than min_length.
+    """
+    texts = []
+    if isinstance(obj, str) and len(obj) > min_length:
+        texts.append(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            texts.extend(_extract_text_from_json(v, min_length))
+    elif isinstance(obj, list):
+        for item in obj:
+            texts.extend(_extract_text_from_json(item, min_length))
+    return texts
+
+
 def prune_messages(messages, keep_rounds=2):
     """Keep system prompt and the last N assistant rounds (each round = assistant
     message + its tool result messages). Older messages are dropped to limit
@@ -263,7 +279,7 @@ class OllamaAnalyzer:
                 try:
                     parsed = json.loads(response_text)
                     if isinstance(parsed, dict):
-                        texts = [v for v in parsed.values() if isinstance(v, str) and len(v) > 20]
+                        texts = _extract_text_from_json(parsed)
                         if texts:
                             response_text = max(texts, key=len)
                 except (json.JSONDecodeError, ValueError):
@@ -274,7 +290,7 @@ class OllamaAnalyzer:
             else:
                 try:
                     parsed = json.loads(response_text)
-                    if isinstance(parsed, dict) and not any(v for v in parsed.values() if isinstance(v, str) and v.strip()):
+                    if isinstance(parsed, dict) and not _extract_text_from_json(parsed, min_length=1):
                         response_text = "(model returned empty response)"
                 except (json.JSONDecodeError, ValueError, TypeError):
                     pass
