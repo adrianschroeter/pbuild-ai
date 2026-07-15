@@ -466,7 +466,7 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
             print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ollama.model}...")
             if not ctx.fix_mode:
                 _err_ctx = _extract_error_context(build_out)
-                error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{_sanitize_analysis_context(build_out)}" if _err_ctx else _sanitize_analysis_context(build_out), full_context)
+                error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{_sanitize_analysis_context(build_out)}" if _err_ctx else _sanitize_analysis_context(build_out), full_context, format_json=True)
                 print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
                 ollama._write_analysis_file(error_analysis)
 
@@ -1145,7 +1145,7 @@ if __name__ == "__main__":
                     f"--- Initial spec review ---\n{_spec_review[:3000]}\n\n--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + _sanitized_error
                     if _spec_review else f"--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + _sanitized_error
                 )
-                error_analysis = ollama.analyze(error_prompt, _error_analysis_ctx, full_context)
+                error_analysis = ollama.analyze(error_prompt, _error_analysis_ctx, full_context, format_json=True)
                 _prev_error_context = error_context
                 _prev_error_analysis = error_analysis
             _latest_analysis = error_analysis
@@ -1189,7 +1189,7 @@ if __name__ == "__main__":
                         deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
                         _fixes_ctx = _build_attempted_fixes_context()
                         _current_spec_da = manager.read_file_safe(spec)
-                        error_analysis = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(error_context), deep_context)
+                        error_analysis = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(error_context), deep_context, format_json=True)
                         error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                         _latest_analysis = error_analysis
                         print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '------------------------------------------')}\n")
@@ -1495,7 +1495,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     build_out2 = _retry_out
                 _fixes_ctx = _build_attempted_fixes_context()
                 _current_spec_re = manager.read_file_safe(spec)
-                error_analysis2 = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(build_out2), full_context)
+                error_analysis2 = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(build_out2), full_context, format_json=True)
                 _latest_analysis = error_analysis2
                 print(f"\n{_color(AI_COLOR, f'--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---')}\n{error_analysis2}\n{_color(AI_COLOR, '------------------------------------------')}\n")
                 ollama._write_analysis_file(error_analysis2)
@@ -2093,7 +2093,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             analysis_context = f"{analysis_context}\n\n--- User Hint ---\n{PROMPT_HINT}"
                         _tok = ollama.count_tokens(spec_prompt + "\n\nHere is the context:\n" + _spec_content + (f"\n\n--- AGENTS.md ---\n{analysis_context}" if analysis_context else ""))
                         print(f"[AI] Analyzing Spec-file: {spec.name}... ({_tok//1024}k/{ollama.max_tokens//1024}k tok)")
-                        spec_analysis = ollama.analyze(spec_prompt, _spec_content, analysis_context)
+                        spec_analysis = ollama.analyze(spec_prompt, _spec_content, analysis_context, format_json=True)
                         print(f"-> AI({ollama.model}) says:\n{spec_analysis}\n")
                         manager._spec_analysis = spec_analysis
                         if not FIX_MODE or manager.has_prior_failed_build() or PROMPT_HINT:

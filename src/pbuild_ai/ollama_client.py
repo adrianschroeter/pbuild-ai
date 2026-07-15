@@ -253,7 +253,7 @@ class OllamaAnalyzer:
             print(f"[DEBUG] Ollama raw response ({len(raw)} bytes, {elapsed:.1f}s):\n{raw}", flush=True)
         return json.loads(raw)
 
-    def analyze(self, system_prompt, context_data, agents_md=None):
+    def analyze(self, system_prompt, context_data, agents_md=None, format_json=False):
         _char_limit = self.max_tokens * 6
         context_data = (context_data or "")[:_char_limit]
         if agents_md:
@@ -263,7 +263,13 @@ class OllamaAnalyzer:
             full_prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
         full_prompt = full_prompt[:_char_limit]
         payload = {"model": self.model, "prompt": full_prompt, "stream": False}
-        self._apply_options_and_format(payload)
+        if format_json:
+            self._apply_options_and_format(payload)
+        else:
+            opts = self.options.copy() if self.options else {}
+            opts.pop("format", None)
+            if opts:
+                payload["options"] = opts
         self._context = None
         try:
             result = self._request(self.api_url, payload)
