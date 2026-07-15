@@ -318,6 +318,7 @@ class TestAnalyzeConflicts(unittest.TestCase):
         parser.add_argument("--update-only", action="store_true")
         parser.add_argument("--changelog", action="store_true")
         parser.add_argument("--generate", default=None)
+        parser.add_argument("--create", "-c", default=None)
         parser.add_argument("--modify", "-m", default=None)
         return parser
 
@@ -349,6 +350,11 @@ class TestAnalyzeConflicts(unittest.TestCase):
 
     def test_analyze_conflicts_with_generate(self):
         msg = self._check(["--analyze", "--generate=foo", "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--analyze cannot be used with", msg)
+
+    def test_analyze_conflicts_with_create(self):
+        msg = self._check(["--analyze", "--create=foo", "/tmp/d"])
         self.assertIsNotNone(msg)
         self.assertIn("--analyze cannot be used with", msg)
 

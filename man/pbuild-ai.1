@@ -20,7 +20,9 @@ Run builds and fix possible build failures (\fB\-\-fix\fR)
 .IP \(bu 4
 Update sources to the latest upstream version and verify (\fB\-\-update\fR)
 .IP \(bu 4
-Generate a new package from scratch (\fB\-\-generate\fR / \fB\-\-create\fR)
+Generate a new package from scratch (\fB\-\-generate\fR)
+.IP \(bu 4
+Generate a new package and test-build it (\fB\-\-create\fR)
 
 pbuild\-ai is safe by default \(en it only allows modifications to local
 package sources. Reading files outside the working directory is blocked.
@@ -85,14 +87,17 @@ Modify package sources by sending the prompt and current sources to
 Ollama, then apply the changes locally and quit (no build).
 Combine with \fB\-\-fix\fR to also test-build and fix after the modification.
 .TP
-.B \-\-generate PROMPT, \-\-create PROMPT
-Create a new openSUSE RPM package from scratch. \fB\-\-create\fR is an
-alias for \fB\-\-generate\fR. The given prompt describes what to package.
-pbuild\-ai researches upstream sources via web fetch, asks clarifying
-questions, writes spec files and supporting files into the workspace
-directory.
-Combine with \fB\-\-fix\fP to automatically test-build and fix failures
-after generation. Without \fB\-\-fix\fP, no build is performed.
+.B \-\-generate PROMPT, \-g PROMPT
+Create a new openSUSE RPM package from scratch. The given prompt
+describes what to package. pbuild\-ai researches upstream sources via
+web fetch, asks clarifying questions, writes spec files and supporting
+files into the workspace directory.
+No build is performed.
+.TP
+.B \-\-create PROMPT, \-c PROMPT
+Same as \fB\-\-generate\fR, but also runs a test build and automatically
+fixes any build failures via the AI fix loop (equivalent to
+\fB\-\-generate PROMPT \-\-fix\fR).
 .TP
 .B \-\-deep\-analyze, \-d
 On build failure, open an interactive shell in the build environment

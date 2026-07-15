@@ -476,6 +476,8 @@ def _check_arg_conflicts(parser, args):
             _analyze_conflicts.append('--update')
         if args.generate:
             _analyze_conflicts.append('--generate')
+        if args.create:
+            _analyze_conflicts.append('--create')
         if args.changelog:
             _analyze_conflicts.append('--changelog')
         if args.modify:
@@ -523,7 +525,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
         description="RPM packager helper with AI-powered build-fix and version-update.\n"
-                    "Main commands: --analyze, --fix, --update, --generate, --modify",
+                    "Main commands: --analyze, --fix, --update, --generate, --create, --modify",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("workspace_dir", help="Path to the workspace directory")
@@ -532,7 +534,8 @@ if __name__ == "__main__":
     parser.add_argument("--version", action="store_true", help="Show version and exit")
     parser.add_argument("--fix", "-f", action="store_true", help="Main command: apply AI-suggested fixes to build failures and run test builds to verify")
     parser.add_argument("--update", "-u", action="store_true", help="Main command: update to latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
-    parser.add_argument("--generate", "--create", "-g", "-c", default=None, help="Main command: generate a new package from scratch based on the given prompt")
+    parser.add_argument("--generate", "-g", default=None, help="Main command: generate a new package from scratch based on the given prompt (no test build)")
+    parser.add_argument("--create", "-c", default=None, help="Main command: generate a new package from scratch with test build and AI fix loop")
     parser.add_argument("--modify", "-m", default=None, help="Main command: send a modification prompt + sources to Ollama, apply changes locally, then exit (no build)")
     parser.add_argument("--root", default=None, help="Root directory for pbuild (passed as --root to pbuild)")
     parser.add_argument("--show-buildlog", "-L", action="store_true", help="Show the pbuild build log output")
@@ -580,6 +583,11 @@ if __name__ == "__main__":
     clean_group.add_argument("--clean", action="store_true", default=False, help="Clean build artifacts before building")
     clean_group.add_argument("--no-clean", action="store_true", default=True, help="Do not clean build artifacts (default)")
     args = parser.parse_args()
+
+    # --create is syntactic sugar for --generate --fix
+    if args.create:
+        args.generate = args.create
+        args.fix = True
 
     if args.version:
         print(f"pbuild-ai version {__version__}")
