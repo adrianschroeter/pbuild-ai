@@ -311,6 +311,27 @@ def _extract_error_context(text, context_lines=3, max_errors=30):
     return '\n'.join(result)
 
 
+_TOOL_CALL_RE = re.compile(r'^\s*\{\s*"[a-zA-Z]+"\s*:\s*"[^"]*"\s*\}\s*$')
+
+
+def _sanitize_analysis_context(text: str) -> str:
+    """Remove tool-call artifacts from build output before feeding to analysis,
+    preventing the model from echoing them instead of analyzing."""
+    lines = text.split('\n')
+    cleaned = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            cleaned.append(line)
+            continue
+        if _TOOL_CALL_RE.match(s):
+            continue
+        if s.startswith(('[TOOL]', '[FIX]', '[GENERATE]', '[MODIFY]', 'READ SKIP:')):
+            continue
+        cleaned.append(line)
+    return '\n'.join(cleaned)
+
+
 def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
     """Enrich error_prompt with package lookup results from gitexplorer API.
     Extracts missing filenames, unresolvable package names, and unowned
@@ -445,7 +466,7 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
             print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ollama.model}...")
             if not ctx.fix_mode:
                 _err_ctx = _extract_error_context(build_out)
-                error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{build_out}" if _err_ctx else build_out, full_context)
+                error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{_sanitize_analysis_context(build_out)}" if _err_ctx else _sanitize_analysis_context(build_out), full_context)
                 print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
                 ollama._write_analysis_file(error_analysis)
 
@@ -1022,7 +1043,7 @@ if __name__ == "__main__":
             lines = ["PREVIOUSLY ATTEMPTED FIXES (ALL FAILED — do NOT suggest these again):"]
             for _att, _diff, _err in _attempted_fixes:
                 _diff_short = _diff.replace('\n', ' | ')[:500] if _diff else '(no diff)'
-                _err_short = (_err or '')[:500].replace('\n', ' | ')
+                _err_short = (_sanitize_analysis_context(_err or '')[:500] if _err else '').replace('\n', ' | ')
                 lines.append(f"- Attempt {_att}: {_diff_short}")
                 lines.append(f"  Result: {_err_short}")
             return "\n".join(lines) + "\n\n"
@@ -1119,9 +1140,10 @@ if __name__ == "__main__":
                 _fixes_ctx = _build_attempted_fixes_context()
                 _spec_review = getattr(manager, '_spec_analysis', '')
                 _current_spec_a = manager.read_file_safe(spec)
+                _sanitized_error = _sanitize_analysis_context(error_context)
                 _error_analysis_ctx = (
-                    f"--- Initial spec review ---\n{_spec_review[:3000]}\n\n--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + error_context
-                    if _spec_review else f"--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + error_context
+                    f"--- Initial spec review ---\n{_spec_review[:3000]}\n\n--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + _sanitized_error
+                    if _spec_review else f"--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + _sanitized_error
                 )
                 error_analysis = ollama.analyze(error_prompt, _error_analysis_ctx, full_context)
                 _prev_error_context = error_context
@@ -1167,7 +1189,7 @@ if __name__ == "__main__":
                         deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
                         _fixes_ctx = _build_attempted_fixes_context()
                         _current_spec_da = manager.read_file_safe(spec)
-                        error_analysis = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + error_context, deep_context)
+                        error_analysis = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(error_context), deep_context)
                         error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                         _latest_analysis = error_analysis
                         print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '------------------------------------------')}\n")
@@ -1473,7 +1495,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     build_out2 = _retry_out
                 _fixes_ctx = _build_attempted_fixes_context()
                 _current_spec_re = manager.read_file_safe(spec)
-                error_analysis2 = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + build_out2, full_context)
+                error_analysis2 = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(build_out2), full_context)
                 _latest_analysis = error_analysis2
                 print(f"\n{_color(AI_COLOR, f'--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---')}\n{error_analysis2}\n{_color(AI_COLOR, '------------------------------------------')}\n")
                 ollama._write_analysis_file(error_analysis2)

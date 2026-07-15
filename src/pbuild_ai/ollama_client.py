@@ -202,6 +202,10 @@ class OllamaAnalyzer:
             if _psize:
                 _tok = self.count_tokens(_psize)
                 _ctx_str = f" ({_tok//1024}k/{self.max_tokens//1024}k tok)"
+            elif payload.get("messages"):
+                _all_text = "\n".join(m.get("content", "") or "" for m in payload["messages"])
+                _tok = self.count_tokens(_all_text)
+                _ctx_str = f" ({_tok//1024}k/{self.max_tokens//1024}k tok)"
             else:
                 _ctx_str = ""
             with Spinner(prefix=f"[AI] {model_name}{_ctx_str}", color=AI_COLOR):
@@ -255,7 +259,7 @@ class OllamaAnalyzer:
                 response_text = result.get('thinking', '').strip()
             # When format=json is sent, the model outputs JSON text.
             # Try to extract meaningful content from the JSON structure.
-            if payload.get("format") == "json" and response_text:
+            if response_text:
                 try:
                     parsed = json.loads(response_text)
                     if isinstance(parsed, dict):
