@@ -357,11 +357,16 @@ def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
 
         filename = parse_missing_filename_from_log(build_out)
         if filename and not _is_source_or_build_path(filename):
-            print(f"[GITEXPLORER] Querying files endpoint for: {filename}")
-            results = query_package_by_file(filename)
-            if results:
-                lines.append(f"Packages providing '{filename}':")
-                lines.append(format_results(results))
+            # Skip filenames from cd: errors in %prep — these are directory
+            # names from tarball extraction, not missing files/packages
+            if re.search(rf"cd:\s*{re.escape(filename)}:\s*No such file or directory", build_out):
+                print(f"[GITEXPLORER] Skipping '{filename}' — cd: error (directory from tarball extraction, not a missing file)")
+            else:
+                print(f"[GITEXPLORER] Querying files endpoint for: {filename}")
+                results = query_package_by_file(filename)
+                if results:
+                    lines.append(f"Packages providing '{filename}':")
+                    lines.append(format_results(results))
 
         pkg = parse_unresolved_package_from_log(build_out)
         if pkg:
@@ -600,6 +605,7 @@ if __name__ == "__main__":
     parser.add_argument("--ollama-option", action="append", default=[], help="Pass a model parameter to Ollama (repeatable, e.g. --ollama-option temperature=0.1 --ollama-option num_ctx=8192). For reasoning/thinking models, use --ollama-option thinking=false to disable thinking.")
     parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries. Falls back to EMAIL env var.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
+    parser.add_argument("--skills-dir", action="append", default=[], help="Extra directory to load skill .py files from (repeatable). Combined with the built-in skills dir and ~/.config/pbuild-ai/skills/ if it exists.")
     clean_group = parser.add_mutually_exclusive_group()
     clean_group.add_argument("--clean", action="store_true", default=False, help="Clean build artifacts before building")
     clean_group.add_argument("--no-clean", action="store_true", default=True, help="Do not clean build artifacts (default)")
@@ -701,6 +707,10 @@ if __name__ == "__main__":
     OLLAMA_MODEL_ARG = ctx.ollama_model_arg
     ROOT_DIR = ctx.root_dir
     SKILLS_DIR = Path(__file__).parent / "skills"
+    user_skills_dir = Path.home() / ".config" / "pbuild-ai" / "skills"
+    skills_extra_dirs = list(args.skills_dir) if args.skills_dir else []
+    if user_skills_dir.is_dir():
+        skills_extra_dirs = [str(user_skills_dir)] + skills_extra_dirs
 
     Path(WORKSPACE_DIR).mkdir(exist_ok=True)
     ctx.project_mode = PROJECT_MODE
@@ -711,7 +721,7 @@ if __name__ == "__main__":
         print("[INFO] Discarded saved .pai.context (--fresh).")
 
     manager = RpmSourceManager(WORKSPACE_DIR, do_clean=DO_CLEAN, vm_type=ctx.vm_type, vm_memory=ctx.vm_memory, shell_after_build=ctx.shell_after_build, preset=PRESET, root_dir=ROOT_DIR, build_log_path=ctx.build_log)
-    skill_manager = SkillManager(SKILLS_DIR)
+    skill_manager = SkillManager(SKILLS_DIR, extra_dirs=skills_extra_dirs)
     ctx.manager = manager
     ctx.skill_manager = skill_manager
     
@@ -1013,6 +1023,22 @@ if __name__ == "__main__":
         import hashlib as _hashlib
         _initial_spec_hash = _hashlib.md5(manager.read_file_safe(spec).encode()).hexdigest()
         _spec_version_hashes = [(0, _initial_spec_hash)]
+        _build_skill_files = set()
+
+        def _merge_build_skills(prompt, build_out):
+            """Re-evaluate skills against build output and inject OLLAMA_ERROR_PROMPT from newly-matched skills."""
+            if not build_out:
+                return prompt
+            _new_skills = skill_manager.get_skills_for(spec.name, build_out, prompt=MODIFY_PROMPT)
+            for _s in _new_skills:
+                _sf = getattr(_s, '__file__', None) or _s.__name__
+                if _sf not in _build_skill_files:
+                    _ep = getattr(_s, 'OLLAMA_ERROR_PROMPT', '')
+                    if _ep and _ep.strip():
+                        print(f"[SKILL] Build output matched skill: {_s.__name__} — injecting OLLAMA_ERROR_PROMPT")
+                        prompt += "\n\n" + _ep.strip()
+                        _build_skill_files.add(_sf)
+            return prompt
 
         # Save conversation context on SIGINT/SIGTERM (Ctrl+C)
         def _interrupt_handler(signum, frame):
@@ -1145,6 +1171,7 @@ if __name__ == "__main__":
                     f"--- Initial spec review ---\n{_spec_review[:3000]}\n\n--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + _sanitized_error
                     if _spec_review else f"--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + _sanitized_error
                 )
+                error_prompt = _merge_build_skills(error_prompt, current_build_out)
                 error_analysis = ollama.analyze(error_prompt, _error_analysis_ctx, full_context, format_json=True)
                 _prev_error_context = error_context
                 _prev_error_analysis = error_analysis
@@ -1495,6 +1522,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     build_out2 = _retry_out
                 _fixes_ctx = _build_attempted_fixes_context()
                 _current_spec_re = manager.read_file_safe(spec)
+                error_prompt = _merge_build_skills(error_prompt, build_out2)
                 error_analysis2 = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(build_out2), full_context, format_json=True)
                 _latest_analysis = error_analysis2
                 print(f"\n{_color(AI_COLOR, f'--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---')}\n{error_analysis2}\n{_color(AI_COLOR, '------------------------------------------')}\n")

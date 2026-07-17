@@ -19,8 +19,13 @@ from pathlib import Path
 
 
 class SkillManager:
-    def __init__(self, skills_dir):
-        self.skills_dir = Path(skills_dir).resolve()
+    def __init__(self, skills_dir, extra_dirs=None):
+        self.skills_dirs = [Path(skills_dir).resolve()]
+        if extra_dirs:
+            for d in extra_dirs:
+                p = Path(d).resolve()
+                if p not in self.skills_dirs:
+                    self.skills_dirs.append(p)
         self.skills = []
         self._named_skills = {}
         self.base_skill_content = None
@@ -30,30 +35,37 @@ class SkillManager:
         self._load_base_skill()
 
     def _load_base_skill(self):
-        base_skill_file = self.skills_dir / "OPENSUSE.md"
-        if base_skill_file.is_file():
-            self.base_skill_content = base_skill_file.read_text(encoding="utf-8")
-            print(f"[SKILL LOADED] OPENSUSE.md (Base skill)")
+        for d in self.skills_dirs:
+            base_skill_file = d / "OPENSUSE.md"
+            if base_skill_file.is_file():
+                self.base_skill_content = base_skill_file.read_text(encoding="utf-8")
+                print(f"[SKILL LOADED] OPENSUSE.md (Base skill) from {d}")
+                return
 
     def _load_skills(self):
-        if not self.skills_dir.is_dir():
-            print(f"[INFO] Skills directory {self.skills_dir} not found. Creating it.")
-            self.skills_dir.mkdir(parents=True, exist_ok=True)
-            return
+        for d in self.skills_dirs:
+            if not d.is_dir():
+                if d == self.skills_dirs[0]:
+                    print(f"[INFO] Skills directory {d} not found. Creating it.")
+                    d.mkdir(parents=True, exist_ok=True)
+                continue
+            for skill_file in sorted(d.glob("*.py")):
+                self._load_skill_file(skill_file)
 
-        for skill_file in self.skills_dir.glob("*.py"):
-            try:
-                spec = importlib.util.spec_from_file_location(skill_file.stem, skill_file)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                if hasattr(module, 'SKILL_NAME'):
-                    self._named_skills[module.SKILL_NAME] = module
-                if hasattr(module, 'TARGET_PATTERN') or hasattr(module, 'CONTENT_PATTERN') or hasattr(module, 'PROMPT_PATTERN'):
-                    self.skills.append(module)
-                if hasattr(module, 'DEEP_ANALYZE_PROMPT'):
-                    self.deep_analyze_prompts.append(module.DEEP_ANALYZE_PROMPT.strip())
-            except Exception as e:
-                print(f"[WARNING] Could not load skill {skill_file.name}: {e}")
+    def _load_skill_file(self, skill_file):
+        try:
+            spec = importlib.util.spec_from_file_location(skill_file.stem, skill_file)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            if hasattr(module, 'SKILL_NAME'):
+                # Later dirs override earlier ones on name collision
+                self._named_skills[module.SKILL_NAME] = module
+            if hasattr(module, 'TARGET_PATTERN') or hasattr(module, 'CONTENT_PATTERN') or hasattr(module, 'PROMPT_PATTERN'):
+                self.skills.append(module)
+            if hasattr(module, 'DEEP_ANALYZE_PROMPT'):
+                self.deep_analyze_prompts.append(module.DEEP_ANALYZE_PROMPT.strip())
+        except Exception as e:
+            print(f"[WARNING] Could not load skill {skill_file.name}: {e}")
 
     def _print_skill_active(self, skill, filename, match_type):
         """Print a consistent [SKILL ACTIVE] message."""
