@@ -53,6 +53,11 @@ copyright header):
 Where XYZ is the major.minor version without dots (e.g., for Python 3.14.4 use
 %define skip_python314 1). For Python 2, use %define skip_python2 1.
 Multiple skip lines can be added for different versions.
+
+A missing python macro like %python_subpackages point to a missing
+
+  BuildRequires: python-rpm-macros
+
 """
 
 def fix_content(content: str) -> str:
