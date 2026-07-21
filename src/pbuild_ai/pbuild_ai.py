@@ -392,6 +392,321 @@ def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
     return error_prompt
 
 
+def _check_package_exists(pkg_name: str) -> bool | None:
+    """Check if a binary package exists in any openSUSE repo via gitexplorer.
+    Returns True if found, False if not found, None on error.
+    """
+    try:
+        from pbuild_ai.query_gitexplorer import query_package_by_name
+        results = query_package_by_name(pkg_name, limit=5)
+        return len(results) > 0
+    except Exception:
+        return None
+
+
+def _migrate_to_project_mode(workspace_dir: str, pkg_name: str) -> Path | None:
+    """Restructure flat workspace into project mode with _manifest.
+    Moves all files (except metadata/context) into ./{pkg_name}/.
+    Returns new spec path, or None on failure.
+    """
+    ws = Path(workspace_dir)
+    subdir = ws / pkg_name
+    if subdir.exists():
+        print(f"[AUTO-DEPS] Subdirectory {subdir} already exists — cannot migrate.")
+        return None
+    _leave_at_root = {'_manifest', '.pai.context', '.pai.context.bak', 'AGENTS.md', 'tool-scripts', '.git', '.osc', '.github'}
+    to_move = []
+    for entry in ws.iterdir():
+        if entry.name in _leave_at_root or entry.name.startswith('.'):
+            continue
+        to_move.append(entry)
+    if not to_move:
+        print(f"[AUTO-DEPS] No files to move from {ws}")
+        return None
+    subdir.mkdir(parents=True, exist_ok=True)
+    for entry in to_move:
+        dest = subdir / entry.name
+        shutil.move(str(entry), str(dest))
+        print(f"[AUTO-DEPS] Moved {entry.name} -> {pkg_name}/{entry.name}")
+    manifest_path = ws / '_manifest'
+    manifest_path.write_text("subdirectories:\n  - .\n")
+    print(f"[AUTO-DEPS] Created _manifest at {manifest_path}")
+    print(f"[AUTO-DEPS] _manifest uses subdirectories: [.] — packages in subdirs are auto-discovered")
+    new_spec = subdir / f"{pkg_name}.spec"
+    if new_spec.exists():
+        return new_spec
+    specs = list(subdir.rglob("*.spec"))
+    return specs[0] if specs else None
+
+
+def _parse_version(v: str):
+    """Parse a version string into a comparable tuple of integers."""
+    parts = []
+    for seg in v.replace('~', '.').replace('_', '.').replace('+', '.').split('.'):
+        try:
+            parts.append(int(seg))
+        except ValueError:
+            m = re.match(r'(\d+)', seg)
+            parts.append(int(m.group(1)) if m else 0)
+    return tuple(parts)
+
+
+def _version_satisfies(version: str, op: str | None, constraint_ver: str | None) -> bool:
+    """Check if version satisfies operator + constraint_version. No constraint = satisfied."""
+    if not op or not constraint_ver:
+        return True
+    v = _parse_version(version)
+    c = _parse_version(constraint_ver)
+    if op == '>=':
+        return v >= c
+    elif op == '<=':
+        return v <= c
+    elif op == '=':
+        return v == c
+    elif op == '>':
+        return v > c
+    elif op == '<':
+        return v < c
+    return True
+
+
+def _extract_spec_version(spec_path: Path) -> str | None:
+    """Extract Version tag value from a spec file."""
+    try:
+        content = spec_path.read_text(encoding='utf-8')
+        m = re.search(r'^Version:\s*(\S+)', content, re.M)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _search_git_log_for_version(repo_dir: str, dep_name: str, op: str, constraint_ver: str) -> bool:
+    """Walk git log backwards to find a commit whose Version satisfies the constraint."""
+    import subprocess
+    _orig = os.getcwd()
+    os.chdir(repo_dir)
+    try:
+        _cur = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+        _cur_hash = _cur.stdout.strip()
+        _log = subprocess.run(["git", "log", "--oneline", "--format=%H", "-500"],
+                              capture_output=True, text=True)
+        _hashes = [l.strip() for l in _log.stdout.strip().split('\n') if l.strip()]
+        for _h in _hashes:
+            subprocess.run(["git", "checkout", _h, "--force"], capture_output=True, text=True)
+            _sp = Path(repo_dir) / f"{dep_name}.spec"
+            if not _sp.exists():
+                _sps = list(Path(repo_dir).rglob("*.spec"))
+                _sp = _sps[0] if _sps else None
+            if _sp:
+                _v = _extract_spec_version(_sp)
+                if _v and _version_satisfies(_v, op, constraint_ver):
+                    print(f"[AUTO-DEPS] Found version {_v} at commit {_h[:8]}")
+                    os.chdir(_orig)
+                    return True
+        # Not found — restore HEAD
+        subprocess.run(["git", "checkout", _cur_hash, "--force"], capture_output=True, text=True)
+        return False
+    finally:
+        os.chdir(_orig)
+
+
+def _bump_spec_version(spec_path: Path, new_version: str) -> bool:
+    """Directly rewrite the Version tag in a spec file."""
+    try:
+        content = spec_path.read_text(encoding='utf-8')
+        new_content = re.sub(r'^(Version:\s*).+', rf'\g<1>{new_version}', content, count=1, flags=re.M)
+        if new_content != content:
+            spec_path.write_text(new_content)
+            print(f"[AUTO-DEPS] Bumped Version to {new_version}")
+            return True
+    except Exception as e:
+        print(f"[AUTO-DEPS] Error bumping version: {e}")
+    return False
+
+
+def _try_clone_dependency(dep_name: str, target_dir: str,
+                           constraint_op: str | None = None,
+                           constraint_ver: str | None = None) -> bool:
+    """Clone a package source from src.opensuse.org/pool/{dep_name}.
+    After cloning, align version if constraint is given:
+      - too new → search git log for older commit
+      - too old → bump Version tag to constraint minimum
+    Returns True if clone (or version alignment) succeeded, False otherwise.
+    """
+    import subprocess as _sp
+    url = f"https://src.opensuse.org/pool/{dep_name}.git"
+    print(f"[AUTO-DEPS] Trying to clone {url} -> {target_dir}")
+    try:
+        _r = _sp.run(["git", "clone", url, target_dir], capture_output=True, text=True, timeout=60)
+        if _r.returncode != 0:
+            print(f"[AUTO-DEPS] Clone failed: {_r.stderr.strip() or _r.stdout.strip()}")
+            return False
+        print(f"[AUTO-DEPS] Successfully cloned {dep_name} from pool")
+    except _sp.TimeoutExpired:
+        print(f"[AUTO-DEPS] Clone timed out for {dep_name}")
+        return False
+    except Exception as e:
+        print(f"[AUTO-DEPS] Clone error: {e}")
+        return False
+
+    if not constraint_op or not constraint_ver:
+        return True  # No version constraint, use as-is
+
+    _sp = Path(target_dir) / f"{dep_name}.spec"
+    if not _sp.exists():
+        _sps = list(Path(target_dir).rglob("*.spec"))
+        _sp = _sps[0] if _sps else None
+    if not _sp:
+        return True  # No spec found, can't align
+
+    _v = _extract_spec_version(_sp)
+    if not _v:
+        return True  # Can't read version
+
+    if _version_satisfies(_v, constraint_op, constraint_ver):
+        return True  # Already satisfied
+
+    _ver_parts = _parse_version(_v)
+    _con_parts = _parse_version(constraint_ver) if constraint_ver else (0,)
+
+    if _ver_parts > _con_parts:
+        print(f"[AUTO-DEPS] {dep_name} version {_v} is too new (needs {constraint_op} {constraint_ver})")
+        print(f"[AUTO-DEPS] Searching git history for matching version...")
+        if _search_git_log_for_version(target_dir, dep_name, constraint_op, constraint_ver):
+            print(f"[AUTO-DEPS] Found version matching {constraint_op} {constraint_ver}")
+        else:
+            print(f"[AUTO-DEPS] No matching version found — staying on latest commit")
+    else:
+        print(f"[AUTO-DEPS] {dep_name} version {_v} is too old (needs {constraint_op} {constraint_ver})")
+        _bump_spec_version(_sp, constraint_ver)
+
+    return True
+
+
+def _create_dependency_package(dep_name: str, dep_dir: str, ctx) -> bool:
+    """Generate a dependency package spec using AI (fallback when clone fails)."""
+    from pbuild_ai.generate_mode import run_generate_mode
+    ecosystem = "generic"
+    prompt_extra = ""
+    if dep_name.startswith("python-") or dep_name.startswith("python3-"):
+        ecosystem = "PyPI"
+        prompt_extra = f"Use py2pack generate {dep_name} to create the initial spec."
+    elif dep_name.startswith("nodejs-"):
+        ecosystem = "npm"
+    elif dep_name.startswith("rust-"):
+        ecosystem = "crates.io"
+    elif dep_name.startswith("rubygem-"):
+        ecosystem = "RubyGems"
+    elif dep_name.startswith("perl-"):
+        ecosystem = "MetaCPAN"
+    print(f"[AUTO-DEPS] Generating {dep_name} from {ecosystem}...")
+    original_ws = ctx.workspace_dir
+    ctx.workspace_dir = dep_dir
+    try:
+        prompt = f"Create an openSUSE RPM package for the {ecosystem} package '{dep_name}'. {prompt_extra}"
+        old_generate = ctx.generate_prompt
+        ctx.generate_prompt = prompt
+        try:
+            run_generate_mode(ctx)
+        finally:
+            ctx.generate_prompt = old_generate
+    finally:
+        ctx.workspace_dir = original_ws
+    dep_spec = Path(dep_dir) / f"{dep_name}.spec"
+    if dep_spec.exists():
+        print(f"[AUTO-DEPS] Generated spec: {dep_spec}")
+        return True
+    specs = list(Path(dep_dir).rglob("*.spec"))
+    if specs:
+        print(f"[AUTO-DEPS] Generated spec: {specs[0]}")
+        return True
+    print(f"[AUTO-DEPS] Failed to generate spec for {dep_name}")
+    return False
+
+
+def _handle_auto_deps(build_out: str, workspace_dir: str, pkg_name: str,
+                      ctx, remaining_depth: int = 10) -> str | None:
+    """Check build output for unresolvable missing deps that don't exist in any repo.
+
+    Handles migration → gitexplorer check → clone (if exists) or AI-generation → build.
+    Recurses into sub-dependencies up to remaining_depth.
+    Returns the top-level created dependency package name, or None.
+    """
+    from pbuild_ai.skills.unresolvable_skill import (
+        parse_unresolved_package_with_constraint,
+        parse_unresolved_package_from_log,
+    )
+    _parsed = parse_unresolved_package_with_constraint(build_out)
+    if not _parsed:
+        return None
+    dep_name, _constraint_op, _constraint_ver = _parsed
+    print(f"[AUTO-DEPS] Detected missing dependency: {dep_name}")
+    if _constraint_op:
+        print(f"[AUTO-DEPS]   Constraint: {_constraint_op} {_constraint_ver}")
+
+    is_project = (Path(workspace_dir) / "_manifest").is_file()
+    if not is_project:
+        print(f"[AUTO-DEPS] Migrating to project mode first...")
+        new_spec = _migrate_to_project_mode(workspace_dir, pkg_name)
+        if not new_spec:
+            print(f"[AUTO-DEPS] Migration failed")
+            return None
+        ctx.project_mode = True
+        print(f"[AUTO-DEPS] Now in project mode. New spec: {new_spec}")
+
+    exists = _check_package_exists(dep_name)
+    dep_dir = str(Path(workspace_dir) / dep_name)
+    if exists is True:
+        print(f"[AUTO-DEPS] {dep_name} exists in gitexplorer — cloning from pool")
+        if not _try_clone_dependency(dep_name, dep_dir,
+                                     constraint_op=_constraint_op,
+                                     constraint_ver=_constraint_ver):
+            print(f"[AUTO-DEPS] Clone failed for {dep_name}")
+            return None
+    else:
+        if exists is None:
+            print(f"[AUTO-DEPS] gitexplorer check failed — assuming need to generate")
+        else:
+            print(f"[AUTO-DEPS] {dep_name} not found in any repo — generating from scratch")
+        if not _create_dependency_package(dep_name, dep_dir, ctx):
+            print(f"[AUTO-DEPS] AI generation failed for {dep_name}")
+            return None
+
+    print(f"[AUTO-DEPS] Building {dep_name}...")
+    _build_ok = False
+    _build_out = ""
+    try:
+        _build_ok, _build_out = ctx.manager.run_project_build(
+            dep_name, preset=ctx.preset, dist=ctx.dist,
+            force_clean=True, stream_output=ctx.show_buildlog)
+        if _build_ok:
+            print(f"[AUTO-DEPS] {dep_name} built successfully")
+        else:
+            print(f"[AUTO-DEPS] {dep_name} build failed")
+    except Exception as e:
+        print(f"[AUTO-DEPS] Error building {dep_name}: {e}")
+
+    # Recursive sub-dependency resolution
+    if remaining_depth > 1 and not _build_ok and _build_out:
+        _sub = parse_unresolved_package_from_log(_build_out)
+        if _sub:
+            print(f"[AUTO-DEPS] {dep_name} has unresolved dep '{_sub}' — recursing (depth left: {remaining_depth-1})")
+            _created = _handle_auto_deps(_build_out, workspace_dir, dep_name,
+                                          ctx, remaining_depth=remaining_depth - 1)
+            if _created:
+                print(f"[AUTO-DEPS] Sub-dep '{_created}' resolved. Rebuilding {dep_name}...")
+                try:
+                    _build_ok, _build_out = ctx.manager.run_project_build(
+                        dep_name, preset=ctx.preset, dist=ctx.dist,
+                        force_clean=True, stream_output=ctx.show_buildlog)
+                    if _build_ok:
+                        print(f"[AUTO-DEPS] {dep_name} rebuilt successfully after sub-dep")
+                except Exception:
+                    pass
+
+    return dep_name
+
+
 def _apply_analysis_fix_patterns(spec: Path, spec_content: str, error_analysis: str) -> str | None:
     """Apply well-known fix patterns directly from the analysis text without a model call.
     
@@ -477,11 +792,37 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
 
         if ctx.fix_mode and not build_success:
             pkg_name = package_name if 'package_name' in dir() else spec.stem
-            if PROJECT_MODE:
-                rebuild_func = lambda p, force_clean=False: manager.run_project_build(p, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
-            else:
-                rebuild_func = lambda p, force_clean=False: manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
-            run_fix_loop_func(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
+
+            # --auto-deps: auto-create missing dependency packages
+            if build_out and ("unresolvable" in build_out.lower() or "nothing provides" in build_out.lower()):
+                _depth = ctx.auto_deps if ctx.auto_deps > 0 else 999999
+                _should_auto_dep = ctx.auto_deps > 0
+                if ctx.interactive and ctx.auto_deps == 0:
+                    from pbuild_ai.skills.unresolvable_skill import parse_unresolved_package_from_log
+                    _missing = parse_unresolved_package_from_log(build_out)
+                    if _missing:
+                        _ans = input(f"[AUTO-DEPS] Package '{_missing}' does not appear to exist. Create it? [y/N] ").strip().lower()
+                        _should_auto_dep = _ans in ('y', 'yes')
+                if _should_auto_dep:
+                    _dep = _handle_auto_deps(build_out, WORKSPACE_DIR, pkg_name, ctx, remaining_depth=_depth)
+                    if _dep:
+                        print(f"[AUTO-DEPS] Dependency '{_dep}' created. Restarting build in project mode...")
+                        if ctx.project_mode and not PROJECT_MODE:
+                            _new_spec = Path(WORKSPACE_DIR) / pkg_name / f"{pkg_name}.spec"
+                            if _new_spec.exists():
+                                spec = _new_spec
+                                print(f"[AUTO-DEPS] Updated spec path to {spec}")
+                        if ctx.project_mode:
+                            build_success, build_out = manager.run_project_build(pkg_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
+                            if build_success:
+                                print(f"\n[OK] Build for {spec.name} succeeded after creating dependency '{_dep}'.")
+
+            if ctx.fix_mode and not build_success:
+                if PROJECT_MODE or ctx.project_mode:
+                    rebuild_func = lambda p, force_clean=False: manager.run_project_build(p, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
+                else:
+                    rebuild_func = lambda p, force_clean=False: manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
+                run_fix_loop_func(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
 
     return error_prompt
 
@@ -593,7 +934,8 @@ if __name__ == "__main__":
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
     parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from Ollama")
     parser.add_argument("--max-fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, 0 = unlimited)")
-    parser.add_argument("--max-ai-rounds", type=int, default=15, help="Max AI tool-call rounds per fix attempt (default: 15, 0 = unlimited). Controls how many times the AI can call tools within a single fix cycle.")
+    parser.add_argument("--max-ai-rounds", type=int, default=30, help="Max AI tool-call rounds per fix attempt (default: 30, 0 = unlimited). Controls how many times the AI can call tools within a single fix cycle.")
+    parser.add_argument("--auto-deps", nargs='?', const=10, type=int, default=0, help="Auto-create missing dependency packages (depth: %(const)d, 0=unlimited, default: disabled)")
     parser.add_argument("--try-build-first", action="store_true", help="Skip initial AI spec analysis; build first and only use AI if build fails")
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
     parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to Ollama")
@@ -663,6 +1005,7 @@ if __name__ == "__main__":
         update_version=args.update_version or "" if (args.update or args.update_only) else None,
         update_only=args.update_only,
         try_build_first=args.try_build_first,
+        auto_deps=args.auto_deps if args.auto_deps else 0,
         modify_prompt=args.modify,
         generate_prompt=args.generate,
         ollama_server=args.openai_server,
@@ -1890,45 +2233,102 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 display = r[:500] + "..." if len(r) > 500 else r
                             print(f"[UPDATE] {display}")
                     _check_update_hints(results, research_messages, spec_files, spec_originals, updated_packages, manager)
+                    if not target_version and results:
+                        for _r in results:
+                            if _r.startswith("web_fetch: [Fetched ") and "\n" in _r:
+                                _content = _r.split("\n", 1)[1].strip()
+                                try:
+                                    _data = json.loads(_content)
+                                except (json.JSONDecodeError, TypeError):
+                                    continue
+                                _v = None
+                                if isinstance(_data, dict):
+                                    for _key in ("tag_name", "version"):
+                                        _val = _data.get(_key)
+                                        if _val and isinstance(_val, str):
+                                            _v = _val
+                                            break
+                                    if not _v:
+                                        _info = _data.get("info")
+                                        if isinstance(_info, dict) and isinstance(_info.get("version"), str):
+                                            _v = _info["version"]
+                                    if not _v:
+                                        _crate = _data.get("crate")
+                                        if isinstance(_crate, dict) and isinstance(_crate.get("max_stable_version"), str):
+                                            _v = _crate["max_stable_version"]
+                                elif isinstance(_data, list) and _data and isinstance(_data[0], dict):
+                                    for _key in ("name", "tag_name"):
+                                        _val = _data[0].get(_key)
+                                        if _val and isinstance(_val, str):
+                                            _v = _val
+                                            break
+                                if _v:
+                                    _v = str(_v).lstrip('v')
+                                    if _current_version and _v == _current_version:
+                                        print(f"[UPDATE] AI research confirms {spec.name} already at latest version {_current_version}. Skipping.")
+                                        _skip_spec = True
+                                        break
+                                    target_version = _v
+                                    _body = _data.get("body") or _data.get("description") or "" if isinstance(_data, dict) else ""
+                                    if _body:
+                                        _release_notes = _body[:10000]
+                                    print(f"[UPDATE] Found latest version {target_version} via research results for {spec.name}.")
+                                    break
+                        if _skip_spec:
+                            continue
                     spec_content = manager.read_file_safe(spec)
+                    _spec_new_version = None
                     for line in spec_content.split('\n'):
                         m = re.match(r'^Version:\s*(\S+)', line)
                         if m:
-                            target_version = m.group(1)
-                            print(f"[UPDATE] Updated to version {target_version}")
+                            _spec_new_version = m.group(1)
                             break
+                    if _current_version and _spec_new_version and _spec_new_version != _current_version:
+                        target_version = _spec_new_version
+                        print(f"[UPDATE] Updated to version {target_version}")
                     if not target_version:
                         print("[UPDATE] Could not determine latest version.")
                         target_version = 'latest'
 
                 if target_version and target_version != 'latest':
-                    print(f"\n[UPDATE] Updating {spec.name} to {target_version}...")
-                    update_prompt = VERSION_UPDATE_PROMPT.format(
-                        target_version=target_version,
-                        full_context=full_context,
-                        changelog_prompt=CHANGELOG_PROMPT,
-                        release_notes=_release_notes,
-                        prefetched_context=_prefetched_context,
-                    )
-                    messages = [
-                        {"role": "system", "content": update_prompt},
-                        {"role": "user", "content": f"Update this spec file to version {target_version}:\n\n{manager.read_file_safe(spec)}"}
-                    ]
-                    _changes_file = spec.parent / (spec.stem + '.changes')
-                    _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
-                    results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
-                    if results:
-                        for r in results:
-                            if r.startswith("web_fetch: [Fetched ") or r.startswith("read_file: "):
-                                display = r.split("\n", 1)[0]
-                            elif DEBUG:
-                                display = r
-                            else:
-                                display = r[:500] + "..." if len(r) > 500 else r
-                            print(f"[UPDATE] {display}")
+                    # Check if research AI already updated the spec — skip redundant update call
+                    _spec_now = manager.read_file_safe(spec)
+                    _v_now = None
+                    for _l in _spec_now.split('\n'):
+                        _m = re.match(r'^Version:\s*(\S+)', _l)
+                        if _m:
+                            _v_now = _m.group(1)
+                            break
+                    if _v_now == target_version:
+                        print(f"[UPDATE] Research phase already updated {spec.name} to {target_version}. Skipping update phase.")
                     else:
-                        print("[UPDATE] No changes made.")
-                    _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager)
+                        print(f"\n[UPDATE] Updating {spec.name} to {target_version}...")
+                        update_prompt = VERSION_UPDATE_PROMPT.format(
+                            target_version=target_version,
+                            full_context=full_context,
+                            changelog_prompt=CHANGELOG_PROMPT,
+                            release_notes=_release_notes,
+                            prefetched_context=_prefetched_context,
+                        )
+                        messages = [
+                            {"role": "system", "content": update_prompt},
+                            {"role": "user", "content": f"Update this spec file to version {target_version}:\n\n{_spec_now}"}
+                        ]
+                        _changes_file = spec.parent / (spec.stem + '.changes')
+                        _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
+                        results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
+                        if results:
+                            for r in results:
+                                if r.startswith("web_fetch: [Fetched ") or r.startswith("read_file: "):
+                                    display = r.split("\n", 1)[0]
+                                elif DEBUG:
+                                    display = r
+                                else:
+                                    display = r[:500] + "..." if len(r) > 500 else r
+                                print(f"[UPDATE] {display}")
+                        else:
+                            print("[UPDATE] No changes made.")
+                        _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager)
 
                     # Clean up old source tarballs after update
                     def _source_fn(_spec_text, _pkg, _ver):
@@ -1954,7 +2354,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         _spec_after = manager.read_file_safe(spec)
                         _old_src = _source_fn(spec_before_update, _old_name, _old_ver.group(1))
                         _new_src = _source_fn(_spec_after, _old_name, target_version)
-                        if _old_src and _new_src and _old_src != _new_src:
+                        if _old_src and (not _new_src or _old_src != _new_src):
                             _old_path = spec.parent / _old_src
                             if _old_path.exists():
                                 try:
@@ -1962,6 +2362,39 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     print(f"[CLEANUP] Removed old source: {_old_src}")
                                 except Exception as _e:
                                     print(f"[CLEANUP] Failed to remove {_old_src}: {_e}")
+                            # obs_scm may generate .obscpio instead of the Source extension
+                            _old_stem = _old_src
+                            for _ext in ('.tar.xz', '.tar.bz2', '.tar.gz', '.tar.lz', '.tar.zst', '.tar', '.tgz', '.tbz2', '.txz', '.zip', '.cpio', '.obscpio'):
+                                if _old_stem.endswith(_ext):
+                                    _old_stem = _old_stem[:-len(_ext)]
+                                    break
+                            for _alt_ext in ('.obscpio', '.cpio'):
+                                _alt_path = spec.parent / (_old_stem + _alt_ext)
+                                if _alt_path.exists():
+                                    try:
+                                        os.remove(_alt_path)
+                                        print(f"[CLEANUP] Removed old source: {_alt_path.name}")
+                                    except Exception as _e2:
+                                        print(f"[CLEANUP] Failed to remove {_alt_path.name}: {_e2}")
+                        # Download new source tarball if missing
+                        _new_path = spec.parent / _new_src if _new_src else None
+                        if _new_path and not _new_path.exists():
+                            _src_line = None
+                            for _l in _spec_after.split('\n'):
+                                _m = re.match(r'^Source\d*:\s*(.+)', _l, re.I)
+                                if _m:
+                                    _src_line = _m.group(1).strip()
+                                    break
+                            if _src_line:
+                                _dl_url = _src_line.split('::')[-1] if '::' in _src_line else (_src_line if _src_line.startswith(('http://', 'https://')) else None)
+                                if _dl_url:
+                                    _dl_url = _dl_url.replace('%{name}', _old_name).replace('%{version}', target_version)
+                                    try:
+                                        print(f"[UPDATE] Downloading {_new_src}...")
+                                        urllib.request.urlretrieve(_dl_url, str(_new_path))
+                                        print(f"[UPDATE] Downloaded {_new_src}")
+                                    except Exception as _e:
+                                        print(f"[UPDATE] Failed to download {_dl_url}: {_e}")
 
                 # If version didn't change, restore any corrupted files and skip download
                 _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
@@ -2006,6 +2439,12 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         count=1
                     )
                     _fixed = True
+                # Case 6: Strip filename::url pattern in Source lines (invalid OBS syntax)
+                _m_dc = re.search(r'^(Source\d*:\s*)(\S+)::(https?://\S+)', _spec_current, re.M)
+                if _m_dc:
+                    _spec_current = _spec_current.replace(_m_dc.group(0), _m_dc.group(1) + _m_dc.group(3))
+                    _fixed = True
+                    print(f"[UPDATE] Fixed invalid 'filename::url' Source syntax.")
                 if _fixed:
                     spec.write_text(_spec_current)
                     print("[UPDATE] Fixed RemoteAsset/CreateArchive formatting.")
@@ -2022,6 +2461,37 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         elif re.search(r'#!RemoteAsset:\s+(?!git\+)', _spec_content):
                             print(f"[UPDATE] RemoteAsset (non-git) handles source. Skipping download.")
                             _skip_dl = True
+                        # Old source cleanup — runs even when _skip_dl is True
+                        _old_source_url = None
+                        for _oline in spec_before_update.split('\n'):
+                            _om = re.match(r'^Source\d*:\s*(.+)', _oline, re.I)
+                            if _om:
+                                _old_source_url = _om.group(1).strip()
+                                break
+                        if _old_source_url:
+                            _macros = {}
+                            for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', spec_before_update, re.M):
+                                _macros[_kv.group(1).lower()] = _kv.group(2)
+                            _old_expanded = _old_source_url
+                            for _key, _val in _macros.items():
+                                _old_expanded = _old_expanded.replace(f'%{{{_key}}}', _val)
+                            from urllib.parse import urlparse
+                            _old_fname = Path(urlparse(_old_expanded).path).name or Path(_old_expanded).name
+                            _old_path = spec.parent / _old_fname
+                            if _old_path.exists():
+                                _old_path.unlink()
+                                print(f"[CLEANUP] Removed old source: {_old_fname}")
+                            # Also try .obscpio variant (generated by obs_scm from _service)
+                            _old_stem = _old_fname
+                            for _ext in ('.tar.xz', '.tar.bz2', '.tar.gz', '.tar.lz', '.tar.zst', '.tar', '.tgz', '.tbz2', '.txz', '.zip', '.cpio', '.obscpio'):
+                                if _old_stem.endswith(_ext):
+                                    _old_stem = _old_stem[:-len(_ext)]
+                                    break
+                            for _alt_ext in ('.obscpio', '.cpio'):
+                                _alt_path = spec.parent / (_old_stem + _alt_ext)
+                                if _alt_path.exists():
+                                    _alt_path.unlink()
+                                    print(f"[CLEANUP] Removed old source: {_alt_path.name}")
                         if not _skip_dl and not (spec.parent / "_service").exists():
                             # Resolve Source URL via Build::Rpm (proper macro expansion)
                             _perl_script = Path(__file__).parent / 'query_source_url.pl'
@@ -2058,9 +2528,16 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     if _old_v and _old_v.group(1) != target_version:
                                         _expanded = _expanded.replace(_old_v.group(1), target_version)
                                     _source_url = _expanded
+                            _is_bare_name = False
                             if _source_url:
                                 from urllib.parse import urlparse
-                                _fname = Path(urlparse(_source_url).path).name or Path(_source_url).name
+                                _parsed = urlparse(_source_url)
+                                _is_bare_name = not _parsed.scheme
+                                if _is_bare_name and ('#!CreateArchive' in _spec_content or '#!RemoteAsset' in _spec_content):
+                                    print(f"[UPDATE] Source is a local filename with RemoteAsset — skipping download.")
+                                    _source_url = None
+                            if _source_url and not _is_bare_name:
+                                _fname = Path(_parsed.path).name or Path(_source_url).name
                                 _rel = Path(spec).relative_to(Path(WORKSPACE_DIR))
                                 if _rel.parent != Path('.'):
                                     _fname = str(_rel.parent / _fname)

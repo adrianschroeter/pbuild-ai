@@ -13,7 +13,7 @@ TARGET_PATTERN = r"^python-.*\.spec$"
 # Also trigger for any spec file with python_module BuildRequires or Python build macros
 CONTENT_PATTERN = r"(BuildRequires:\s*%\{python_module\b|%py3_build\b|%python_build\b|%pyproject_wheel\b)"
 # Trigger on build log errors about Python version mismatch
-PROMPT_PATTERN = r"(?i)requires a different Python"
+PROMPT_PATTERN = r"(?i)(requires a different Python|BackendUnavailable|Cannot import 'setuptools.build_meta')"
 
 # Specific instruction to the LLM for Python packages before the build
 OLLAMA_SPEC_PROMPT = """
@@ -61,8 +61,23 @@ Where XYZ is the major.minor version without dots (e.g., for Python 3.14.4 use
 Multiple skip lines can be added for different versions.
 
 A missing python macro like %python_subpackages point to a missing
+ 
+   BuildRequires: python-rpm-macros
 
-  BuildRequires: python-rpm-macros
+### 6. pip cannot import build backend
+If the build log shows:
+    Cannot import 'setuptools.build_meta'
+    BackendUnavailable
+    pip._vendor.pyproject_hooks._impl.BackendUnavailable
+
+This means the Python build backend (setuptools) is not installed in the build environment.
+Add:
+    BuildRequires: %{python_module setuptools}
+
+If the backend is hatchling, flit, or poetry-core, the package name differs:
+  - hatchling → BuildRequires: %{python_module hatchling}
+  - flit_core  → BuildRequires: %{python_module flit-core}
+  - poetry_core → BuildRequires: %{python_module poetry-core}
 
 """
 

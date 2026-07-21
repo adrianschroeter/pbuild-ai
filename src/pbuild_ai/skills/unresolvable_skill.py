@@ -84,6 +84,23 @@ def parse_unresolved_package_from_log(log: str) -> str | None:
     return None
 
 
+def parse_unresolved_package_with_constraint(log: str) -> tuple[str, str | None, str | None] | None:
+    """Extract package name, operator, and version from 'nothing provides' errors.
+
+    Returns (pkg_name, operator, version) or (pkg_name, None, None) if no constraint, or None.
+    Operator is one of: >=, <=, =, >, <
+    """
+    if not log:
+        return None
+    m = re.search(
+        r"nothing provides\s+([\w][\w\-\.\+]*)(?:\s+([><=]+)\s*([\w\.\*\+~]+))?",
+        log, re.IGNORECASE
+    )
+    if m:
+        return (m.group(1), m.group(2), m.group(3))
+    return None
+
+
 def parse_unowned_directory_from_log(log: str) -> str | None:
     """Extract an unowned directory path from 'directories not owned' errors."""
     if not log:
