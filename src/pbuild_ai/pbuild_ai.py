@@ -1752,6 +1752,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 else:
                     target_version = UPDATE_VERSION
                     _changes_before = None
+                _release_notes = ""
+                _prefetched_context = ""
                 # Pre-check: try version APIs before involving Ollama
                 if not target_version:
                     print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
@@ -1814,6 +1816,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     _req = urllib.request.Request(_github_api_url, headers={"User-Agent": "pbuild-ai/1.0", "Accept": "application/vnd.github.v3+json"})
                                     _resp = urllib.request.urlopen(_req, timeout=10)
                                     _data = json.loads(_resp.read())
+                                    _release_notes = (_data.get("body") or "")[:10000]
                                     _tag = _data.get('tag_name', '')
                                     _latest = _tag.lstrip('v') if _tag else ''
                                     _prefetched_data[_github_api_url] = json.dumps(_data, indent=2)[:2000]
@@ -1838,6 +1841,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     _req = urllib.request.Request(_gl_api_url, headers={"User-Agent": "pbuild-ai/1.0"})
                                     _resp = urllib.request.urlopen(_req, timeout=10)
                                     _data = json.loads(_resp.read())
+                                    _release_notes = (_data.get("description") or "")[:10000]
                                     _tag = _data.get('tag_name', '')
                                     _latest = _tag.lstrip('v') if _tag else ''
                                     _prefetched_data[_gl_api_url] = json.dumps(_data, indent=2)[:2000]
@@ -1858,6 +1862,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         for _u in _prefetched_data:
                             _parts.append(f"Source: {_u}\n{_prefetched_data[_u]}")
                         _prefetched_context = "## Pre-fetched project data\n\nThe following data was fetched from version APIs. Avoid re-fetching these URLs:\n\n" + "\n---\n".join(_parts) + "\n"
+                    if _release_notes:
+                        _prefetched_context += "\n## Release notes\n\n" + _release_notes + "\n"
 
                 if not target_version:
                     research_system_content = VERSION_RESEARCH_SYSTEM_PROMPT.format(
@@ -1866,6 +1872,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         full_context=full_context,
                         changelog_prompt=CHANGELOG_PROMPT,
                         prefetched_context=_prefetched_context,
+                        release_notes=_release_notes,
                     )
                     research_messages = [
                         {"role": "system", "content": research_system_content},
@@ -1900,6 +1907,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         target_version=target_version,
                         full_context=full_context,
                         changelog_prompt=CHANGELOG_PROMPT,
+                        release_notes=_release_notes,
+                        prefetched_context=_prefetched_context,
                     )
                     messages = [
                         {"role": "system", "content": update_prompt},
@@ -1920,6 +1929,39 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     else:
                         print("[UPDATE] No changes made.")
                     _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager)
+
+                    # Clean up old source tarballs after update
+                    def _source_fn(_spec_text, _pkg, _ver):
+                        _s = None
+                        for _l in _spec_text.split('\n'):
+                            _m = re.match(r'^Source\d*:\s*(.+)', _l, re.I)
+                            if _m:
+                                _s = _m.group(1).strip()
+                                break
+                        if not _s:
+                            return None
+                        _s = _s.replace('%{name}', _pkg).replace('%{version}', _ver)
+                        _s = _s.split('/')[-1].split('#')[0].split('?')[0]
+                        return _s if _s else None
+                    _old_name = None
+                    for _l in spec_before_update.split('\n'):
+                        _m = re.match(r'^Name:\s*(\S+)', _l)
+                        if _m:
+                            _old_name = _m.group(1)
+                            break
+                    _old_ver = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                    if _old_name and _old_ver and target_version and target_version != 'latest':
+                        _spec_after = manager.read_file_safe(spec)
+                        _old_src = _source_fn(spec_before_update, _old_name, _old_ver.group(1))
+                        _new_src = _source_fn(_spec_after, _old_name, target_version)
+                        if _old_src and _new_src and _old_src != _new_src:
+                            _old_path = spec.parent / _old_src
+                            if _old_path.exists():
+                                try:
+                                    os.remove(_old_path)
+                                    print(f"[CLEANUP] Removed old source: {_old_src}")
+                                except Exception as _e:
+                                    print(f"[CLEANUP] Failed to remove {_old_src}: {_e}")
 
                 # If version didn't change, restore any corrupted files and skip download
                 _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)

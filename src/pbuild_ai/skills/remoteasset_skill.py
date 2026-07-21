@@ -12,7 +12,8 @@ You are converting an openSUSE package from `obs_scm` source service to the Remo
 Read the '_service' file for getting the URL, version and upstream tag.
 
 Remove the `_service` file entirely and add hint lines for pbuild right before the `Source:` line 
-in the spec file. Add `#!RemoteAsset: URL` and `#!CreateArchive` prefix hints to activate it.
+in the spec file. Add `#!RemoteAsset: URL` and `#!CreateArchive` prefix hint lines to activate it.
+These must be an own line each.
 
 ## Example conversion
 
