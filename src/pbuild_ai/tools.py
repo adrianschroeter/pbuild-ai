@@ -825,11 +825,29 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 with Spinner(prefix="[TOOL] download", color=GREEN):
                     with urllib.request.urlopen(req, timeout=120) as response:
                         data = response.read()
+                        resp_headers = response.headers
+                        resp_url = response.geturl()
                 with open(file_path, 'wb') as f:
                     f.write(data)
                 size = file_path.stat().st_size
                 print(f"[TOOL] download_file: {url} -> {filename} ({size} bytes)")
-                results.append(f"OK: Downloaded {size} bytes to {filename}")
+                # Detect server-suggested filename from Content-Disposition or redirect URL
+                suggested_name = None
+                cd = resp_headers.get('Content-Disposition') if resp_headers else None
+                if cd:
+                    _cd_m = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\s]+)', cd, re.I)
+                    if _cd_m:
+                        suggested_name = _cd_m.group(1).strip()
+                if not suggested_name and resp_url and resp_url != url:
+                    from urllib.parse import urlparse as _urlparse
+                    _final_basename = Path(_urlparse(resp_url).path).name
+                    _orig_basename = Path(_urlparse(url).path).name
+                    if _final_basename and _final_basename != _orig_basename:
+                        suggested_name = _final_basename
+                result_msg = f"OK: Downloaded {size} bytes to {filename}"
+                if suggested_name and suggested_name != file_path.name:
+                    result_msg += f". Server suggests filename '{suggested_name}' — if your Source URL basename differs, add #/{suggested_name} to the Source URL in the spec so OBS saves it with this name."
+                results.append(result_msg)
                 # Remove old archives matching the same pattern (different version)
                 saved_name = file_path.name
                 for ext in ('.tar.gz', '.tar.bz2', '.tar.xz', '.tar', '.zip', '.tgz', '.tar.Z'):

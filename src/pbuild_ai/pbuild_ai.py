@@ -2537,7 +2537,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     print(f"[UPDATE] Source is a local filename with RemoteAsset — skipping download.")
                                     _source_url = None
                             if _source_url and not _is_bare_name:
-                                _fname = Path(_parsed.path).name or Path(_source_url).name
+                                # Use #fragment as local filename if present (OBS convention)
+                                if _parsed.fragment:
+                                    _fname = _parsed.fragment.lstrip('/')
+                                else:
+                                    _fname = Path(_parsed.path).name or Path(_source_url).name
                                 _rel = Path(spec).relative_to(Path(WORKSPACE_DIR))
                                 if _rel.parent != Path('.'):
                                     _fname = str(_rel.parent / _fname)
@@ -2572,6 +2576,19 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     print(f"[UPDATE] Source download failed — skipping build for {spec.name}.")
                                 # Remove old source tarball only if new download succeeded
                                 if _dl_ok:
+                                    # Check if server suggests a different filename than what the URL basename implies
+                                    _suggested = None
+                                    _sug_m = re.search(r"Server suggests filename '([^']+)'", _r)
+                                    if _sug_m:
+                                        _suggested = _sug_m.group(1)
+                                    if _suggested and not _parsed.fragment:
+                                        _url_basename = Path(_parsed.path).name
+                                        if _suggested != _url_basename:
+                                            # Add #/fragment to Source URL so OBS saves with the correct name
+                                            _new_url = f"{_source_url}#/{_suggested}"
+                                            _spec_content = _spec_content.replace(_source_url, _new_url)
+                                            spec.write_text(_spec_content)
+                                            print(f"[UPDATE] Added #/{_suggested} to Source URL for correct local filename.")
                                     _old_source_url = None
                                     for _oline in spec_before_update.split('\n'):
                                         _om = re.match(r'^Source\d*:\s*(.+)', _oline, re.I)
@@ -2585,7 +2602,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                         _old_expanded = _old_source_url
                                         for _key, _val in _macros.items():
                                             _old_expanded = _old_expanded.replace(f'%{{{_key}}}', _val)
-                                        _old_fname = Path(urlparse(_old_expanded).path).name or Path(_old_expanded).name
+                                        _old_parsed = urlparse(_old_expanded)
+                                        _old_fname = (_old_parsed.fragment.lstrip('/') if _old_parsed.fragment
+                                                       else Path(_old_parsed.path).name or Path(_old_expanded).name)
                                         _old_rel = Path(spec).relative_to(Path(WORKSPACE_DIR))
                                         if _rel.parent != Path('.'):
                                             _old_fname = str(_old_rel.parent / _old_fname)
