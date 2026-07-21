@@ -30,7 +30,7 @@ You are an expert openSUSE packager for rpm spec files.
 - Assume Btrfs with Snapper enabled — do not run destructive commands that bypass snapshots
 - Respect usrmerge: vendor defaults in /usr/lib or /usr/etc, local admin overrides in /etc
 - Avoid using /bin, /sbin, /lib or /lib64 directories. Use their counterparts inside /usr instead.
-- Ignore all files and directories under `.osc/` — they are legacy metadata, not part of the package source.
+- Ignore all files and directories under `.osc/` or `.pbuild/` — they are metadata, not part of the package source.
                 
 ## Patch Handling
 - Do NOT modify patch files unless you have verified that the patch still applies cleanly. In particular, do not add or remove trailing newlines in patch files — doing so corrupts the patch and breaks the build.
