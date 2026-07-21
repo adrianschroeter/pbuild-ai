@@ -20,6 +20,7 @@ If a `_service` file exists using `obs_scm`:
   #!CreateArchive
   Source:        %{name}-%{version}.tar.xz
   ```
+- After converting, call `update_assets(".")` to regenerate the asset metadata.
 
 ### 3. Remove empty scriptlet sections
 Remove any empty `%clean`, `%post`, `%pre`, `%preun`, `%postun` sections — they must be omitted entirely.

@@ -44,7 +44,8 @@ Steps (do them in order, never skip any):
    #!CreateArchive
    Source:        
    ```
-   Make sure each `#!` line is on its OWN line (one per line). Do NOT rename `Source:` to `Source0:` — keep the existing Source tag name exactly as-is. Do NOT merge `#!RemoteAsset` and `#!CreateArchive` onto one line. Read the actual revision tag from _service's `<param name="revision">` and use it as `<REVISION_TAG>` (e.g., if revision is "v0.4.2", use `#v0.4.2`). The git URL from _service's `<param name="url">` is the same URL to use in `#!RemoteAsset: git+URL#TAG`. Otherwise just update <revision> tags in _service.
+       Make sure each `#!` line is on its OWN line (one per line). Do NOT rename `Source:` to `Source0:` — keep the existing Source tag name exactly as-is. Do NOT merge `#!RemoteAsset` and `#!CreateArchive` onto one line. Read the actual revision tag from _service's `<param name="revision">` and use it as `<REVISION_TAG>` (e.g., if revision is "v0.4.2", use `#v0.4.2`). The git URL from _service's `<param name="url">` is the same URL to use in `#!RemoteAsset: git+URL#TAG`. Otherwise just update <revision> tags in _service.
+   After adding or updating `#!RemoteAsset` / `#!CreateArchive` lines, call `update_assets(".")` to regenerate the asset metadata.
  7. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Use download_file, NOT web_fetch: web_fetch only reads content into memory and does NOT save the file to disk. Include the package subdirectory in the filename argument (e.g., "libopenshot/libopenshot-0.4.0.tar.xz" not just "libopenshot-0.4.0.tar.xz") — use list_files output to find the correct relative path from the workspace root. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
  8. After downloading the new tarball, remove old source archives from previous versions. Use list_files to find files matching the old version number (e.g., `packagename-OLDVERSION.tar.*`) and remove them with remove_file. Also, when removing _service in step 6, remove the orphaned tarball that the service had generated.
 
@@ -77,6 +78,7 @@ VERSION_UPDATE_PROMPT = """Update the spec file to version {target_version}:
   #!CreateArchive
   Source:        
   Do NOT rename Source: to Source0:. Do NOT merge lines. Otherwise just update <revision> tags in _service.
+- After adding or updating `#!RemoteAsset` / `#!CreateArchive` lines, call `update_assets(".")` to regenerate the asset metadata.
 - Then download the new source tarball using download_file (NOT web_fetch — web_fetch is read-only and does not save to disk). Include the package subdirectory in the filename (check list_files output for the correct relative path from workspace root). Construct the URL from the spec's Source tag (substituting %{{version}} and the old version), not from the release page assets which are often precompiled binaries
 - After downloading the new tarball, remove old source archives from previous versions. Use list_files to find files matching the old version number (e.g., `packagename-OLDVERSION.tar.*`) and remove them with remove_file. When removing _service above, also remove any orphaned tarballs the service had generated.
 

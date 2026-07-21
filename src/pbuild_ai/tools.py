@@ -276,6 +276,23 @@ def build_tools_list(interactive=False):
         {
             "type": "function",
             "function": {
+                "name": "update_assets",
+                "description": "Update remote assets in the workspace directory by running `/usr/lib/build/download_assets --update <dir>`. Call this AFTER modifying `#!RemoteAsset:` or `#!CreateArchive` lines in the spec file to regenerate the asset metadata and re-download any changed sources.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {
+                            "type": "string",
+                            "description": "Directory to update assets in (relative to workspace root). Use '.' for the workspace root."
+                        }
+                    },
+                    "required": ["directory"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "git_command",
                 "description": "Execute a git command within the workspace directory. Only local git operations are allowed.",
                 "parameters": {
@@ -832,6 +849,30 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     if not os.environ.get("GITHUB_TOKEN") and not os.environ.get("GH_TOKEN"):
                         msg += " [HINT] Set GITHUB_TOKEN env var to increase GitHub API rate limits."
                 results.append(msg)
+        elif tool_name == "update_assets":
+            directory = tool_input.get("directory", "")
+            if not directory:
+                results.append("Error: update_assets requires a 'directory' argument")
+                continue
+            dir_path = resolve_path(directory, workspace_dir)
+            if dir_path is None or not manager._is_safe_path(dir_path):
+                results.append(f"Error: {directory} is outside the workspace directory.")
+                continue
+            try:
+                cmd = ["/usr/lib/build/download_assets", "--update", str(dir_path)]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                if result.returncode == 0:
+                    print(f"[TOOL] update_assets: {directory}")
+                    output = (result.stdout or "") + (result.stderr or "")
+                    results.append(output[:10000] if output else "OK: Assets updated")
+                else:
+                    results.append(f"Error: download_assets failed (exit {result.returncode}):\n{result.stderr or result.stdout or 'No output'}")
+            except FileNotFoundError:
+                results.append("Error: /usr/lib/build/download_assets not found")
+            except subprocess.TimeoutExpired:
+                results.append("Error: update_assets timed out after 120 seconds")
+            except Exception as e:
+                results.append(f"Error updating assets: {e}")
         elif tool_name == "git_command":
             command = tool_input.get("command")
             if not command:

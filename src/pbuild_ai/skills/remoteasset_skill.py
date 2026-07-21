@@ -56,6 +56,7 @@ Source:        %{name}-%{version}.tar.xz
 - All three statements must be in an own line.
 - If there is no `_service` file, just add the two prefix lines to the `Source:` line.
 - Avoid any other change.
+- After adding or modifying `#!RemoteAsset` or `#!CreateArchive` lines, call `update_assets(".")` to regenerate the asset metadata.
 
 Make sure that you remove also the belonging tar, recompress and set_version services when 
 removing the obs_scm service.
