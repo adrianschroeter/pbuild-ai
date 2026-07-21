@@ -1752,11 +1752,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 else:
                     target_version = UPDATE_VERSION
                     _changes_before = None
+                # Pre-check: try version APIs before involving Ollama
                 if not target_version:
                     print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
                     spec_content = manager.read_file_safe(spec)
-
-                    # Pre-check: try GitHub API directly before involving Ollama
                     _current_v_match = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
                     _current_version = _current_v_match.group(1) if _current_v_match else None
                     _source_url = None
@@ -1765,31 +1764,108 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         if _m:
                             _source_url = _m.group(1).strip()
                             break
-                    _github_api_url = None
-                    if _source_url and 'github.com' in _source_url:
+                    _prefetched_data = {}
+                    _skip_spec = False
+
+                    def _extract_by_key(_d, _k):
+                        if isinstance(_k, str):
+                            return _d.get(_k) if isinstance(_d, dict) else None
+                        _cur = _d
+                        for _p in _k if isinstance(_k, list) else []:
+                            if not isinstance(_cur, dict):
+                                return None
+                            _cur = _cur.get(_p)
+                            if _cur is None:
+                                return None
+                        return _cur
+
+                    # Step 1: Try skill VERSION_APIs (ecosystem-specific)
+                    _version_checks = skill_manager.get_version_api_checks(skills, spec.name)
+                    for _v_url, _v_key in _version_checks:
+                        try:
+                            _req = urllib.request.Request(_v_url, headers={"User-Agent": "pbuild-ai/1.0"})
+                            _resp = urllib.request.urlopen(_req, timeout=10)
+                            _data = json.loads(_resp.read())
+                            _latest = _extract_by_key(_data, _v_key)
+                            _prefetched_data[_v_url] = json.dumps(_data, indent=2)[:2000]
+                            if _latest:
+                                _latest = str(_latest).lstrip('v')
+                                if _current_version and _latest == _current_version:
+                                    print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
+                                    _skip_spec = True
+                                    break
+                                print(f"[UPDATE] Found latest version {_latest} via API for {spec.name}.")
+                                target_version = _latest
+                                break
+                        except Exception as _e:
+                            _status = getattr(_e, 'code', None) or getattr(_e, 'status', None) or type(_e).__name__
+                            print(f"[UPDATE] Version API check ({_v_url}) failed: {_status}.")
+                    if _skip_spec:
+                        continue
+
+                    # Step 2: Try GitHub API (generic fallback)
+                    if not target_version and _source_url and 'github.com' in _source_url:
                         _gh_m = re.search(r'github\.com[/:]([^/]+/[^/]+?)(?:\.git|/|$)', _source_url)
                         if _gh_m:
                             _repo = _gh_m.group(1).rstrip('/')
                             _github_api_url = f'https://api.github.com/repos/{_repo}/releases/latest'
-                    if _github_api_url and _current_version:
-                        try:
-                            _req = urllib.request.Request(_github_api_url, headers={"User-Agent": "pbuild-ai/1.0", "Accept": "application/vnd.github.v3+json"})
-                            _resp = urllib.request.urlopen(_req, timeout=10)
-                            _data = json.loads(_resp.read())
-                            _tag = _data.get('tag_name', '')
-                            _latest = _tag.lstrip('v') if _tag else ''
-                            if _latest and _latest == _current_version:
-                                print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
-                                continue
-                        except Exception as _e:
-                            _status = getattr(_e, 'code', None) or getattr(_e, 'status', None) or type(_e).__name__
-                            print(f"[UPDATE] GitHub API check ({_github_api_url}) failed: {_status} — falling back to AI research.")
+                            if _current_version:
+                                try:
+                                    _req = urllib.request.Request(_github_api_url, headers={"User-Agent": "pbuild-ai/1.0", "Accept": "application/vnd.github.v3+json"})
+                                    _resp = urllib.request.urlopen(_req, timeout=10)
+                                    _data = json.loads(_resp.read())
+                                    _tag = _data.get('tag_name', '')
+                                    _latest = _tag.lstrip('v') if _tag else ''
+                                    _prefetched_data[_github_api_url] = json.dumps(_data, indent=2)[:2000]
+                                    if _latest and _current_version and _latest == _current_version:
+                                        print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
+                                        continue
+                                    elif _latest:
+                                        print(f"[UPDATE] Found latest version {_latest} via GitHub API for {spec.name}.")
+                                        target_version = _latest
+                                except Exception as _e:
+                                    _status = getattr(_e, 'code', None) or getattr(_e, 'status', None) or type(_e).__name__
+                                    print(f"[UPDATE] GitHub API check ({_github_api_url}) failed: {_status} — falling back to AI research.")
 
+                    # Step 3: Try GitLab API (generic fallback)
+                    if not target_version and _source_url and 'gitlab' in _source_url:
+                        _gl_m = re.search(r'gitlab\.com[/:]([^/]+/[^/]+?)(?:\.git|/|$)', _source_url)
+                        if _gl_m:
+                            _repo = _gl_m.group(1).rstrip('/')
+                            _gl_api_url = f'https://gitlab.com/api/v4/projects/{urllib.parse.quote(_repo, safe="")}/releases/permalink/latest'
+                            if _current_version:
+                                try:
+                                    _req = urllib.request.Request(_gl_api_url, headers={"User-Agent": "pbuild-ai/1.0"})
+                                    _resp = urllib.request.urlopen(_req, timeout=10)
+                                    _data = json.loads(_resp.read())
+                                    _tag = _data.get('tag_name', '')
+                                    _latest = _tag.lstrip('v') if _tag else ''
+                                    _prefetched_data[_gl_api_url] = json.dumps(_data, indent=2)[:2000]
+                                    if _latest and _current_version and _latest == _current_version:
+                                        print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
+                                        continue
+                                    elif _latest:
+                                        print(f"[UPDATE] Found latest version {_latest} via GitLab API for {spec.name}.")
+                                        target_version = _latest
+                                except Exception as _e:
+                                    _status = getattr(_e, 'code', None) or getattr(_e, 'status', None) or type(_e).__name__
+                                    print(f"[UPDATE] GitLab API check failed: {_status}.")
+
+                    # Build pre-fetched context for AI research fallback
+                    _prefetched_context = ""
+                    if _prefetched_data:
+                        _parts = []
+                        for _u in _prefetched_data:
+                            _parts.append(f"Source: {_u}\n{_prefetched_data[_u]}")
+                        _prefetched_context = "## Pre-fetched project data\n\nThe following data was fetched from version APIs. Avoid re-fetching these URLs:\n\n" + "\n---\n".join(_parts) + "\n"
+
+                if not target_version:
                     research_system_content = VERSION_RESEARCH_SYSTEM_PROMPT.format(
                         spec=spec,
                         spec_content=spec_content,
                         full_context=full_context,
                         changelog_prompt=CHANGELOG_PROMPT,
+                        prefetched_context=_prefetched_context,
                     )
                     research_messages = [
                         {"role": "system", "content": research_system_content},
@@ -1817,7 +1893,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     if not target_version:
                         print("[UPDATE] Could not determine latest version.")
                         target_version = 'latest'
-                else:
+
+                if target_version and target_version != 'latest':
                     print(f"\n[UPDATE] Updating {spec.name} to {target_version}...")
                     update_prompt = VERSION_UPDATE_PROMPT.format(
                         target_version=target_version,

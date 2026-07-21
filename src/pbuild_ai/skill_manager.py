@@ -15,6 +15,7 @@
 
 import importlib.util
 import re
+import urllib.parse
 from pathlib import Path
 
 
@@ -104,6 +105,27 @@ class SkillManager:
 
     def get_skill_by_name(self, name):
         return self._named_skills.get(name)
+
+    def get_version_api_checks(self, matched_skills, spec_name):
+        """Return list of (url, version_key) tuples from VERSION_API-enabled skills.
+        Used by update pre-check to try version APIs before involving Ollama.
+        """
+        checks = []
+        for skill in matched_skills:
+            api = getattr(skill, 'VERSION_API', None)
+            if api is None:
+                continue
+            url_template = api.get("url")
+            version_key = api.get("version_key")
+            name_regex = api.get("name_regex")
+            if not url_template or not version_key:
+                continue
+            api_name = spec_name
+            if name_regex:
+                api_name = re.sub(name_regex, "", spec_name)
+            url = url_template.replace("{name}", urllib.parse.quote(api_name, safe=''))
+            checks.append((url, version_key))
+        return checks
 
     def get_deep_analyze_prompt(self):
         return "\n\n".join(self.deep_analyze_prompts) if self.deep_analyze_prompts else ""

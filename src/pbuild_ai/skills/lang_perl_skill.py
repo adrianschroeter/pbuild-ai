@@ -4,6 +4,12 @@
 
 SKILL_NAME = "lang_perl"
 
+VERSION_API = {
+    "url": "https://fastapi.metacpan.org/v1/release/{name}",
+    "version_key": "version",
+    "name_regex": r"^perl-",
+}
+
 TARGET_PATTERN = r"(?i)^perl-.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%perl_make_install|%perl_process_packlist|%perl_gen_filelist|%\{perl_vendorlib\}|%\{perl_vendorarch\}|%\{perl_requires\})"
 PROMPT_PATTERN = r"(?i)(?:perl\s+packag|cpan\s+spec|cpanspec|perl\s+module\s+rpm)"

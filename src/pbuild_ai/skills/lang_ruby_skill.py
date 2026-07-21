@@ -4,6 +4,12 @@
 
 SKILL_NAME = "lang_ruby"
 
+VERSION_API = {
+    "url": "https://rubygems.org/api/v1/gems/{name}.json",
+    "version_key": "version",
+    "name_regex": r"^rubygem-",
+}
+
 TARGET_PATTERN = r"(?i)^(?:rubygem-|ruby-).*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%gem_install|gem2rpm|rubygem|%\{gem_|gem\s+install)"
 PROMPT_PATTERN = r"(?i)(?:ruby\s+(?:gem|packag)|rubygem|gem2rpm|\bgem\b.*spec)"

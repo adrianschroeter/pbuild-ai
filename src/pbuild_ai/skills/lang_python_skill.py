@@ -2,6 +2,12 @@
 
 SKILL_NAME = "lang_python"
 
+VERSION_API = {
+    "url": "https://pypi.org/pypi/{name}/json",
+    "version_key": ["info", "version"],
+    "name_regex": r"^python[-_\d]*",
+}
+
 # REGEX: This skill triggers for all files starting with "python-" and ending with ".spec".
 TARGET_PATTERN = r"^python-.*\.spec$"
 # Also trigger for any spec file with python_module BuildRequires or Python build macros

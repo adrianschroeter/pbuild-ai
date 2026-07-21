@@ -4,6 +4,12 @@
 
 SKILL_NAME = "lang_nodejs"
 
+VERSION_API = {
+    "url": "https://registry.npmjs.org/{name}/latest",
+    "version_key": "version",
+    "name_regex": r"^nodejs-",
+}
+
 TARGET_PATTERN = r"(?i)^nodejs-.*\.spec$|.*-nodejs.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:nodejs-packaging|%\{nodejs_\}|%nodejs_|npm\s+ci|npm\s+install|node_module|ELECTRON_SKIP_BINARY_DOWNLOAD)"
 PROMPT_PATTERN = r"(?i)(?:nodejs\s+packag|npm\s+rpm|node\.?js\s+rpm|javascript\s+rpm|node_module\s+rpm)"

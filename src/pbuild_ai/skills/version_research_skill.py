@@ -49,6 +49,7 @@ Steps (do them in order, never skip any):
 
 Also consult the AGENTS.md / skill rules below for project-specific update steps (e.g., tarball updates, _service file changes, additional files to update).
 
+{prefetched_context}
 Spec file ({spec}):
 {spec_content}
 

@@ -4,6 +4,11 @@
 
 SKILL_NAME = "lang_rust"
 
+VERSION_API = {
+    "url": "https://crates.io/api/v1/crates/{name}",
+    "version_key": ["crate", "max_stable_version"],
+}
+
 TARGET_PATTERN = r"(?i)(?:rust|cargo)"
 CONTENT_PATTERN = r"(?i)(?:%\{cargo_build\}|%\{cargo_install\}|%\{cargo_test\}|cargo-packaging|vendor\.tar\.zst)"
 PROMPT_PATTERN = r"(?i)(?:rust\s+(?:packag|rpm|crate)|cargo\s+(?:packag|rpm)|crate\s+rpm)"
