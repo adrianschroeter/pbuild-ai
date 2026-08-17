@@ -177,7 +177,7 @@ class TestFixLoopExitCode(unittest.TestCase):
         sys.argv = ["pbuild-ai", "--fix", "--max-fix-attempts", "1", tmpdir]
 
         from pbuild_ai.workspace import RpmSourceManager as _RSM
-        from pbuild_ai.ollama_client import OllamaAnalyzer as _OA
+        from pbuild_ai.llm_client import LlmAnalyzer as _OA
 
         exit_code = 0
         try:

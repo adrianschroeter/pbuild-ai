@@ -697,8 +697,8 @@ class TestWriteToolChanges(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _make_analyzer(self):
-        from pbuild_ai.ollama_client import OllamaAnalyzer
-        analyzer = OllamaAnalyzer()
+        from pbuild_ai.llm_client import LlmAnalyzer
+        analyzer = LlmAnalyzer()
         analyzer.manager = mock.MagicMock()
         analyzer.manager._last_log_path = str(self.fake_log)
         analyzer.manager.base_dir = self.tmpdir

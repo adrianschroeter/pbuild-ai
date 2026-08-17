@@ -22,7 +22,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from pbuild_ai.ollama_client import chat_completion, prune_messages
+from pbuild_ai.llm_client import chat_completion, prune_messages
 from pbuild_ai.tools import execute_tool_calls, format_tool_display, resolve_path
 from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.utils import ReadCoverageTracker

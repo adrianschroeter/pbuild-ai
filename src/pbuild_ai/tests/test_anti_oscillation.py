@@ -17,7 +17,7 @@ SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from pbuild_ai.ollama_client import OllamaAnalyzer
+from pbuild_ai.llm_client import LlmAnalyzer
 from pbuild_ai.workspace import RpmSourceManager
 
 
@@ -50,7 +50,7 @@ class TestAntiOscillation(unittest.TestCase):
         self.spec_path.write_text(self.initial_content)
 
         self.manager = RpmSourceManager(self.tmpdir)
-        self.ollama = OllamaAnalyzer(model="test-model")
+        self.ollama = LlmAnalyzer(model="test-model")
         self.ollama.manager = self.manager
         self.ollama._chat_supported = True
 

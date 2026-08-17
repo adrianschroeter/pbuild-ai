@@ -62,7 +62,7 @@ from pbuild_ai.manifest import list_packages
 from pbuild_ai.diff_utils import show_diff
 from pbuild_ai.tools import execute_tool_calls, build_tools_list
 from pbuild_ai.skill_manager import SkillManager
-from pbuild_ai.ollama_client import OllamaAnalyzer
+from pbuild_ai.llm_client import LlmAnalyzer
 from pbuild_ai.workspace import RpmSourceManager
 from pbuild_ai.parsing import parse_agents_md_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions
 from pbuild_ai.context import PbuildContext
@@ -1079,7 +1079,7 @@ if __name__ == "__main__":
     else:
         full_context = agents_md_content
     
-    ollama = OllamaAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "default"), debug=DEBUG, timeout=ctx.ollama_timeout, options=ollama_options)
+    ollama = LlmAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "default"), debug=DEBUG, timeout=ctx.ollama_timeout, options=ollama_options)
     ollama.manager = manager
     ctx.ollama = ollama
     ctx.full_context = full_context

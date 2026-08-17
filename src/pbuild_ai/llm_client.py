@@ -79,7 +79,7 @@ def prune_messages(messages, keep_rounds=2):
     return preserved
 
 
-class OllamaAnalyzer:
+class LlmAnalyzer:
     def __init__(self, host=None, model="default", debug=False, timeout=None, options=None):
         self.host = (host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
         self.model = model
