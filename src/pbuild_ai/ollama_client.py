@@ -86,8 +86,15 @@ class OllamaAnalyzer:
         self.debug = debug
         self.timeout = timeout if timeout is not None else int(os.environ.get("OLLAMA_TIMEOUT", "900"))
         self.options = options or {}
-        self.api_url = f"{self.host}/api/generate"
-        self.chat_api_url = f"{self.host}/api/chat"
+        # Detect OpenAI-compatible server from URL containing /v1
+        self._openai_mode = '/v1' in self.host
+        if self._openai_mode:
+            base = self.host.rstrip('/')
+            self.api_url = f"{base}/chat/completions"
+            self.chat_api_url = f"{base}/chat/completions"
+        else:
+            self.api_url = f"{self.host}/api/generate"
+            self.chat_api_url = f"{self.host}/api/chat"
         self._context = None
         self._chat_context = None
         self._opener = urllib.request.build_opener()
@@ -97,16 +104,27 @@ class OllamaAnalyzer:
         self._changed_files: set[str] = set()
         self.reset_stats()
 
+        # Discover the actual model name and context size from OpenAI-compatible server
+        self.max_tokens = 32768
+        if self._openai_mode:
+            self._discover_openai_model()
+            if self.debug:
+                print(f"[DEBUG] OpenAI-compatible server detected: {self.host} (model: {self.model})", flush=True)
+
         if self.options.get("num_ctx"):
             self.max_tokens = int(self.options["num_ctx"])
-        else:
-            self.max_tokens = self._fetch_default_num_ctx() or 32768
+        elif not self._openai_mode:
+            _ctx = self._fetch_default_num_ctx()
+            if _ctx:
+                self.max_tokens = _ctx
 
     @staticmethod
     def _estimate_tokens(text):
         return max(1, len(text) // 4)
 
     def _fetch_default_num_ctx(self):
+        if self._openai_mode:
+            return None
         try:
             payload = json.dumps({"model": self.model}).encode()
             req = urllib.request.Request(
@@ -123,9 +141,45 @@ class OllamaAnalyzer:
             pass
         return None
 
+    def _discover_openai_model(self):
+        """Query /v1/models to get the actual model name and context size.
+        Handles both OpenAI standard format ({"data": [{"id": ...}]})
+        and llama.cpp format ({"models": [{"name": ...}]}).
+        Also extracts n_ctx from llama.cpp meta field."""
+        try:
+            req = urllib.request.Request(
+                f"{self.host}/models",
+                headers={"Content-Type": "application/json"}
+            )
+            with self._opener.open(req, timeout=10) as resp:
+                raw = resp.read().decode()
+            if self.debug:
+                print(f"[DEBUG] /v1/models response: {raw[:500]}", flush=True)
+            data = json.loads(raw)
+            # OpenAI standard: {"data": [{"id": "model-name", ...}]}
+            # llama.cpp: {"models": [{"name": "model-name", ...}], "data": [{"id": ..., "meta": {"n_ctx": ...}}]}
+            models = data.get("data") or data.get("models") or []
+            if models and isinstance(models, list):
+                first = models[0]
+                discovered = first.get("id") or first.get("name") or first.get("model") or ""
+                if discovered:
+                    self.model = discovered
+                # Extract n_ctx from meta (llama.cpp format)
+                meta = first.get("meta") or {}
+                n_ctx = meta.get("n_ctx")
+                if n_ctx and isinstance(n_ctx, int) and n_ctx > 0:
+                    self.max_tokens = n_ctx
+                    if self.debug:
+                        print(f"[DEBUG] Context size from /v1/models: {n_ctx}", flush=True)
+        except Exception as e:
+            if self.debug:
+                print(f"[DEBUG] Model discovery failed: {e}", flush=True)
+
     def count_tokens(self, text):
         if not text:
             return 0
+        if self._openai_mode:
+            return self._estimate_tokens(text)
         try:
             payload = json.dumps({"model": self.model, "content": text}).encode()
             req = urllib.request.Request(
@@ -155,6 +209,8 @@ class OllamaAnalyzer:
         The 'format' key is removed from options since it is not a model
         option — it is a top-level field.
         """
+        if self._openai_mode:
+            return payload
         opts = self.options.copy() if self.options else {}
         fmt = opts.pop("format", None)
         if fmt == "text":
@@ -164,6 +220,131 @@ class OllamaAnalyzer:
         if opts:
             payload["options"] = opts
         return payload
+
+    def _to_openai_options(self):
+        """Map Ollama-style options to OpenAI API parameters."""
+        opts = self.options.copy() if self.options else {}
+        openai_params = {}
+        # Direct mappings
+        if "temperature" in opts:
+            openai_params["temperature"] = opts["temperature"]
+        if "top_p" in opts:
+            openai_params["top_p"] = opts["top_p"]
+        if "num_predict" in opts:
+            openai_params["max_tokens"] = opts["num_predict"]
+        if "num_ctx" in opts:
+            openai_params["max_tokens"] = opts["num_ctx"]
+        if "seed" in opts:
+            openai_params["seed"] = opts["seed"]
+        if "stop" in opts:
+            openai_params["stop"] = opts["stop"]
+        return openai_params
+
+    def _to_openai_tools(self, tools):
+        """Convert Ollama-style tools to OpenAI function-calling format."""
+        if not tools:
+            return None
+        openai_tools = []
+        for tool in tools:
+            if tool.get("type") == "function":
+                func = tool.get("function", {})
+                openai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {}),
+                    }
+                })
+            else:
+                openai_tools.append(tool)
+        return openai_tools
+
+    def _to_openai_messages(self, messages):
+        """Convert Ollama messages to OpenAI chat format."""
+        openai_msgs = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "tool":
+                # Ollama tool result -> OpenAI tool message
+                openai_msgs.append({
+                    "role": "tool",
+                    "content": str(content),
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                })
+            elif role == "assistant" and msg.get("tool_calls"):
+                # Ollama assistant with tool_calls -> OpenAI assistant
+                openai_tool_calls = []
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", "")
+                    if isinstance(args, dict):
+                        args = json.dumps(args)
+                    openai_tool_calls.append({
+                        "id": tc.get("id", f"call_{len(openai_tool_calls)}"),
+                        "type": "function",
+                        "function": {
+                            "name": func.get("name", ""),
+                            "arguments": args,
+                        }
+                    })
+                openai_msgs.append({
+                    "role": "assistant",
+                    "content": content or None,
+                    "tool_calls": openai_tool_calls,
+                })
+            else:
+                openai_msgs.append({
+                    "role": role,
+                    "content": content,
+                })
+        return openai_msgs
+
+    def _ollama_response_from_openai(self, result):
+        """Convert OpenAI chat completion response to Ollama format."""
+        choice = result.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        ollama_msg = {"role": message.get("role", "assistant")}
+        content = message.get("content", "")
+        if content:
+            ollama_msg["content"] = content
+        if message.get("tool_calls"):
+            ollama_msg["tool_calls"] = []
+            for tc in message["tool_calls"]:
+                func = tc.get("function", {})
+                args = func.get("arguments", "{}")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                ollama_msg["tool_calls"].append({
+                    "id": tc.get("id", ""),
+                    "function": {
+                        "name": func.get("name", ""),
+                        "arguments": args,
+                    }
+                })
+        return {"message": ollama_msg}
+
+    def _generate_to_openai_payload(self, payload):
+        """Convert Ollama /api/generate payload to OpenAI /v1/chat/completions format."""
+        messages = []
+        system = payload.get("system", "")
+        prompt = payload.get("prompt", "")
+        if system:
+            messages.append({"role": "system", "content": system})
+        if prompt:
+            messages.append({"role": "user", "content": prompt})
+        openai_payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+        }
+        openai_params = self._to_openai_options()
+        openai_payload.update(openai_params)
+        return openai_payload
 
     def reset_stats(self):
         self.ai_calls = 0
@@ -201,8 +382,39 @@ class OllamaAnalyzer:
         return payload
 
     def _request(self, url, payload):
-        if payload.get("context") is None:
+        if self._openai_mode:
+            # Transform Ollama payload to OpenAI format
+            if payload.get("messages") and payload.get("tools"):
+                # Chat completion with tools
+                openai_payload = {
+                    "model": self.model,
+                    "messages": self._to_openai_messages(payload["messages"]),
+                    "tools": self._to_openai_tools(payload["tools"]),
+                    "stream": False,
+                }
+                openai_params = self._to_openai_options()
+                openai_payload.update(openai_params)
+                payload = openai_payload
+            elif payload.get("messages"):
+                # Chat completion without tools
+                openai_payload = {
+                    "model": self.model,
+                    "messages": self._to_openai_messages(payload["messages"]),
+                    "stream": False,
+                }
+                openai_params = self._to_openai_options()
+                openai_payload.update(openai_params)
+                payload = openai_payload
+            elif payload.get("prompt") or payload.get("system"):
+                # Generate -> chat completions
+                payload = self._generate_to_openai_payload(payload)
+            # Remove Ollama-specific fields
             payload.pop("context", None)
+            payload.pop("format", None)
+            payload.pop("options", None)
+        else:
+            if payload.get("context") is None:
+                payload.pop("context", None)
         if self.debug:
             payload_preview = json.dumps(payload)
             print(f"[DEBUG] Ollama request: {url} ({len(payload_preview)} bytes payload, model={payload.get('model', '?')})", flush=True)
@@ -251,7 +463,11 @@ class OllamaAnalyzer:
         self.ai_time += elapsed
         if self.debug:
             print(f"[DEBUG] Ollama raw response ({len(raw)} bytes, {elapsed:.1f}s):\n{raw}", flush=True)
-        return json.loads(raw)
+        result = json.loads(raw)
+        # Transform OpenAI response to Ollama format
+        if self._openai_mode:
+            result = self._ollama_response_from_openai(result)
+        return result
 
     def analyze(self, system_prompt, context_data, agents_md=None, format_json=False):
         _char_limit = self.max_tokens * 6
@@ -781,15 +997,26 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
     and empty responses. Returns the parsed result dict.
     On HTTP/protocol errors or after 3 failed attempts, prints diagnostic info
     and calls sys.exit(2)."""
-    payload = {"model": ollama.model, "messages": messages, "tools": tools, "stream": False}
-    _opts = (ollama.options or {}).copy()
-    fmt = _opts.pop("format", None)
-    if fmt == "text":
-        pass
-    elif not tools:
-        payload["format"] = "json"
-    if _opts:
-        payload["options"] = _opts
+    if ollama._openai_mode:
+        payload = {
+            "model": ollama.model,
+            "messages": ollama._to_openai_messages(messages),
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = ollama._to_openai_tools(tools)
+        openai_params = ollama._to_openai_options()
+        payload.update(openai_params)
+    else:
+        payload = {"model": ollama.model, "messages": messages, "tools": tools, "stream": False}
+        _opts = (ollama.options or {}).copy()
+        fmt = _opts.pop("format", None)
+        if fmt == "text":
+            pass
+        elif not tools:
+            payload["format"] = "json"
+        if _opts:
+            payload["options"] = _opts
     _payload_str = None
     data_bytes = b''
     try:
@@ -855,6 +1082,10 @@ def chat_completion(ollama, messages, tools, debug=False, track_stats=False):
         except Exception as e:
             print(f"[OLLAMA ERROR] {e}")
             sys.exit(2)
+
+        # Transform OpenAI response to Ollama format
+        if ollama._openai_mode:
+            result = ollama._ollama_response_from_openai(result)
 
         message = result.get('message', {})
         if message.get('content', '').strip() or message.get('tool_calls'):
