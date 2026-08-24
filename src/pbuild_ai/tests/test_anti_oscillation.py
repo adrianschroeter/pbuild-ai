@@ -22,7 +22,7 @@ from pbuild_ai.workspace import RpmSourceManager
 
 
 def _make_tool_call(name, arguments):
-    """Build a tool_calls entry as returned by Ollama chat API."""
+    """Build a tool_calls entry as returned by AI chat API."""
     return {
         "function": {
             "name": name,
@@ -32,7 +32,7 @@ def _make_tool_call(name, arguments):
 
 
 def _make_response(tool_calls=None, content=""):
-    """Build a mock Ollama /api/chat response."""
+    """Build a mock AI /api/chat response."""
     msg = {"content": content}
     if tool_calls is not None:
         msg["tool_calls"] = tool_calls
@@ -50,9 +50,9 @@ class TestAntiOscillation(unittest.TestCase):
         self.spec_path.write_text(self.initial_content)
 
         self.manager = RpmSourceManager(self.tmpdir)
-        self.ollama = LlmAnalyzer(model="test-model")
-        self.ollama.manager = self.manager
-        self.ollama._chat_supported = True
+        self.ai = LlmAnalyzer(model="test-model")
+        self.ai.manager = self.manager
+        self.ai._chat_supported = True
 
         # Minimal tools list (only what we test)
         self.tools = []
@@ -85,8 +85,8 @@ class TestAntiOscillation(unittest.TestCase):
                 return _make_response(tool_calls=resp)
             return resp
 
-        with patch.object(self.ollama, '_request', side_effect=mock_request):
-            results = self.ollama.call_with_tools(
+        with patch.object(self.ai, '_request', side_effect=mock_request):
+            results = self.ai.call_with_tools(
                 self.messages, self.tools, self.manager,
                 workspace_dir=self.tmpdir, max_rounds=max_rounds,
             )

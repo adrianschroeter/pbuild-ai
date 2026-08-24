@@ -25,7 +25,7 @@ from pbuild_ai.context import PbuildContext
 
 
 class TestGenerateModeExitCode(unittest.TestCase):
-    """run_generate_mode must exit(2) on HTTP errors from Ollama."""
+    """run_generate_mode must exit(2) on HTTP errors from AI."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="exitcode_test_")
@@ -42,10 +42,10 @@ class TestGenerateModeExitCode(unittest.TestCase):
             workspace_dir=self.tmpdir,
             generate_prompt="create a package",
         )
-        ctx.ollama = MagicMock()
-        ctx.ollama.model = "test-model"
-        ctx.ollama.options = {}
-        ctx.ollama.chat_api_url = "http://localhost:99999"
+        ctx.ai = MagicMock()
+        ctx.ai.model = "test-model"
+        ctx.ai.options = {}
+        ctx.ai.chat_api_url = "http://localhost:99999"
         ctx.manager = MagicMock()
         ctx.manager.read_file_safe.return_value = "dummy"
         ctx.skill_manager = MagicMock()
@@ -66,7 +66,7 @@ class TestGenerateModeExitCode(unittest.TestCase):
 
 
 class TestModifyModeExitCode(unittest.TestCase):
-    """run_modify_mode must exit(2) on HTTP errors from Ollama."""
+    """run_modify_mode must exit(2) on HTTP errors from AI."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="exitcode_test_")
@@ -85,10 +85,10 @@ class TestModifyModeExitCode(unittest.TestCase):
             workspace_dir=self.tmpdir,
             modify_prompt="add a patch",
         )
-        ctx.ollama = MagicMock()
-        ctx.ollama.model = "test-model"
-        ctx.ollama.options = {}
-        ctx.ollama.chat_api_url = "http://localhost:99999"
+        ctx.ai = MagicMock()
+        ctx.ai.model = "test-model"
+        ctx.ai.options = {}
+        ctx.ai.chat_api_url = "http://localhost:99999"
         ctx.manager = MagicMock()
         ctx.manager.read_file_safe.return_value = "Name: testpkg\nVersion: 1.0\n\n%description\nTest.\n"
         ctx.skill_manager = MagicMock()

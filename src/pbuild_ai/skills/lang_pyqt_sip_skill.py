@@ -8,7 +8,7 @@ TARGET_PATTERN = r"(?i)(?:python.*qt|python.*sip|pyqt|sip).*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:sip-devel|pyqt-builder|%\{pyqt.*_build\}|%\{pyqt.*_install\}|%use_sip4|%sip4_only|%sip5_only|%pyqt_build_for_qt6|python-sip|python-qt5-sip|python-PyQt6-sip)"
 PROMPT_PATTERN = r"(?i)(?:pyqt\s+packag|sip\s+packag|pyqt5|pyqt6|qt-bindings|sip\s+bind)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in PyQt and SIP RPM packaging for openSUSE. Follow the openSUSE PyQt/SIP packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_PyQt_and_SIP
 
 ## SIP versions
@@ -197,7 +197,7 @@ Always include:
 - Always include `%check` section with `%pyqt_install_examples` when examples exist
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a PyQt/SIP RPM build failure for openSUSE.
 
 ## Common build errors

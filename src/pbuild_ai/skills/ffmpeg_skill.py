@@ -1,6 +1,6 @@
 CONTENT_PATTERN = r"BuildRequires:\s*ffmpeg(-\d+)?(-[^-]+)?-devel"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in FFmpeg RPM packaging for openSUSE.
 
 ## FFmpeg BuildRequires rules
@@ -32,7 +32,7 @@ Do NOT use umbrella `BuildRequires: ffmpeg-devel`, `ffmpeg-<version>-devel`, or 
 This applies to any FFmpeg version (8, 7, 6, 5, 4.x, etc.) — always use the pkgconfig form rather than umbrella or versioned -devel packages.
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging an FFmpeg RPM build failure for openSUSE.
 
 Common FFmpeg build errors:

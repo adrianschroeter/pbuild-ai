@@ -108,7 +108,7 @@ class SkillManager:
 
     def get_version_api_checks(self, matched_skills, spec_name):
         """Return list of (url, version_key) tuples from VERSION_API-enabled skills.
-        Used by update pre-check to try version APIs before involving Ollama.
+        Used by update pre-check to try version APIs before involving AI.
         """
         checks = []
         for skill in matched_skills:

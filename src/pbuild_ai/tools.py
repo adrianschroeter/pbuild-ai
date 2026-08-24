@@ -122,8 +122,8 @@ def _auth_headers(url):
     return headers
 
 def build_tools_list(interactive=False):
-    """Return the standard Ollama tool definitions.
-    When interactive=False, the ask_user tool is excluded so Ollama
+    """Return the standard AI tool definitions.
+    When interactive=False, the ask_user tool is excluded so AI
     cannot waste a round on a question nobody will answer."""
     tools = [
         {
@@ -456,7 +456,7 @@ def _extract_header(content):
 
 
 def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False, interactive=False, debug=False):
-    """Execute tool calls returned by Ollama. Returns list of tool results."""
+    """Execute tool calls returned by AI. Returns list of tool results."""
     results = []
     workspace = Path(workspace_dir).resolve()
     _spec_dir = workspace  # tracks spec directory for subsequent lookups
@@ -489,6 +489,10 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             if not path:
                 keys = list(tool_input.keys())
                 results.append(f"Error: write_file: missing 'path'. Got keys: {keys}. Must have 'path' (relative path) and 'content'.")
+                continue
+            if "content" not in tool_input or not isinstance(tool_input["content"], str):
+                keys = list(tool_input.keys())
+                results.append(f"Error: write_file: missing 'content'. Got keys: {keys}. Must have 'path' (relative path) and 'content'.")
                 continue
             file_path = resolve_path(path, workspace_dir, for_write=True)
             if file_path is None or not manager._is_safe_path(file_path):

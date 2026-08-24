@@ -4,7 +4,7 @@ PROMPT_PATTERN = r"(?i)(convert|replace|migrate).*(obs_scm|service|remote.?asset
 # Also activate if the _service file content is visible in the spec
 CONTENT_PATTERN = r"obs_scm"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are converting an openSUSE package from `obs_scm` source service to the RemoteAsset mechanism.
 
 ## What to do

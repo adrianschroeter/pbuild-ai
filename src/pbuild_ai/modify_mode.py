@@ -110,7 +110,7 @@ def _resolve_url_references(ctx):
 
 
 def run_modify_mode(ctx):
-    """Hand sources + prompt to Ollama, apply changes locally, then exit (no build)."""
+    """Hand sources + prompt to AI, apply changes locally, then exit (no build)."""
     for spec in ctx.spec_files:
         _ctx_file = Path(ctx.workspace_dir) / ".pai.context"
 
@@ -133,11 +133,11 @@ def run_modify_mode(ctx):
         if skills:
             for s in skills:
                 print(f"[INFO] Using skill profile: {s.__name__}")
-            prompt_parts = [getattr(s, 'OLLAMA_SPEC_PROMPT', '') for s in skills if getattr(s, 'OLLAMA_SPEC_PROMPT', '')]
+            prompt_parts = [getattr(s, 'AI_SPEC_PROMPT', '') for s in skills if getattr(s, 'AI_SPEC_PROMPT', '')]
             spec_prompt = "\n\n".join(prompt_parts) if prompt_parts else ctx.default_spec_prompt
         else:
             spec_prompt = ctx.default_spec_prompt
-        print(f"\n[MODIFY] Sending {spec.name} sources to {ctx.ollama.model}...")
+        print(f"\n[MODIFY] Sending {spec.name} sources to {ctx.ai.model}...")
         spec_content = ctx.manager.read_file_safe(spec)
         hint = f"\n\n--- User Hint (prefer this over generic analysis) ---\n{ctx.prompt_hint}" if ctx.prompt_hint else ""
         system_content = f"""You are an RPM packager assistant. The user wants you to modify a spec file based on their request.
@@ -190,10 +190,10 @@ Skill instructions (follow these):
 
         for round_idx in range(modify_max_rounds):
             _all_text = "\n".join(msg.get('content', '') or '' for msg in messages)
-            _tok = ctx.ollama.count_tokens(_all_text)
-            _ctx_str = f" ({_tok//1024}k/{ctx.ollama.max_tokens//1024}k tok)"
-            with Spinner(prefix=f"[AI] {ctx.ollama.model}{_ctx_str}", color=AI_COLOR):
-                result = chat_completion(ctx.ollama, messages, ctx.tools, debug=ctx.debug, track_stats=True)
+            _tok = ctx.ai.count_tokens(_all_text)
+            _ctx_str = f" ({_tok//1024}k/{ctx.ai.max_tokens//1024}k tok)"
+            with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", color=AI_COLOR):
+                result = chat_completion(ctx.ai, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
             message = result.get('message', {})
             if 'tool_calls' in message and message['tool_calls']:
@@ -201,7 +201,12 @@ Skill instructions (follow these):
                 for tc in message['tool_calls']:
                     tool_name = tc['function']['name']
                     raw_args = tc['function']['arguments']
-                    tool_input = raw_args if isinstance(raw_args, dict) else json.loads(raw_args)
+                    try:
+                        tool_input = raw_args if isinstance(raw_args, dict) else (json.loads(raw_args) if raw_args else {})
+                    except (json.JSONDecodeError, TypeError):
+                        tool_input = {}
+                    if not isinstance(tool_input, dict):
+                        tool_input = {}
                     if tool_name == 'write_file':
                         wf_path = Path(tool_input.get('path', ''))
                         if wf_path.name == spec.name and spec.resolve() != (Path(ctx.workspace_dir) / wf_path).resolve():
@@ -211,7 +216,7 @@ Skill instructions (follow these):
                     round_calls.append((tool_name, tool_input))
 
                 if ctx.interactive and sum(1 for name, _ in round_calls if name in ("write_file", "edit_file", "remove_file", "rename_file", "run_tool_script")) > 1:
-                    print(f"\n--- Ollama proposes {len(round_calls)} tool calls ---")
+                    print(f"\n--- AI proposes {len(round_calls)} tool calls ---")
                     for idx, (name, inp) in enumerate(round_calls, 1):
                         args_preview = json.dumps(inp)[:300]
                         print(f"  [{idx}] {name}({args_preview})")
@@ -280,7 +285,7 @@ Skill instructions (follow these):
             text = (message.get('content') or '').strip()
             if text:
                 text_clean = re.sub(r'<[^>]+>', '', text)
-                print(f"\n[MODIFY] Ollama:\n{text_clean}\n")
+                print(f"\n[MODIFY] AI:\n{text_clean}\n")
                 if ctx.interactive and ('?' in text or re.search(r'(?:option\s*\d|choice|choose|which|either|alternative|instead|\b or \b)', text, re.I)):
                     user_input = input("[MODIFY] Your response (or 'done' to accept, 'abort' to cancel): ").strip()
                     if user_input.lower() == 'abort':
@@ -299,7 +304,7 @@ Skill instructions (follow these):
                     print("[MODIFY] No tool calls. Changes not applied.")
                     break
             else:
-                print("[MODIFY] No response from Ollama.")
+                print("[MODIFY] No response from AI.")
                 break
 
         # Save context on exhaustion, delete on success

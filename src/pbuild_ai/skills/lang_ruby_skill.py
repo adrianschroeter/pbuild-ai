@@ -14,7 +14,7 @@ TARGET_PATTERN = r"(?i)^(?:rubygem-|ruby-).*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%gem_install|gem2rpm|rubygem|%\{gem_|gem\s+install)"
 PROMPT_PATTERN = r"(?i)(?:ruby\s+(?:gem|packag)|rubygem|gem2rpm|\bgem\b.*spec)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Ruby RPM packaging for openSUSE. Follow the openSUSE Ruby packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Ruby
 
 ## Naming convention
@@ -86,7 +86,7 @@ The version suffix for backward compatibility follows the pattern `gem-name-0_6`
 - Automatic dependency resolution via `rubygems.attr` handles most Requires/Provides
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Ruby RPM build failure for openSUSE.
 
 ## Common Ruby build errors

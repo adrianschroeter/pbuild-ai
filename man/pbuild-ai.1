@@ -7,7 +7,7 @@ pbuild\-ai \- AI-powered RPM package builder and fixer for openSUSE
 .SH DESCRIPTION
 pbuild\-ai is an AI helper for the \fBpbuild\fR(1) tool.
 It works on single packages or entire package sets and is designed to
-work with all RPM package formats. It connects to an Ollama server to
+work with all RPM package formats. It connects to an AI server to
 analyze spec files, diagnose build failures, and apply fixes.
 
 The main functionality is:
@@ -84,7 +84,7 @@ version. Does not enable \fB\-\-fix\fR.
 .TP
 .B \-\-modify PROMPT, \-m PROMPT
 Modify package sources by sending the prompt and current sources to
-Ollama, then apply the changes locally and quit (no build).
+AI, then apply the changes locally and quit (no build).
 Combine with \fB\-\-fix\fR to also test-build and fix after the modification.
 .TP
 .B \-\-generate PROMPT, \-g PROMPT
@@ -107,7 +107,7 @@ This mode may be triggered automatically when the AI is unsure about
 the cause of an error.
 .TP
 .B \-\-prompt HINT, \-p HINT
-Additional hint to include in all analysis prompts sent to Ollama.
+Additional hint to include in all analysis prompts sent to AI.
 Used alongside \fB\-\-fix\fR or \fB\-\-modify\fR.
 .TP
 .B \-\-show\-buildlog, \-L
@@ -151,40 +151,46 @@ Clean build artifacts before building.
 Do not clean build artifacts (default).
 .TP
 .B \-\-interactive, \-i
-Ask the user to select which changes to apply when Ollama proposes
+Ask the user to select which changes to apply when AI proposes
 multiple tool calls.
 .TP
 .B \-\-debug, \-D
-Print raw JSON responses from Ollama for debugging, along with
+Print raw JSON responses from AI for debugging, along with
 request/response timings.
 .TP
-.B \-\-openai\-server URL
-OpenAI-compatible server URL. Overrides the \fBOLLAMA_HOST\fR environment variable.
+.B \-\-ai\-server URL
+OpenAI-compatible server URL. Overrides the \fBAI_HOST\fR environment variable.
 Defaults to \fBhttp://localhost:11434\fR.
 .TP
 .B \-\-model NAME
-Ollama model name. Overrides the \fBOLLAMA_MODEL\fR environment variable.
+AI model name. Overrides the \fBAI_MODEL\fR environment variable.
 Default: \fBdefault\fR (server-defined fallback).
 .TP
-.B \-\-ollama\-option KEY=VALUE
-Pass a model parameter to Ollama (repeatable). Common keys:
+.B \-\-ai\-option KEY=VALUE
+Pass a model parameter to AI (repeatable). Common keys:
 \fBtemperature\fR (creativity, default ~0.7), \fBnum_ctx\fR (context window
 size, e.g. 8192), \fBnum_predict\fR (max output tokens),
 \fBtop_p\fR, \fBseed\fR, \fBstop\fR.
 For reasoning/thinking models, use \fBthinking=false\fR to disable
 thinking.
-Example: \fB\-\-ollama\-option temperature=0.1 \-\-ollama\-option num_ctx=16384\fR.
+Example: \fB\-\-ai\-option temperature=0.1 \-\-ai\-option num_ctx=16384\fR.
 Values are coerced: floats for strings containing \fB.\fR, ints for
 integer-like strings, booleans for \fBtrue\fR/\fBfalse\fR/\fByes\fR/\fBno\fR.
 .SH ENVIRONMENT
 .TP
-.B OLLAMA_HOST
-Ollama server URL. Overridden by \fB\-\-openai\-server\fR.
+.B AI_HOST
+AI server URL. Overridden by \fB\-\-ai\-server\fR.
 Default: \fBhttp://localhost:11434\fR.
+The legacy \fBOLLAMA_HOST\fR is honored as a fallback.
 .TP
-.B OLLAMA_MODEL
-Ollama model name. Overridden by \fB\-\-model\fR.
+.B AI_MODEL
+AI model name. Overridden by \fB\-\-model\fR.
 Default: \fBdefault\fR (server-defined fallback).
+The legacy \fBOLLAMA_MODEL\fR is honored as a fallback.
+.TP
+.B AI_TIMEOUT
+Timeout in seconds for AI API requests. Default: \fB900\fR.
+The legacy \fBOLLAMA_TIMEOUT\fR is honored as a fallback.
 .TP
 .B NO_SPINNER
 Set to \fB1\fR, \fBtrue\fR, or \fByes\fR to disable the activity spinner
@@ -236,14 +242,14 @@ pbuild\-ai \-\-modify "switch to systemd service" \-\-fix bc
 Build all packages in a project:
 pbuild\-ai \-\-all .
 .TP
-Build with a custom Ollama model:
+Build with a custom AI model:
 pbuild\-ai \-\-model llama3 bc
 .TP
 Build with low temperature for more deterministic fixes and larger context:
-pbuild\-ai \-\-fix bc \-\-ollama\-option temperature=0.1 \-\-ollama\-option num_ctx=16384
+pbuild\-ai \-\-fix bc \-\-ai\-option temperature=0.1 \-\-ai\-option num_ctx=16384
 .TP
 Disable thinking mode (for models that support it):
-pbuild\-ai \-\-fix bc \-\-ollama\-option thinking=false
+pbuild\-ai \-\-fix bc \-\-ai\-option thinking=false
 .SH AGENTS.md
 Your package or project may contain an \fIAGENTS.md\fR file to give hints
 on how to process or update. Packages listed there under a "skip" rule

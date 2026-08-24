@@ -15,7 +15,7 @@ CONTENT_PATTERN = r"(?i)(?:%perl_make_install|%perl_process_packlist|%perl_gen_f
 PROMPT_PATTERN = r"(?i)(?:perl\s+packag|cpan\s+spec|cpanspec|perl\s+module\s+rpm)"
 
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Perl RPM packaging for openSUSE. Follow the openSUSE Perl packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Perl
 
 ## Naming convention
@@ -119,7 +119,7 @@ cpanspec --from https://www.cpan.org --packager "Your Name <email>" File::LibMag
 - Remove `INSTALLDIRS=vendor` from Makefile.PL arguments if the module hard-codes it
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Perl RPM build failure for openSUSE.
 
 ## Common Perl build errors

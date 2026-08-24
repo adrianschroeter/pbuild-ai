@@ -44,37 +44,37 @@ class TestStatsPrinted(unittest.TestCase):
     # --- Main flow (--analyze, --fix, --update) ---
 
     def test_analyze_main_flow_prints_stats(self):
-        """The main try block calls ollama.print_stats after the for/build loop (analyze)."""
+        """The main try block calls ai.print_stats after the for/build loop (analyze)."""
         from pbuild_ai.pbuild_ai import _run_build_guard
 
-        ollama = MagicMock()
-        ollama.model = "test-model"
+        ai = MagicMock()
+        ai.model = "test-model"
         manager = MagicMock()
         manager.run_orphan_build.side_effect = AssertionError("pbuild should not be called")
         ctx = PbuildContext(workspace_dir=self.tmpdir)
         ctx.program_start = 100.0
 
-        _run_build_guard(self.spec_path, manager, ollama, "ctx", "err", ctx, 100.0, MagicMock())
-        ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=None)
+        _run_build_guard(self.spec_path, manager, ai, "ctx", "err", ctx, 100.0, MagicMock())
+        ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=None)
 
-        ollama.print_stats.assert_called_once_with(manager=manager, program_start=ctx.program_start, skill_manager=None)
+        ai.print_stats.assert_called_once_with(manager=manager, program_start=ctx.program_start, skill_manager=None)
 
     def test_fix_main_flow_prints_stats(self):
         """After _run_build_guard with fix_mode=True, outer print_stats is called."""
         from pbuild_ai.pbuild_ai import _run_build_guard
 
-        ollama = MagicMock()
-        ollama.model = "test-model"
+        ai = MagicMock()
+        ai.model = "test-model"
         manager = MagicMock()
         manager.run_orphan_build.return_value = (True, "build ok")
         manager.build_phase_reached.return_value = True
         ctx = PbuildContext(workspace_dir=self.tmpdir, fix_mode=True)
         ctx.program_start = 100.0
 
-        _run_build_guard(self.spec_path, manager, ollama, "ctx", "err", ctx, 100.0, MagicMock())
-        ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=None)
+        _run_build_guard(self.spec_path, manager, ai, "ctx", "err", ctx, 100.0, MagicMock())
+        ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=None)
 
-        ollama.print_stats.assert_called_once_with(manager=manager, program_start=ctx.program_start, skill_manager=None)
+        ai.print_stats.assert_called_once_with(manager=manager, program_start=ctx.program_start, skill_manager=None)
 
     # --- --generate mode ---
 
@@ -86,11 +86,11 @@ class TestStatsPrinted(unittest.TestCase):
             workspace_dir=self.tmpdir,
             generate_prompt="create a package",
         )
-        ctx.ollama = MagicMock()
-        ctx.ollama.model = "test-model"
-        ctx.ollama.options = {}
-        ctx.ollama._openai_mode = False
-        ctx.ollama.chat_api_url = "http://localhost:99999"
+        ctx.ai = MagicMock()
+        ctx.ai.model = "test-model"
+        ctx.ai.options = {}
+        ctx.ai._openai_mode = False
+        ctx.ai.chat_api_url = "http://localhost:99999"
         ctx.manager = MagicMock()
         ctx.manager.read_file_safe.return_value = "dummy"
         ctx.skill_manager = MagicMock()
@@ -104,7 +104,7 @@ class TestStatsPrinted(unittest.TestCase):
             with patch('urllib.request.urlopen', return_value=mock_resp):
                 gm.run_generate_mode(ctx)
 
-        ctx.ollama.print_stats.assert_not_called()
+        ctx.ai.print_stats.assert_not_called()
 
     # --- --modify mode ---
 
@@ -116,11 +116,11 @@ class TestStatsPrinted(unittest.TestCase):
             workspace_dir=self.tmpdir,
             modify_prompt="add a patch",
         )
-        ctx.ollama = MagicMock()
-        ctx.ollama.model = "test-model"
-        ctx.ollama.options = {}
-        ctx.ollama._openai_mode = False
-        ctx.ollama.chat_api_url = "http://localhost:99999"
+        ctx.ai = MagicMock()
+        ctx.ai.model = "test-model"
+        ctx.ai.options = {}
+        ctx.ai._openai_mode = False
+        ctx.ai.chat_api_url = "http://localhost:99999"
         ctx.manager = MagicMock()
         ctx.manager.read_file_safe.return_value = "Name: testpkg\nVersion: 1.0\n\n%description\nTest.\n"
         ctx.skill_manager = MagicMock()
@@ -135,4 +135,4 @@ class TestStatsPrinted(unittest.TestCase):
             with patch('urllib.request.urlopen', return_value=mock_resp):
                 mm.run_modify_mode(ctx)
 
-        ctx.ollama.print_stats.assert_not_called()
+        ctx.ai.print_stats.assert_not_called()

@@ -6,7 +6,7 @@ TARGET_PATTERN = r"(?i).*-fonts\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{_ttfontsdir\}|%\{_oftfontsdir\}|%reconfigure_fonts|fontpackages-devel|%install_fontsconf|%files_fontsconf)"
 PROMPT_PATTERN = r"(?i)(?:font\s+packag|ttf|otf|fontconfig|fonts\.conf|typeface)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in font RPM packaging for openSUSE. Follow the openSUSE font packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Fonts
 
 ## Naming convention
@@ -130,7 +130,7 @@ BuildRequires:  fontconfig
 - Font packages belong in the `M17N:fonts` repository on OBS
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a font RPM build failure for openSUSE.
 
 ## Common font build errors

@@ -9,7 +9,7 @@ CONTENT_PATTERN = r"(?i)(?:%\{_javadir\}|%\{_javadocdir\}|BuildRequires:\s*java-
 PROMPT_PATTERN = r"(?i)(?:java\s+packag|jar\s+file|javadoc|ant\s+build|maven\s+rpm)"
 
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Java RPM packaging for openSUSE. Follow the openSUSE Java packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Java
 
 ## BuildRequires
@@ -170,7 +170,7 @@ This suppresses the bytecode version check. Only use this when you cannot rebuil
 - Java packages belong in the `Java` repository on OBS
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Java RPM build failure for openSUSE.
 
 ## Common Java build errors

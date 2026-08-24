@@ -8,7 +8,7 @@ TARGET_PATTERN = r"(?i)^php.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{__php\}|%\{__phpize\}|%\{__php_config\}|%\{php_version\}|%\{pear_phpdir\}|%\{pear_docdir\}|%\{pear_testdir\}|%\{php_pearxmldir\}|%\{__pear\}|pear)"
 PROMPT_PATTERN = r"(?i)(?:php\s+packag|pear\s+channel|composer|phpize|php-config)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in PHP RPM packaging for openSUSE. Follow the openSUSE PHP packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_PHP
 
 ## PHP macros
@@ -184,7 +184,7 @@ phpunit
 - Always include `BuildRequires: php-devel` when using phpize or php-config
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a PHP RPM build failure for openSUSE.
 
 ## Common PHP build errors

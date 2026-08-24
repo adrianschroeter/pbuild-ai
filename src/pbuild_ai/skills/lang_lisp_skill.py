@@ -9,7 +9,7 @@ CONTENT_PATTERN = r"(?i)(?:common-lisp-controller|\.asd\b|common-lisp/source|reg
 PROMPT_PATTERN = r"(?i)(?:lisp\s+packag|common\s+lisp\s+rpm|asdf\s+system|cl-\w+)"
 
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Common Lisp RPM packaging for openSUSE. Follow the openSUSE Lisp packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Lisp
 
 ## Naming convention
@@ -90,7 +90,7 @@ unregister-common-lisp-implementation clisp
 - Use the `cl-` prefix for all Lisp library packages
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Common Lisp RPM build failure for openSUSE.
 
 ## Common Lisp build errors

@@ -15,7 +15,7 @@ CONTENT_PATTERN = r"(?i)(?:nodejs-packaging|%\{nodejs_\}|%nodejs_|npm\s+ci|npm\s
 PROMPT_PATTERN = r"(?i)(?:nodejs\s+packag|npm\s+rpm|node\.?js\s+rpm|javascript\s+rpm|node_module\s+rpm)"
 
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Node.js RPM packaging for openSUSE. Follow the openSUSE Node.js packaging practices.
 
 ## BuildRequires
@@ -125,7 +125,7 @@ BuildRequires:  nodejsXX-devel  # e.g., nodejs18-devel
 - Node.js modules typically go in `%{nodejs_sitelib}` which is `/usr/lib/node_modules`
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Node.js RPM build failure for openSUSE.
 
 ## Common Node.js build errors

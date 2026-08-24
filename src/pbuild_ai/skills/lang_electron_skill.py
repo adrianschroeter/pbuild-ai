@@ -9,7 +9,7 @@ CONTENT_PATTERN = r"(?i)(?:%\{electron_rebuild\}|%\{electron_req\}|%\{electron_c
 PROMPT_PATTERN = r"(?i)(?:electron\s+packag|electron-builder|asar\s+file|electron\s+rpm|native\s+modul)"
 
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Electron RPM packaging for openSUSE. Follow the openSUSE Electron packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Electron
 
 ## Build environment setup
@@ -182,7 +182,7 @@ export ESBUILD_BINARY_PATH=/path/to/esbuild
 - Patch `@electron/fuses`, `app.isPackaged`, `process.execPath`, and `app.relaunch` as needed
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging an Electron RPM build failure for openSUSE.
 
 ## Common Electron build errors

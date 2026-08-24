@@ -8,7 +8,7 @@ TARGET_PATTERN = r"(?i)^lua.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{lua_version\}|%\{lua_archdir\}|%\{lua_noarchdir\}|%\{lua_incdir\}|%\{lua_libdir\}|luarocks)"
 PROMPT_PATTERN = r"(?i)(?:lua\s+packag|luarocks|lua\s+rpm|lua\s+modul)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Lua RPM packaging for openSUSE. Follow the openSUSE Lua packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Lua
 
 ## Naming convention
@@ -147,7 +147,7 @@ Prefer direct make/cmake builds when available for better openSUSE integration.
 - Module names should not repeat "lua" — `lua51-filesystem` not `lua51-luafilesystem` unless the project name is LuaFilesystem
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Lua RPM build failure for openSUSE.
 
 ## Common Lua build errors

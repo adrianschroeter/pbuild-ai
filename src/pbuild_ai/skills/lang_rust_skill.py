@@ -13,7 +13,7 @@ TARGET_PATTERN = r"(?i)(?:rust|cargo)"
 CONTENT_PATTERN = r"(?i)(?:%\{cargo_build\}|%\{cargo_install\}|%\{cargo_test\}|cargo-packaging|vendor\.tar\.zst)"
 PROMPT_PATTERN = r"(?i)(?:rust\s+(?:packag|rpm|crate)|cargo\s+(?:packag|rpm)|crate\s+rpm)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Rust software RPM packaging for openSUSE. Follow the openSUSE Rust software packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Rust_Software
 
 ## BuildRequires
@@ -123,7 +123,7 @@ foo = { path = "vendor/foo" }
 - The build environment has NO network access — all dependencies must be vendored
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Rust RPM build failure for openSUSE.
 
 ## Common Rust build errors

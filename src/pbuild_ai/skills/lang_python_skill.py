@@ -16,7 +16,7 @@ CONTENT_PATTERN = r"(BuildRequires:\s*%\{python_module\b|%py3_build\b|%python_bu
 PROMPT_PATTERN = r"(?i)(requires a different Python|BackendUnavailable|Cannot import 'setuptools.build_meta')"
 
 # Specific instruction to the LLM for Python packages before the build
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Python RPM packaging for openSUSE.
 Check the following Spec-file. Pay special attention to:
 1. Do NOT use  %py3_build, %py3_install, %pyproject_buildrequires, %pyproject_files, or %pyproject_save_files macros — avoid them entirely.
@@ -28,7 +28,7 @@ Summarize your analysis in a maximum of 3 sentences.
 """
 
 # Specific instruction for build errors
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are a Python developer. The RPM build for this Python package failed.
 Check the log for typical errors such as:
 - Missing Python modules (ModuleNotFoundError)

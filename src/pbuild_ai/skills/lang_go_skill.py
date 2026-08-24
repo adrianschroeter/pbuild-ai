@@ -7,7 +7,7 @@ CONTENT_PATTERN = r"(?i)(?:%\{go_|%goprep\b|%gobuild\b|%goinstall\b|%gosrc\b|%go
 PROMPT_PATTERN = r"(?i)(?:golang\s+packag|go\s+rpm|go\s+module|goprep|gobuild|goinstall|vendor\.tar)"
 
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Go (golang) RPM packaging for openSUSE. Follow the openSUSE Go packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Go
 
 ## Go modules approach (modern, preferred)
@@ -135,7 +135,7 @@ ExclusiveArch:  %{go_arches}
 - Examples with `main()` functions in library packages often need to be moved to an `examples/` subdirectory to avoid "main redeclared in this block" errors.
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Go RPM build failure for openSUSE.
 
 ## Common Go build errors

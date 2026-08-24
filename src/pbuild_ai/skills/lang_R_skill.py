@@ -8,7 +8,7 @@ TARGET_PATTERN = r"(?i)^R-.*\.spec$"
 CONTENT_PATTERN = r"(?i)(?:%\{rlibdir\}|R\s+CMD\s+INSTALL|packname|CRAN)"
 PROMPT_PATTERN = r"(?i)(?:\br\b.*packag|CRAN|r2spec|\br\b.*rpm|\br\b.*spec)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in R RPM packaging for openSUSE. Follow the openSUSE R packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_R
 
 ## Naming convention
@@ -91,7 +91,7 @@ rm -f *.o *.so
 - Set `%global rlibdir %{_libdir}/R/library` to point to the R library directory
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging an R RPM build failure for openSUSE.
 
 ## Common R build errors

@@ -25,7 +25,7 @@ from pbuild_ai.spinner import Spinner, YELLOW
 
 
 def _extract_shell_command(text: str) -> str | None:
-    """Strip markdown and natural language from Ollama output, return first shell command."""
+    """Strip markdown and natural language from AI output, return first shell command."""
     if not text:
         return None
     lines = text.split("\n")
@@ -384,7 +384,7 @@ class RpmSourceManager:
             err += "\n".join(stdout.split('\n')[-100:]) if stdout else "No output"
             return False, err
 
-    def run_deep_analyze_shell(self, package_name=None, ollama=None, full_context=None, project_mode=False, debug=False, deep_analyze_prompt=""):
+    def run_deep_analyze_shell(self, package_name=None, ai=None, full_context=None, project_mode=False, debug=False, deep_analyze_prompt=""):
         from pbuild_ai.pbuild_ai import _cleanup_stale_build_processes
         _cleanup_stale_build_processes()
         cmd = ["pbuild"]
@@ -408,7 +408,7 @@ class RpmSourceManager:
 
         collected = ""
         self.deep_exploration = ""
-        print(f"[DEEP] Ollama-driven investigation in build env for {package_name or 'package'}...")
+        print(f"[DEEP] AI-driven investigation in build env for {package_name or 'package'}...")
         print(f"[EXEC] {' '.join(cmd)}")
 
         import pty
@@ -563,17 +563,17 @@ Everything gathered so far from the shell:
 Do you have enough information to diagnose and fix the {package_name} build failure?
 - If YES: Start your response with "DONE:" then explain the root cause and the specific fix needed.
 - If NO: Start your response with "NEXT:" then output a SINGLE raw shell command to run next. NO markdown, NO backticks, NO explanation — just the command after "NEXT:"."""
-                print(f"\n[DEEP] Asking Ollama (round {round_i+1}/{max_rounds})...")
+                print(f"\n[DEEP] Asking AI (round {round_i+1}/{max_rounds})...")
                 if debug:
                     print(f"[DEEP PROMPT]\n{combined_prompt}\n[/DEEP PROMPT]")
-                raw = ollama.analyze("You are investigating a failed RPM build interactively.", combined_prompt, full_context).strip()
+                raw = ai.analyze("You are investigating a failed RPM build interactively.", combined_prompt, full_context).strip()
                 if not raw:
                     print(f"[DEEP] Empty response, skipping round.")
                     continue
                 _upper = raw.upper()
                 if _upper.startswith("DONE:"):
                     _diagnosis = raw[5:].strip()
-                    model_name = ollama.model if ollama else "unknown"
+                    model_name = ai.model if ai else "unknown"
                     print(f"[DEEP] AI({model_name}) has enough information. Proceeding to fix.")
                     break
                 if _upper.startswith("NEXT:"):
@@ -583,7 +583,7 @@ Do you have enough information to diagnose and fix the {package_name} build fail
                     print(f"[DEEP] No valid command found in response, skipping round.")
                     continue
                 if command.lower().startswith("exit") or not command:
-                    print(f"[DEEP] Ollama finished investigation.")
+                    print(f"[DEEP] AI finished investigation.")
                     break
                 output = _send_and_wait(command, timeout=15)
                 if not output or not output.strip():
@@ -601,7 +601,7 @@ Do you have enough information to diagnose and fix the {package_name} build fail
 Summarize the root cause of the {package_name} build failure and what fix is needed. Be specific."""
                 if debug:
                     print(f"\n[DEEP PROMPT]\n{final_prompt}\n[/DEEP PROMPT]")
-                summary = ollama.analyze("You summarize build failure investigations.", final_prompt, full_context)
+                summary = ai.analyze("You summarize build failure investigations.", final_prompt, full_context)
                 print(f"\n[DEEP] Final diagnosis:\n{summary}\n")
 
         except Exception as e:

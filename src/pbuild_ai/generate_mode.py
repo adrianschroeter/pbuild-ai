@@ -84,14 +84,14 @@ def _apply_matching_skills(ctx, filename, content, injected_skills, messages):
         if skill_name in injected_skills:
             continue
         injected_skills.add(skill_name)
-        prompt = getattr(skill, 'OLLAMA_SPEC_PROMPT', None)
+        prompt = getattr(skill, 'AI_SPEC_PROMPT', None)
         if prompt:
             print(f"[GENERATE] Applied skill: {skill_name}")
             messages.append({"role": "system", "content": f"[Skill: {skill_name}]\n{prompt}"})
 
 
 def run_generate_mode(ctx):
-    """Create a new openSUSE RPM package from scratch via Ollama + tools (up to 50 rounds)."""
+    """Create a new openSUSE RPM package from scratch via AI + tools (up to 50 rounds)."""
     print(f"[GENERATE] Creating new package from prompt: {ctx.generate_prompt}")
     generate_skill = ctx.skill_manager.get_skill_by_name("generate_mode")
     if generate_skill:
@@ -150,10 +150,10 @@ The specification for the package to create is in the system prompt above. Start
     _injected_skills = set()
     for round_idx in range(generate_max_rounds):
         _all_text = "\n".join(msg.get('content', '') or '' for msg in messages)
-        _tok = ctx.ollama.count_tokens(_all_text)
-        _ctx_str = f" ({_tok//1024}k/{ctx.ollama.max_tokens//1024}k tok)"
-        with Spinner(prefix=f"[AI] {ctx.ollama.model}{_ctx_str}", color=AI_COLOR):
-            result = chat_completion(ctx.ollama, messages, ctx.tools, debug=ctx.debug, track_stats=True)
+        _tok = ctx.ai.count_tokens(_all_text)
+        _ctx_str = f" ({_tok//1024}k/{ctx.ai.max_tokens//1024}k tok)"
+        with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", color=AI_COLOR):
+            result = chat_completion(ctx.ai, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
         message = result.get('message', {})
         if 'tool_calls' in message and message['tool_calls']:
@@ -161,7 +161,12 @@ The specification for the package to create is in the system prompt above. Start
             for tc in message['tool_calls']:
                 tool_name = tc['function']['name']
                 raw_args = tc['function']['arguments']
-                tool_input = raw_args if isinstance(raw_args, dict) else json.loads(raw_args)
+                try:
+                    tool_input = raw_args if isinstance(raw_args, dict) else (json.loads(raw_args) if raw_args else {})
+                except (json.JSONDecodeError, TypeError):
+                    tool_input = {}
+                if not isinstance(tool_input, dict):
+                    tool_input = {}
                 if tool_name == "web_fetch" and tool_input.get("url") in fetch_cache:
                     cached = fetch_cache[tool_input["url"]]
                     print(f"[GENERATE] Cached: web_fetch({tool_input['url']}) ({len(cached)} bytes)", flush=True)
@@ -170,7 +175,7 @@ The specification for the package to create is in the system prompt above. Start
                 round_calls.append((tool_name, tool_input))
 
             if ctx.interactive and sum(1 for c in round_calls if c[0] in ("write_file", "edit_file", "remove_file", "rename_file", "run_tool_script")) > 1:
-                print(f"\n--- Ollama proposes {len(round_calls)} tool calls ---")
+                print(f"\n--- AI proposes {len(round_calls)} tool calls ---")
                 for idx, (name, inp) in enumerate(round_calls, 1):
                     args_preview = json.dumps(inp)[:300]
                     print(f"  [{idx}] {name}({args_preview})")
@@ -274,7 +279,7 @@ The specification for the package to create is in the system prompt above. Start
         text = (message.get('content') or '').strip()
         if text:
             text_clean = re.sub(r'<[^>]+>', '', text)
-            print(f"\n[GENERATE] Ollama:\n{text_clean}\n")
+            print(f"\n[GENERATE] AI:\n{text_clean}\n")
             if ctx.interactive and ('?' in text or re.search(r'(?:option\s*\d|choice|choose|which|either|alternative|instead|\b or \b)', text, re.I)):
                 user_input = input("[GENERATE] Your response (or 'done' to finish, 'abort' to cancel): ").strip()
                 if user_input.lower() == 'abort':
@@ -290,7 +295,7 @@ The specification for the package to create is in the system prompt above. Start
                 print("[GENERATE] No pending questions or tool calls. Assuming complete.")
                 break
         else:
-            print("[GENERATE] No response from Ollama.")
+            print("[GENERATE] No response from AI.")
             break
 
     for spec_file in sorted(Path(ctx.workspace_dir).rglob("*.spec")):

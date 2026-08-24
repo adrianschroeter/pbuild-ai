@@ -89,7 +89,7 @@ class TestSkillManager(unittest.TestCase):
 
         prompt_parts = []
         for s in skills:
-            sp = getattr(s, "OLLAMA_SPEC_PROMPT", "")
+            sp = getattr(s, "AI_SPEC_PROMPT", "")
             if sp:
                 prompt_parts.append(f"--- Skill: {s.__name__} ---\n{sp}")
 
@@ -109,7 +109,7 @@ class TestSkillManager(unittest.TestCase):
 
         error_parts = []
         for s in skills:
-            ep = getattr(s, "OLLAMA_ERROR_PROMPT", "")
+            ep = getattr(s, "AI_ERROR_PROMPT", "")
             if ep:
                 error_parts.append(ep)
 

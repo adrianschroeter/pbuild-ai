@@ -732,7 +732,7 @@ def _apply_analysis_fix_patterns(spec: Path, spec_content: str, error_analysis: 
     return None
 
 
-def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, program_start,
+def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program_start,
                      run_fix_loop_func):
     """Execute pbuild for a spec if fix_mode or update_version is set, otherwise skip.
     
@@ -783,12 +783,12 @@ def _run_build_guard(spec, manager, ollama, full_context, error_prompt, ctx, pro
         if build_success:
             print(f"\n[OK] Build for {spec.name} succeeded.")
         else:
-            print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ollama.model}...")
+            print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ai.model}...")
             if not ctx.fix_mode:
                 _err_ctx = _extract_error_context(build_out)
-                error_analysis = ollama.analyze(error_prompt, f"{_err_ctx}\n\n{_sanitize_analysis_context(build_out)}" if _err_ctx else _sanitize_analysis_context(build_out), full_context, format_json=True)
-                print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
-                ollama._write_analysis_file(error_analysis)
+                error_analysis = ai.analyze(error_prompt, f"{_err_ctx}\n\n{_sanitize_analysis_context(build_out)}" if _err_ctx else _sanitize_analysis_context(build_out), full_context, format_json=True)
+                print(f"\n{_color(AI_COLOR, '--- AI ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
+                ai._write_analysis_file(error_analysis)
 
         if ctx.fix_mode and not build_success:
             pkg_name = package_name if 'package_name' in dir() else spec.stem
@@ -854,7 +854,7 @@ def _check_arg_conflicts(parser, args):
 
 
 def _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager):
-    """After an Ollama phase, check for [REBUILD: pkg] hints and cross-package spec edits."""
+    """After an AI phase, check for [REBUILD: pkg] hints and cross-package spec edits."""
     if messages:
         assistant_text = " ".join(m.get("content", "") or "" for m in messages if m.get("role") == "assistant")
         for m in re.finditer(r'\[REBUILD:\s*(\S+?)(?:\.spec)?\]', assistant_text):
@@ -903,7 +903,7 @@ if __name__ == "__main__":
     parser.add_argument("--update", "-u", action="store_true", help="Main command: update to latest upstream version (also enables --fix). Use --update=VERSION for a specific version.")
     parser.add_argument("--generate", "-g", default=None, help="Main command: generate a new package from scratch based on the given prompt (no test build)")
     parser.add_argument("--create", "-c", default=None, help="Main command: generate a new package from scratch with test build and AI fix loop")
-    parser.add_argument("--modify", "-m", default=None, help="Main command: send a modification prompt + sources to Ollama, apply changes locally, then exit (no build)")
+    parser.add_argument("--modify", "-m", default=None, help="Main command: send a modification prompt + sources to AI, apply changes locally, then exit (no build)")
     parser.add_argument("--root", default=None, help="Root directory for pbuild (passed as --root to pbuild)")
     parser.add_argument("--show-buildlog", "-L", action="store_true", help="Show the pbuild build log output")
     parser.add_argument("--build-log", default=None, help="Write the full pbuild build log to this file")
@@ -932,19 +932,19 @@ if __name__ == "__main__":
     parser.add_argument("--preset", default=None, help="Preset name to pass to pbuild (e.g. tumbleweed)")
     parser.add_argument("--dist", default=None, help="Distribution to build for (passed as --dist to pbuild, alternative to --preset)")
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
-    parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from Ollama")
+    parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from AI")
     parser.add_argument("--max-fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, 0 = unlimited)")
     parser.add_argument("--max-ai-rounds", type=int, default=30, help="Max AI tool-call rounds per fix attempt (default: 30, 0 = unlimited). Controls how many times the AI can call tools within a single fix cycle.")
     parser.add_argument("--auto-deps", nargs='?', const=10, type=int, default=0, help="Auto-create missing dependency packages (depth: %(const)d, 0=unlimited, default: disabled)")
     parser.add_argument("--try-build-first", action="store_true", help="Skip initial AI spec analysis; build first and only use AI if build fails")
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
-    parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to Ollama")
+    parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to AI")
     parser.add_argument("--fresh", action="store_true", help="Discard saved .pai.context and start fresh")
-    parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when Ollama proposes multiple tool calls")
-    parser.add_argument("--openai-server", default=None, help="OpenAI-compatible server URL (overrides OLLAMA_HOST env var, default http://localhost:11434)")
-    parser.add_argument("--model", default=None, help="Ollama model name (overrides OLLAMA_MODEL env var, default gemma4)")
-    parser.add_argument("--ollama-timeout", type=int, default=None, help="Timeout in seconds for Ollama API requests (default: 900, overrides OLLAMA_TIMEOUT env var)")
-    parser.add_argument("--ollama-option", action="append", default=[], help="Pass a model parameter to Ollama (repeatable, e.g. --ollama-option temperature=0.1 --ollama-option num_ctx=8192). For reasoning/thinking models, use --ollama-option thinking=false to disable thinking.")
+    parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when AI proposes multiple tool calls")
+    parser.add_argument("--ai-server", default=None, help="AI server URL, OpenAI-compatible (overrides AI_HOST env var; legacy OLLAMA_HOST is also honored, default http://localhost:11434)")
+    parser.add_argument("--model", default=None, help="AI model name (overrides AI_MODEL env var; legacy OLLAMA_MODEL is also honored, default gemma4)")
+    parser.add_argument("--ai-timeout", type=int, default=None, help="Timeout in seconds for AI API requests (default: 900, overrides AI_TIMEOUT env var; legacy OLLAMA_TIMEOUT is also honored)")
+    parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). For reasoning/thinking models, use --ai-option thinking=false to disable thinking.")
     parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries. Falls back to EMAIL env var.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     parser.add_argument("--skills-dir", action="append", default=[], help="Extra directory to load skill .py files from (repeatable). Combined with the built-in skills dir and ~/.config/pbuild-ai/skills/ if it exists.")
@@ -966,10 +966,10 @@ if __name__ == "__main__":
 
     _check_arg_conflicts(parser, args)
 
-    ollama_options = {}
-    for opt in args.ollama_option:
+    ai_options = {}
+    for opt in args.ai_option:
         if "=" not in opt:
-            print(f"[WARN] Ignoring malformed --ollama-option: {opt!r} (expected KEY=VALUE)")
+            print(f"[WARN] Ignoring malformed --ai-option: {opt!r} (expected KEY=VALUE)")
             continue
         k, v = opt.split("=", 1)
         # Coerce common numeric / boolean values
@@ -984,7 +984,7 @@ if __name__ == "__main__":
                 v = True
             elif vl in ("false", "no", "0"):
                 v = False
-        ollama_options[k] = v
+        ai_options[k] = v
 
     ctx = PbuildContext(
         workspace_dir=args.workspace_dir,
@@ -1008,10 +1008,10 @@ if __name__ == "__main__":
         auto_deps=args.auto_deps if args.auto_deps else 0,
         modify_prompt=args.modify,
         generate_prompt=args.generate,
-        ollama_server=args.openai_server,
-        ollama_model_arg=args.model,
-        ollama_timeout=args.ollama_timeout or int(os.environ.get("OLLAMA_TIMEOUT", "900")),
-        ollama_options=ollama_options,
+        ai_server=args.ai_server,
+        ai_model_arg=args.model,
+        ai_timeout=args.ai_timeout or int(os.environ.get("AI_TIMEOUT", os.environ.get("OLLAMA_TIMEOUT", "900"))),
+        ai_options=ai_options,
         shell_after_build=args.shell_after_build,
         interactive=args.interactive,
         email=args.email or os.environ.get("EMAIL", ""),
@@ -1046,8 +1046,8 @@ if __name__ == "__main__":
     INTERACTIVE = ctx.interactive
     MODIFY_PROMPT = ctx.modify_prompt
     GENERATE_PROMPT = ctx.generate_prompt
-    OPENAI_SERVER = ctx.ollama_server
-    OLLAMA_MODEL_ARG = ctx.ollama_model_arg
+    AI_SERVER = ctx.ai_server
+    AI_MODEL_ARG = ctx.ai_model_arg
     ROOT_DIR = ctx.root_dir
     SKILLS_DIR = Path(__file__).parent / "skills"
     user_skills_dir = Path.home() / ".config" / "pbuild-ai" / "skills"
@@ -1070,7 +1070,7 @@ if __name__ == "__main__":
     
     agents_md_content = manager.read_agents_md() or ""
     if agents_md_content:
-        print(f"[INFO] AGENTS.md found. Using for Ollama context.")
+        print(f"[INFO] AGENTS.md found. Using for AI context.")
     
     # Always include base skill content in the prompt
     base_skill_content = skill_manager.base_skill_content or ""
@@ -1079,9 +1079,9 @@ if __name__ == "__main__":
     else:
         full_context = agents_md_content
     
-    ollama = LlmAnalyzer(host=OPENAI_SERVER, model=OLLAMA_MODEL_ARG or os.environ.get("OLLAMA_MODEL", "default"), debug=DEBUG, timeout=ctx.ollama_timeout, options=ollama_options)
-    ollama.manager = manager
-    ctx.ollama = ollama
+    ai = LlmAnalyzer(host=AI_SERVER, model=AI_MODEL_ARG or os.environ.get("AI_MODEL", os.environ.get("OLLAMA_MODEL", "default")), debug=DEBUG, timeout=ctx.ai_timeout, options=ai_options)
+    ai.manager = manager
+    ctx.ai = ai
     ctx.full_context = full_context
 
     # Default prompts as fallback
@@ -1317,8 +1317,8 @@ if __name__ == "__main__":
             print(f"[PATCH] Added {patch_ref} and %patch{patch_num} -p1 to spec.")
             break  # only handle first patch per round
 
-    def build_suggested_dependency(analysis, spec_files, manager, ollama, full_context):
-        """If Ollama suggests building another package first, build it and return True."""
+    def build_suggested_dependency(analysis, spec_files, manager, ai, full_context):
+        """If AI suggests building another package first, build it and return True."""
         spec_map = {s.stem: s for s in spec_files}
         lower = analysis.lower()
         patterns = [
@@ -1329,16 +1329,16 @@ if __name__ == "__main__":
             for m in re.finditer(pat, lower):
                 suggested = m.group(1)
                 if suggested in spec_map:
-                    print(f"\n[DEP] Ollama suggests building '{suggested}' first. Building it now...")
+                    print(f"\n[DEP] AI suggests building '{suggested}' first. Building it now...")
                     dep_spec = spec_map[suggested]
                     dep_skills = skill_manager.get_skills_for(dep_spec.name, manager.read_file_safe(dep_spec))
                     if dep_skills:
-                        dep_prompt_parts = [getattr(s, 'OLLAMA_SPEC_PROMPT', '') for s in dep_skills if getattr(s, 'OLLAMA_SPEC_PROMPT', '')]
+                        dep_prompt_parts = [getattr(s, 'AI_SPEC_PROMPT', '') for s in dep_skills if getattr(s, 'AI_SPEC_PROMPT', '')]
                         dep_prompt = "\n\n".join(dep_prompt_parts) if dep_prompt_parts else DEFAULT_SPEC_PROMPT
                     else:
                         dep_prompt = DEFAULT_SPEC_PROMPT
-                    dep_spec_analysis = ollama.analyze(dep_prompt, manager.read_file_safe(dep_spec), full_context)
-                    print(f"-> AI({ollama.model}) says about {dep_spec.name}:\n{dep_spec_analysis}\n")
+                    dep_spec_analysis = ai.analyze(dep_prompt, manager.read_file_safe(dep_spec), full_context)
+                    print(f"-> AI({ai.model}) says about {dep_spec.name}:\n{dep_spec_analysis}\n")
                     dep_success, dep_out = manager.run_project_build(suggested, preset=PRESET, dist=DIST, stream_output=SHOW_BUILDLOG)
                     if dep_success:
                         print(f"[DEP] '{suggested}' built successfully. Continuing with current package.")
@@ -1369,16 +1369,16 @@ if __name__ == "__main__":
         _build_skill_files = set()
 
         def _merge_build_skills(prompt, build_out):
-            """Re-evaluate skills against build output and inject OLLAMA_ERROR_PROMPT from newly-matched skills."""
+            """Re-evaluate skills against build output and inject AI_ERROR_PROMPT from newly-matched skills."""
             if not build_out:
                 return prompt
             _new_skills = skill_manager.get_skills_for(spec.name, build_out, prompt=MODIFY_PROMPT)
             for _s in _new_skills:
                 _sf = getattr(_s, '__file__', None) or _s.__name__
                 if _sf not in _build_skill_files:
-                    _ep = getattr(_s, 'OLLAMA_ERROR_PROMPT', '')
+                    _ep = getattr(_s, 'AI_ERROR_PROMPT', '')
                     if _ep and _ep.strip():
-                        print(f"[SKILL] Build output matched skill: {_s.__name__} — injecting OLLAMA_ERROR_PROMPT")
+                        print(f"[SKILL] Build output matched skill: {_s.__name__} — injecting AI_ERROR_PROMPT")
                         prompt += "\n\n" + _ep.strip()
                         _build_skill_files.add(_sf)
             return prompt
@@ -1449,7 +1449,7 @@ if __name__ == "__main__":
                     current_build_out = _retry_out
             else:
                 print(f"\n[DEEP ANALYZE] Opening interactive shell for {spec.stem}...")
-                _shell_ok, _shell_result = manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
+                _shell_ok, _shell_result = manager.run_deep_analyze_shell(package_name=spec.stem, ai=ai, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
                 if not _shell_ok and _shell_result == "BUILD_ENV_SETUP_FAILURE":
                     print("[DEEP ANALYZE] Build environment setup failure (stale build root). Retrying with --clean...")
                     _retry_ok, _retry_out = rebuild_func(spec.stem, force_clean=True)
@@ -1515,12 +1515,12 @@ if __name__ == "__main__":
                     if _spec_review else f"--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + _sanitized_error
                 )
                 error_prompt = _merge_build_skills(error_prompt, current_build_out)
-                error_analysis = ollama.analyze(error_prompt, _error_analysis_ctx, full_context, format_json=True)
+                error_analysis = ai.analyze(error_prompt, _error_analysis_ctx, full_context, format_json=True)
                 _prev_error_context = error_context
                 _prev_error_analysis = error_analysis
             _latest_analysis = error_analysis
-            print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
-            ollama._write_analysis_file(error_analysis)
+            print(f"\n{_color(AI_COLOR, '--- AI ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
+            ai._write_analysis_file(error_analysis)
             # Demote DEEP_ANALYZE for unpackaged-file-only errors (fix is trivial — just add files to %files)
             if "[DEEP_ANALYZE]" in error_analysis and _files_failure and not any(
                 p in build_out_lower for p in ("file not found", "unable to find",
@@ -1536,19 +1536,19 @@ if __name__ == "__main__":
                 print("[FIX] cd failure in %prep — stripping [DEEP_ANALYZE] (fix: list_archive to find actual dir name, then correct %setup -n).")
                 error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                 _latest_analysis = error_analysis
-            # Auto-trigger deep-analyze if Ollama requests it and we aren't already in that mode
+            # Auto-trigger deep-analyze if AI requests it and we aren't already in that mode
             if "[DEEP_ANALYZE]" in error_analysis and not DEEP_ANALYZE:
                 if "unresolvable" in build_out_lower or "nothing provides" in build_out_lower:
-                    print("\n[DEEP ANALYZE] Ollama requested deep analyze but build has unresolvable deps — environment cannot be created. Skipping shell.")
+                    print("\n[DEEP ANALYZE] AI requested deep analyze but build has unresolvable deps — environment cannot be created. Skipping shell.")
                     error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                     _latest_analysis = error_analysis
                 elif _is_environment_error(current_build_out):
-                    print("\n[DEEP ANALYZE] Ollama requested deep analyze but build environment setup failed (stale build root). Skipping shell — will retry with --clean automatically.")
+                    print("\n[DEEP ANALYZE] AI requested deep analyze but build environment setup failed (stale build root). Skipping shell — will retry with --clean automatically.")
                     error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                     _latest_analysis = error_analysis
                 else:
-                    print("\n[DEEP ANALYZE] Ollama requested interactive investigation. Opening shell...")
-                    _shell_ok, _shell_result = manager.run_deep_analyze_shell(package_name=spec.stem, ollama=ollama, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
+                    print("\n[DEEP ANALYZE] AI requested interactive investigation. Opening shell...")
+                    _shell_ok, _shell_result = manager.run_deep_analyze_shell(package_name=spec.stem, ai=ai, full_context=full_context, project_mode=PROJECT_MODE, debug=DEBUG, deep_analyze_prompt=skill_manager.get_deep_analyze_prompt())
                     time.sleep(3)
                     if not _shell_ok and _shell_result == "BUILD_ENV_SETUP_FAILURE":
                         print("[DEEP ANALYZE] Shell exited early — build environment setup failure. Skipping re-analysis.")
@@ -1559,11 +1559,11 @@ if __name__ == "__main__":
                         deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
                         _fixes_ctx = _build_attempted_fixes_context()
                         _current_spec_da = manager.read_file_safe(spec)
-                        error_analysis = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(error_context), deep_context, format_json=True)
+                        error_analysis = ai.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(error_context), deep_context, format_json=True)
                         error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                         _latest_analysis = error_analysis
-                        print(f"\n{_color(AI_COLOR, '--- OLLAMA ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '------------------------------------------')}\n")
-                        ollama._write_analysis_file(error_analysis)
+                        print(f"\n{_color(AI_COLOR, '--- AI ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '------------------------------------------')}\n")
+                        ai._write_analysis_file(error_analysis)
             if _is_environment_error(current_build_out):
                 print(f"[RETRY] Environment/VM issue detected. Retrying with --clean...")
                 if PROJECT_MODE:
@@ -1578,7 +1578,7 @@ if __name__ == "__main__":
                 current_build_out = _retry_out
                 continue
             if spec_files:
-                build_suggested_dependency(error_analysis, spec_files, manager, ollama, full_context)
+                build_suggested_dependency(error_analysis, spec_files, manager, ai, full_context)
             print("[FIX MODE] Applying suggested changes via tool calls...")
             spec_content = manager.read_file_safe(spec)
             fix_context = full_context or 'No AGENTS.md'
@@ -1662,7 +1662,7 @@ Here is the new error context:
                             if len(content) > 200:
                                 kept[i]["content"] = content[:100] + f"\n... (truncated, {len(content)} bytes) ...\n" + content[-50:]
                     messages = kept
-            tool_results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
+            tool_results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
             if isinstance(tool_results, str):
                 print(f"[FIX ERROR] {tool_results}")
             elif tool_results:
@@ -1684,7 +1684,7 @@ Here is the new error context:
                     print("[FIX] Tool calls were all read-only. Trying rewrite from analysis instead...")
                     tool_results = None
             if not tool_results:
-                    print("[FIX] No tool calls received. Asking Ollama to rewrite the spec file...")
+                    print("[FIX] No tool calls received. Asking AI to rewrite the spec file...")
 
                     def try_rewrite():
                         # Extract the explicit fix suggestion from the analysis
@@ -1711,7 +1711,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 - Output the COMPLETE spec, not just the changed parts
 - Just raw spec content and nothing else
 - Do NOT repeat any fix listed in the previously attempted fixes above — they all failed."""
-                        result = ollama.analyze("You are an RPM spec expert.", prompt, full_context)
+                        result = ai.analyze("You are an RPM spec expert.", prompt, full_context)
                         if not result:
                             return None
                         extracted = extract_spec(result)
@@ -1808,7 +1808,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     print(f"[FIX WARNING] Circular fix detected: spec content matches attempt {_prev_att}. The LLM is reverting a previous change.", flush=True)
                     if _match_count >= 2:
                         print(f"[FIX ERROR] Spec has cycled back to a previous version {_match_count} times. Aborting to prevent infinite loop.", flush=True)
-                        ollama.print_stats(manager, ctx.program_start, skill_manager)
+                        ai.print_stats(manager, ctx.program_start, skill_manager)
                         sys.exit(1)
                 _spec_version_hashes.append((fix_attempt, _spec_hash))
             if not changed and not tool_results:
@@ -1822,9 +1822,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 
             if changed:
                 # Ensure spec edits from rewrite paths are tracked too
-                if str(spec.relative_to(WORKSPACE_DIR)) not in ollama._changed_files:
-                    ollama._add_changed_file(str(spec))
-                ollama._write_tool_changes(
+                if str(spec.relative_to(WORKSPACE_DIR)) not in ai._changed_files:
+                    ai._add_changed_file(str(spec))
+                ai._write_tool_changes(
                     before_contents={str(spec.relative_to(WORKSPACE_DIR)): spec_content}
                 )
 
@@ -1866,10 +1866,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 _fixes_ctx = _build_attempted_fixes_context()
                 _current_spec_re = manager.read_file_safe(spec)
                 error_prompt = _merge_build_skills(error_prompt, build_out2)
-                error_analysis2 = ollama.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(build_out2), full_context, format_json=True)
+                error_analysis2 = ai.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(build_out2), full_context, format_json=True)
                 _latest_analysis = error_analysis2
-                print(f"\n{_color(AI_COLOR, f'--- OLLAMA ERROR ANALYSIS (attempt {fix_attempt}) ---')}\n{error_analysis2}\n{_color(AI_COLOR, '------------------------------------------')}\n")
-                ollama._write_analysis_file(error_analysis2)
+                print(f"\n{_color(AI_COLOR, f'--- AI ERROR ANALYSIS (attempt {fix_attempt}) ---')}\n{error_analysis2}\n{_color(AI_COLOR, '------------------------------------------')}\n")
+                ai._write_analysis_file(error_analysis2)
                 current_build_out = build_out2
 
         if not build_success2:
@@ -1878,12 +1878,12 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 print(f"[FIX] Saved conversation context to {_ctx_file.name} for restart.")
             label = MAX_ATTEMPTS if not unlimited else "unlimited"
             print(f"[FIX ERROR] All {label} fix attempts exhausted. Build still failing.")
-            ollama.print_stats(manager, ctx.program_start, skill_manager)
+            ai.print_stats(manager, ctx.program_start, skill_manager)
             sys.exit(1)
 
         return build_success2
 
-    def run_project_fix_loop(spec_files, manager, ollama, skill_manager, base_fc):
+    def run_project_fix_loop(spec_files, manager, ai, skill_manager, base_fc):
         """Run pbuild --abort-on-fail, detect failure, fix, and restart.
         Returns True if all packages built successfully.
         """
@@ -1922,8 +1922,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
             spec = spec_map[failed_pkg]
             last_failed_pkg = failed_pkg
             print(f"\n[PROJECT BUILD] Package '{failed_pkg}' failed. Running fix loop...")
-            ollama.reset_context()
-            ollama.reset_stats()
+            ai.reset_context()
+            ai.reset_stats()
 
             skills = skill_manager.get_skills_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
             if skills:
@@ -1933,13 +1933,13 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 fix_funcs = []
                 skill_ctx_parts = []
                 for s in skills:
-                    ep = getattr(s, 'OLLAMA_ERROR_PROMPT', '')
+                    ep = getattr(s, 'AI_ERROR_PROMPT', '')
                     if ep:
                         error_prompt_parts.append(ep)
                     ff = getattr(s, 'fix_content', None)
                     if ff:
                         fix_funcs.append(ff)
-                    sc = getattr(s, 'OLLAMA_SPEC_PROMPT', '')
+                    sc = getattr(s, 'AI_SPEC_PROMPT', '')
                     if sc:
                         skill_ctx_parts.append(f"--- Skill: {s.__name__} ---\n{sc}")
                 error_prompt = "\n\n".join(error_prompt_parts) if error_prompt_parts else DEFAULT_ERROR_PROMPT
@@ -2033,21 +2033,21 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         if ctx.generate_prompt:
             run_generate_mode(ctx)
             if not FIX_MODE:
-                ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
+                ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 sys.exit(0)
             # Re-scan for spec files created by generate mode before entering fix phase
             spec_files = [f for f in Path(WORKSPACE_DIR).rglob("*.spec") if manager._is_safe_path(f)]
             ctx.spec_files = spec_files
 
-        # --modify mode: hand sources + prompt to Ollama, apply changes locally
+        # --modify mode: hand sources + prompt to AI, apply changes locally
         modify_ai_calls = 0
         modify_ai_time = 0.0
         if ctx.modify_prompt:
             run_modify_mode(ctx)
-            modify_ai_calls = ollama.ai_calls
-            modify_ai_time = ollama.ai_time
+            modify_ai_calls = ai.ai_calls
+            modify_ai_time = ai.ai_time
             if not FIX_MODE:
-                ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
+                ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 sys.exit(0)  # --modify without --fix: only modifies sources, does not build
 
         # Phase 1: Update pass — update all packages first without building
@@ -2057,8 +2057,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
             email_author = EMAIL if EMAIL else "<Your Name> <your@email>"
             spec_originals = {spec: manager.read_file_safe(spec) for spec in spec_files}
             for spec in spec_files:
-                ollama.reset_context()
-                ollama.reset_stats()
+                ai.reset_context()
+                ai.reset_stats()
 
                 skills = skill_manager.get_skills_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
                 if skills:
@@ -2066,7 +2066,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         print(f"[INFO] Using skill profile: {s.__name__}")
                     skill_ctx_parts = []
                     for s in skills:
-                        skill_ctx = getattr(s, 'OLLAMA_SPEC_PROMPT', '')
+                        skill_ctx = getattr(s, 'AI_SPEC_PROMPT', '')
                         if skill_ctx:
                             skill_ctx_parts.append(f"--- Skill: {s.__name__} ---\n{skill_ctx}")
                     if skill_ctx_parts:
@@ -2097,7 +2097,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     _changes_before = None
                 _release_notes = ""
                 _prefetched_context = ""
-                # Pre-check: try version APIs before involving Ollama
+                # Pre-check: try version APIs before involving AI
                 if not target_version:
                     print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
                     spec_content = manager.read_file_safe(spec)
@@ -2222,7 +2222,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     ]
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
-                    results = ollama.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
+                    results = ai.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
                     if results:
                         for r in results:
                             if r.startswith("web_fetch: [Fetched ") or r.startswith("read_file: "):
@@ -2316,7 +2316,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         ]
                         _changes_file = spec.parent / (spec.stem + '.changes')
                         _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
-                        results = ollama.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
+                        results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
                         if results:
                             for r in results:
                                 if r.startswith("web_fetch: [Fetched ") or r.startswith("read_file: "):
@@ -2449,7 +2449,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     spec.write_text(_spec_current)
                     print("[UPDATE] Fixed RemoteAsset/CreateArchive formatting.")
 
-                # Deterministic source tarball download (not relying on Ollama tool calls)
+                # Deterministic source tarball download (not relying on AI tool calls)
                 if target_version and target_version not in ('latest',):
                     _dl_failed = False
                     try:
@@ -2626,7 +2626,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 _new_v = re.search(r'^Version:\s*(\S+)', spec_after, re.M)
                 _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
                 if spec_after != spec_before_update and _new_v and _old_v and _new_v.group(1) != _old_v.group(1):
-                    # Deterministic changes file update if Ollama didn't handle it
+                    # Deterministic changes file update if AI didn't handle it
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
                     if _changes_after == (_changes_before or ''):
@@ -2639,7 +2639,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     print(f"[UPDATE] No changes for {spec.name}.")
 
             if ctx.update_only:
-                ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
+                ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 if not updated_packages:
                     print("[UPDATE] No changes found. Exiting (--update-only).")
                 else:
@@ -2656,12 +2656,12 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         # Dispatch build strategy
         if PROJECT_MODE and not PACKAGE_FILTER and FIX_MODE:
             # Project-wide abort-on-fail + fix loop (merged --all behavior)
-            if not run_project_fix_loop(spec_files, manager, ollama, skill_manager, full_context):
+            if not run_project_fix_loop(spec_files, manager, ai, skill_manager, full_context):
                 sys.exit(1)
         else:
             for spec in spec_files:
-                ollama.reset_context()
-                ollama.reset_stats()
+                ai.reset_context()
+                ai.reset_stats()
 
                 if UPDATE_VERSION is not None and spec not in updated_packages:
                     continue
@@ -2676,11 +2676,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     fix_funcs = []
                     skill_ctx_parts = []
                     for s in skills:
-                        sp = getattr(s, 'OLLAMA_SPEC_PROMPT', '')
+                        sp = getattr(s, 'AI_SPEC_PROMPT', '')
                         if sp:
                             spec_prompt_parts.append(f"--- Skill: {s.__name__} ---\n{sp}")
                             skill_ctx_parts.append(f"--- Skill: {s.__name__} ---\n{sp}")
-                        ep = getattr(s, 'OLLAMA_ERROR_PROMPT', '')
+                        ep = getattr(s, 'AI_ERROR_PROMPT', '')
                         if ep:
                             error_prompt_parts.append(ep)
                         ff = getattr(s, 'fix_content', None)
@@ -2734,17 +2734,17 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 pass
                         if PROMPT_HINT:
                             analysis_context = f"{analysis_context}\n\n--- User Hint ---\n{PROMPT_HINT}"
-                        _tok = ollama.count_tokens(spec_prompt + "\n\nHere is the context:\n" + _spec_content + (f"\n\n--- AGENTS.md ---\n{analysis_context}" if analysis_context else ""))
-                        print(f"[AI] Analyzing Spec-file: {spec.name}... ({_tok//1024}k/{ollama.max_tokens//1024}k tok)")
-                        spec_analysis = ollama.analyze(spec_prompt, _spec_content, analysis_context, format_json=True)
-                        print(f"-> AI({ollama.model}) says:\n{spec_analysis}\n")
+                        _tok = ai.count_tokens(spec_prompt + "\n\nHere is the context:\n" + _spec_content + (f"\n\n--- AGENTS.md ---\n{analysis_context}" if analysis_context else ""))
+                        print(f"[AI] Analyzing Spec-file: {spec.name}... ({_tok//1024}k/{ai.max_tokens//1024}k tok)")
+                        spec_analysis = ai.analyze(spec_prompt, _spec_content, analysis_context, format_json=True)
+                        print(f"-> AI({ai.model}) says:\n{spec_analysis}\n")
                         manager._spec_analysis = spec_analysis
                         if not FIX_MODE or manager.has_prior_failed_build() or PROMPT_HINT:
                             manager.fix_file_content(spec, fix_func)
 
                 # 4. Build guard: only run pbuild when --fix or --update is active
                 error_prompt = _run_build_guard(
-                    spec, manager, ollama, full_context, error_prompt, ctx,
+                    spec, manager, ai, full_context, error_prompt, ctx,
                     ctx.program_start, run_fix_loop,
                 )
 
@@ -2753,9 +2753,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
             print("[EXIT] Last build attempt failed. Exiting with code 1.")
             sys.exit(1)
 
-        ollama.ai_calls += modify_ai_calls
-        ollama.ai_time += modify_ai_time
-        ollama.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
+        ai.ai_calls += modify_ai_calls
+        ai.ai_time += modify_ai_time
+        ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
     except Exception as e:
         import traceback
         traceback.print_exc()

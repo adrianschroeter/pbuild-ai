@@ -45,8 +45,8 @@ hardware.
    version numbers already sometimes.
  * qwen3 or qwen coder versions
 
-Also older ollama versions are not providing a compatible openai api.
-Use version 0.30 at least.
+ Also, some server backends only expose a compatible OpenAI API from
+version 0.30 onward — use that version at least.
 
 ## Single package
 
@@ -178,7 +178,7 @@ verify after the modification.
 
 ### `--fix`
 
-Test-build a package and attempt to fix failures automatically. Requires Ollama
+Test-build a package and attempt to fix failures automatically. Requires AI
 to diagnose build failures and apply source changes.
 Conflicts with `--analyze` and `--changelog`.
 
@@ -189,41 +189,43 @@ then the set is built again to verify.
 
 ### `--fix --prompt PROMPT`
 
-Runs a test build, and if it fails, passes your hint to Ollama to guide
+Runs a test build, and if it fails, passes your hint to AI to guide
 the fix towards your preferred solution.
 
 ### `--prompt HINT`
 
 Used alongside `--fix` or `--modify`. Provides a general hint that is
-preferred over Ollama's generic analysis when making source changes.
+preferred over AI's generic analysis when making source changes.
 
-### `--ollama-server URL`
+### `--ai-server URL`
 
-Sets the Ollama server URL. Overrides the `OLLAMA_HOST` environment
-variable. Defaults to `http://localhost:11434`.
+Sets the AI server URL. Overrides the `AI_HOST` environment
+variable (the legacy `OLLAMA_HOST` is also honored as a fallback).
+Defaults to `http://localhost:11434`.
 
 ### `--model NAME`
 
-Sets the Ollama model name. Overrides the `OLLAMA_MODEL` environment
-variable. Defaults to `gemma4`.
+Sets the AI model name. Overrides the `AI_MODEL` environment
+variable (the legacy `OLLAMA_MODEL` is also honored as a fallback).
+Defaults to `gemma4`.
 
-### `--ollama-option KEY=VALUE`
+### `--ai-option KEY=VALUE`
 
-Pass a model parameter to Ollama (repeatable). Supported keys include
+Pass a model parameter to AI (repeatable). Supported keys include
 `temperature`, `num_ctx`, `top_p`, `stop`, `seed`, etc. Common use cases:
 
 ```bash
 # Reduce creativity for more deterministic fixes
-pbuild-ai --fix bc --ollama-option temperature=0.1
+pbuild-ai --fix bc --ai-option temperature=0.1
 
 # Increase context window for large spec files
-pbuild-ai --fix bc --ollama-option num_ctx=16384
+pbuild-ai --fix bc --ai-option num_ctx=16384
 
 # Disable thinking/reasoning (for models that support it, e.g. gemma4, qwen3)
-pbuild-ai --fix bc --ollama-option thinking=false
+pbuild-ai --fix bc --ai-option thinking=false
 
 # Reduce maximum tokens to predict
-pbuild-ai --fix bc --ollama-option num_predict=2048
+pbuild-ai --fix bc --ai-option num_predict=2048
 ```
 
 Values are automatically coerced: strings containing `.` become floats,

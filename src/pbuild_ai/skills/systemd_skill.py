@@ -6,7 +6,7 @@ TARGET_PATTERN = r"(?i)(?:^|(?<=-))(?:systemd|service|tmpfiles|sysusers)"  # fil
 CONTENT_PATTERN = r"(?i)(?:%\{_unitdir\}|%\{_userunitdir\}|%service_add_|%tmpfiles_create|%sysusers_create|BuildRequires:\s*systemd-rpm-macros|systemctl)"
 PROMPT_PATTERN = r"(?i)(?:systemd\s+(?:service|unit|packag)|service\s+file|unit\s+file|tmpfiles?\.d|sysusers?\.d)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in systemd RPM packaging for openSUSE. Follow the openSUSE systemd packaging guidelines.
 
 ## Build Requirements
@@ -163,7 +163,7 @@ If the package needs dedicated system users/groups, ship a sysusers.d snippet:
 | `%fillup_only` | Legacy sysv compat — rarely needed |
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a systemd service RPM build failure for openSUSE.
 
 ## Common build errors

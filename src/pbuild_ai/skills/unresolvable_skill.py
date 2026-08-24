@@ -6,7 +6,7 @@ PROMPT_PATTERN = r"(?i)(nothing provides|unresolvable|no provider|has no possibi
 # Also trigger when spec contains known problematic patterns
 CONTENT_PATTERN = r"(?i)BuildRequires:\s*(libosmesa|OpenGL|nvidia)"
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging an unresolved RPM dependency error for openSUSE.
 
 IMPORTANT: Do NOT use web_fetch to look up package names or files on external

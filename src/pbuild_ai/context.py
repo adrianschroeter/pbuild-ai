@@ -44,10 +44,10 @@ class PbuildContext:
     debug: bool = False
     shell_after_build: bool = False
     interactive: bool = False
-    ollama_server: Optional[str] = None  # --openai-server
-    ollama_model_arg: Optional[str] = None
-    ollama_timeout: int = 900  # --ollama-timeout
-    ollama_options: dict = field(default_factory=dict)  # --ollama-option
+    ai_server: Optional[str] = None  # --ai-server
+    ai_model_arg: Optional[str] = None
+    ai_timeout: int = 900  # --ai-timeout
+    ai_options: dict = field(default_factory=dict)  # --ai-option
     email: str = ""
     try_build_first: bool = False
     auto_deps: int = 0  # 0=disabled, >0=depth
@@ -63,7 +63,7 @@ class PbuildContext:
 
     # Runtime objects (set after construction)
     manager: Optional[object] = None
-    ollama: Optional[object] = None
+    ai: Optional[object] = None
     skill_manager: Optional[object] = None
     tools: list = field(default_factory=list)
     spec_files: list = field(default_factory=list)

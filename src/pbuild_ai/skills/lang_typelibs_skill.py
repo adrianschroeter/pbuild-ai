@@ -9,7 +9,7 @@ CONTENT_PATTERN = r"(?i)(?:gobject-introspection|typelib-|girepository|%\{_typel
 PROMPT_PATTERN = r"(?i)(?:typelib|gobject-introspection|gir\s+(?:file|scan)|girepository)"
 
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Typelib (GObject Introspection) RPM packaging for openSUSE. Follow the openSUSE Typelibs packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Typelibs
 
 ## Naming convention
@@ -89,7 +89,7 @@ GObject Introspection bindings for the Memphis library.
 - Do NOT add manual Provides/Requires for typelib dependencies — the scanner handles this
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Typelib (GObject Introspection) RPM build failure for openSUSE.
 
 ## Common Typelib build errors

@@ -1,6 +1,6 @@
 CONTENT_PATTERN = r"BuildRequires:\s*(pkgconfig\(Qt5|python3-qt5|qt5-base-devel)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Qt5 RPM packaging for openSUSE.
 
 ## Qt5 BuildRequires rules
@@ -34,7 +34,7 @@ The general rule: always prefer the fine-grained `pkgconfig(Qt5<Module>)` form o
 If the spec already uses `pkgconfig(Qt5*)` patterns, verify they match the actual Qt5 modules used in the source code.
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging a Qt5 RPM build failure for openSUSE.
 
 Common Qt5 build errors:

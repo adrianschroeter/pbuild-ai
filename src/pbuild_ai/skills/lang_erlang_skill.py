@@ -9,7 +9,7 @@ CONTENT_PATTERN = r"(?i)(?:%\{erlang_dir\}|%\{erlang_libdir\}|%\{__erl\}|%\{__re
 PROMPT_PATTERN = r"(?i)(?:erlang\s+packag|rebar[23]?\s|otp\s+packag|beam\s+file|erlang\s+rpm)"
 
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an expert in Erlang RPM packaging for openSUSE. Follow the openSUSE Erlang packaging guidelines from https://en.opensuse.org/openSUSE:Packaging_Erlang
 
 ## Development repository
@@ -93,7 +93,7 @@ rm -f rebar.lock
 - Prefer rebar (rebar2) over rebar3 for packaging due to rebar3's network dependency issues
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are debugging an Erlang RPM build failure for openSUSE.
 
 ## Common Erlang build errors

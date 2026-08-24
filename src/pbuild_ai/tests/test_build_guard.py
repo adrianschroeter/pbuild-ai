@@ -36,9 +36,9 @@ class TestBuildGuard(unittest.TestCase):
         self.manager.run_full_project_build.side_effect = AssertionError("pbuild should not be called")
         self.manager.run_deep_analyze_shell.side_effect = AssertionError("pbuild should not be called")
 
-        # Ollama: needs model attribute for failure messages
-        self.ollama = MagicMock()
-        self.ollama.model = "test-model"
+        # AI: needs model attribute for failure messages
+        self.ai = MagicMock()
+        self.ai.model = "test-model"
 
         # Context: no fix, no update
         self.ctx = PbuildContext(
@@ -66,7 +66,7 @@ class TestBuildGuard(unittest.TestCase):
         """_run_build_guard must NOT call pbuild when --fix and --update are both absent."""
         error_prompt = "test error prompt"
         result = _run_build_guard(
-            self.spec_path, self.manager, self.ollama, "full_context",
+            self.spec_path, self.manager, self.ai, "full_context",
             error_prompt, self.ctx, 100.0, self.run_fix_loop,
         )
 
@@ -97,7 +97,7 @@ class TestBuildGuard(unittest.TestCase):
         self.manager.build_phase_reached.return_value = True
 
         _run_build_guard(
-            self.spec_path, self.manager, self.ollama, "full_context",
+            self.spec_path, self.manager, self.ai, "full_context",
             "error prompt", self.ctx, 100.0, self.run_fix_loop,
         )
 
@@ -114,7 +114,7 @@ class TestBuildGuard(unittest.TestCase):
         self.manager.build_phase_reached.return_value = True
 
         _run_build_guard(
-            self.spec_path, self.manager, self.ollama, "full_context",
+            self.spec_path, self.manager, self.ai, "full_context",
             "error prompt", self.ctx, 100.0, self.run_fix_loop,
         )
 
@@ -131,7 +131,7 @@ class TestBuildGuard(unittest.TestCase):
         self.manager.build_phase_reached.return_value = True
 
         _run_build_guard(
-            self.spec_path, self.manager, self.ollama, "full_context",
+            self.spec_path, self.manager, self.ai, "full_context",
             "error prompt", self.ctx, 100.0, self.run_fix_loop,
         )
 
@@ -148,7 +148,7 @@ class TestBuildGuard(unittest.TestCase):
         self.manager.build_phase_reached.return_value = True
 
         _run_build_guard(
-            self.spec_path, self.manager, self.ollama, "full_context",
+            self.spec_path, self.manager, self.ai, "full_context",
             "error prompt", self.ctx, 100.0, self.run_fix_loop,
         )
 
@@ -166,7 +166,7 @@ class TestBuildGuard(unittest.TestCase):
                     self.ctx.package_filter = pkg_filter
                     self.ctx.project_mode = proj_mode
                     _run_build_guard(
-                        self.spec_path, self.manager, self.ollama, "full_context",
+                        self.spec_path, self.manager, self.ai, "full_context",
                         "error", self.ctx, 100.0, self.run_fix_loop,
                     )
                     self.manager.run_orphan_build.assert_not_called()
@@ -186,8 +186,8 @@ class TestBuildGuardBuildFails(unittest.TestCase):
         self.manager.run_project_build.return_value = (False, "error: some build error")
         self.manager.build_phase_reached.return_value = True
 
-        self.ollama = MagicMock()
-        self.ollama.model = "test-model"
+        self.ai = MagicMock()
+        self.ai.model = "test-model"
 
         self.ctx = PbuildContext(
             workspace_dir=self.tmpdir,
@@ -206,11 +206,11 @@ class TestBuildGuardBuildFails(unittest.TestCase):
         """When --fix is active and build fails, run_fix_loop must be called.
         analyze is skipped here — run_fix_loop handles it internally."""
         _run_build_guard(
-            self.spec_path, self.manager, self.ollama, "full_context",
+            self.spec_path, self.manager, self.ai, "full_context",
             "error prompt", self.ctx, 100.0, self.run_fix_loop,
         )
         self.manager.run_orphan_build.assert_called_once()
-        self.ollama.analyze.assert_not_called()
+        self.ai.analyze.assert_not_called()
         self.run_fix_loop.assert_called_once()
 
     def test_no_fix_loop_without_fix_mode(self):
@@ -219,21 +219,21 @@ class TestBuildGuardBuildFails(unittest.TestCase):
         self.ctx.update_version = "2.0"
 
         _run_build_guard(
-            self.spec_path, self.manager, self.ollama, "full_context",
+            self.spec_path, self.manager, self.ai, "full_context",
             "error prompt", self.ctx, 100.0, self.run_fix_loop,
         )
         self.run_fix_loop.assert_not_called()
 
     def test_analyze_not_called_when_no_build(self):
-        """Without --fix or --update, ollama.analyze must NOT be called."""
+        """Without --fix or --update, ai.analyze must NOT be called."""
         self.ctx.fix_mode = False
         self.ctx.update_version = None
 
         _run_build_guard(
-            self.spec_path, self.manager, self.ollama, "full_context",
+            self.spec_path, self.manager, self.ai, "full_context",
             "error prompt", self.ctx, 100.0, self.run_fix_loop,
         )
-        self.ollama.analyze.assert_not_called()
+        self.ai.analyze.assert_not_called()
 
     def test_gitexplorer_not_called_when_no_build(self):
         """Without --fix or --update, gitexplorer injection must NOT be attempted."""
@@ -242,7 +242,7 @@ class TestBuildGuardBuildFails(unittest.TestCase):
 
         with unittest.mock.patch('pbuild_ai.pbuild_ai._inject_gitexplorer_results') as mock_inject:
             _run_build_guard(
-                self.spec_path, self.manager, self.ollama, "full_context",
+                self.spec_path, self.manager, self.ai, "full_context",
                 "error prompt", self.ctx, 100.0, self.run_fix_loop,
             )
             mock_inject.assert_not_called()
@@ -252,7 +252,7 @@ class TestBuildGuardBuildFails(unittest.TestCase):
         self.run_fix_loop.side_effect = SystemExit(1)
         with self.assertRaises(SystemExit) as cm:
             _run_build_guard(
-                self.spec_path, self.manager, self.ollama, "full_context",
+                self.spec_path, self.manager, self.ai, "full_context",
                 "error prompt", self.ctx, 100.0, self.run_fix_loop,
             )
         self.assertEqual(cm.exception.code, 1)
@@ -280,8 +280,8 @@ class TestAnalyzeFlag(unittest.TestCase):
         manager.run_orphan_build.side_effect = AssertionError("pbuild should not be called")
         manager.run_project_build.side_effect = AssertionError("pbuild should not be called")
 
-        ollama = MagicMock()
-        ollama.model = "test-model"
+        ai = MagicMock()
+        ai.model = "test-model"
         tmpdir = tempfile.mkdtemp(prefix="pbuild_analyze_test_")
         try:
             spec_path = Path(tmpdir) / "testpkg.spec"
@@ -293,7 +293,7 @@ class TestAnalyzeFlag(unittest.TestCase):
                 analyze_mode=True,
             )
             result = _run_build_guard(
-                spec_path, manager, ollama, "full_context",
+                spec_path, manager, ai, "full_context",
                 "error prompt", ctx, 100.0, MagicMock(),
             )
             manager.run_orphan_build.assert_not_called()

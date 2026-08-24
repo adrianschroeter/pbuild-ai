@@ -1,6 +1,6 @@
 PROMPT_PATTERN = r"(?i)(clean.?up|standardi[sz]|spec-?cleaner|normali[sz]|format spec|lint spec|tidy|sanitize)"
 
-OLLAMA_SPEC_PROMPT = """
+AI_SPEC_PROMPT = """
 You are an openSUSE spec file cleanup assistant. Your task is to clean up and standardize the spec file following openSUSE packaging conventions (documented in OPENSUSE.md).
 
 ## Required clean-up steps (do ALL of them):
@@ -57,7 +57,7 @@ If you make significant changes (e.g., converted from obs_scm), add a changelog 
 Apply all these changes now using the available tools. Prefer `edit_file` for targeted changes (include enough surrounding lines so old_string matches ONLY ONE location) and `write_file` only for large rewrites or new files.
 """
 
-OLLAMA_ERROR_PROMPT = """
+AI_ERROR_PROMPT = """
 You are cleaning up an openSUSE spec file. The spec failed to process after your changes.
 Check for:
 - Syntax errors from format_spec_file (run `run_tool_script("format_spec_file", ...)` to fix formatting)
