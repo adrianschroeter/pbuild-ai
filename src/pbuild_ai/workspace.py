@@ -79,6 +79,29 @@ class RpmSourceManager:
         self.base_dir = Path(base_dir).resolve()
         if not self.base_dir.is_dir():
             raise ValueError(f"Base directory {self.base_dir} does not exist.")
+        self.osc_mode = False
+        self.osc_project = None
+        self.osc_repository = None
+        self.osc_apiurl = "https://api.opensuse.org"
+        osc_dir = self.base_dir / ".osc"
+        if osc_dir.is_dir():
+            project_file = osc_dir / "_project"
+            repos_file = osc_dir / "_build_repositories"
+            apiurl_file = osc_dir / "_apiurl"
+            if project_file.is_file() and repos_file.is_file():
+                project = project_file.read_text().strip()
+                repository = ""
+                for line in repos_file.read_text().splitlines():
+                    if line.strip():
+                        repository = line.strip().split()[0]
+                        break
+                if apiurl_file.is_file():
+                    self.osc_apiurl = apiurl_file.read_text().strip() or self.osc_apiurl
+                if project and repository:
+                    self.osc_project = project
+                    self.osc_repository = repository
+                    self.osc_mode = True
+                    print(f"[OSC] Building against {self.osc_apiurl} project '{project}' repo '{repository}'")
         self.root_dir = root_dir
 
         self.allowed_commands = {
@@ -192,18 +215,25 @@ class RpmSourceManager:
             err += "\n".join(stdout.split('\n')[-100:]) if stdout else "No output"
             return False, err
 
+    def _target_args(self, dist=None, preset=None, default_dist="tumbleweed", fallback=True):
+        if self.osc_mode and self.osc_project and self.osc_repository:
+            return ["--obs", self.osc_apiurl, "--dist", f"obs://{self.osc_project}/{self.osc_repository}"]
+        elif preset:
+            return ["--preset", preset]
+        elif dist:
+            return ["--dist", dist]
+        elif fallback:
+            return ["--dist", default_dist]
+        else:
+            return []
+
     def run_orphan_build(self, dist=None, preset=None, stream_output=False, force_clean=False):
         cmd = ["pbuild", "--orphan", "--release", "0"]
         if self.root_dir:
             cmd.extend(["--root", self.root_dir])
         if not (self.do_clean or force_clean):
             cmd.append("--no-clean")
-        if preset:
-            cmd.extend(["--preset", preset])
-        elif dist:
-            cmd.extend(["--dist", dist])
-        else:
-            cmd.extend(["--dist", "tumbleweed"])
+        cmd.extend(self._target_args(dist, preset, "tumbleweed", True))
         if self.vm_type:
             cmd.extend(["--vm-type", self.vm_type])
         if self.vm_memory:
@@ -353,10 +383,7 @@ class RpmSourceManager:
             cmd.extend(["--root", self.root_dir])
         if not (self.do_clean or force_clean):
             cmd.append("--no-clean")
-        if preset:
-            cmd.extend(["--preset", preset])
-        elif dist:
-            cmd.extend(["--dist", dist])
+        cmd.extend(self._target_args(dist, preset, "tumbleweed", False))
         if self.vm_type:
             cmd.extend(["--vm-type", self.vm_type])
         if self.vm_memory:
@@ -397,10 +424,8 @@ class RpmSourceManager:
         cmd.append("--shell-after-fail")
         if not self.do_clean:
             cmd.append("--no-clean")
-        if self.preset and package_name:
-            cmd.extend(["--preset", self.preset])
-        elif package_name:
-            cmd.extend(["--dist", "tumbleweed"])
+        if package_name:
+            cmd.extend(self._target_args(None, self.preset, "tumbleweed", True))
         if self.vm_type:
             cmd.extend(["--vm-type", self.vm_type])
         if self.vm_memory:
@@ -641,10 +666,7 @@ Summarize the root cause of the {package_name} build failure and what fix is nee
             cmd.extend(["--root", self.root_dir])
         if not (self.do_clean or force_clean):
             cmd.append("--no-clean")
-        if self.preset:
-            cmd.extend(["--preset", self.preset])
-        elif dist:
-            cmd.extend(["--dist", dist])
+        cmd.extend(self._target_args(dist, self.preset, "tumbleweed", False))
         if self.vm_type:
             cmd.extend(["--vm-type", self.vm_type])
         if self.vm_memory:
