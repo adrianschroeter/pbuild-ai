@@ -2309,6 +2309,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             changelog_prompt=CHANGELOG_PROMPT,
                             release_notes=_release_notes,
                             prefetched_context=_prefetched_context,
+                            repo='',
+                            name='',
+                            version=target_version,
+                            actual_filenames='',
                         )
                         messages = [
                             {"role": "system", "content": update_prompt},
