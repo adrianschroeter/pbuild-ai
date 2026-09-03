@@ -20,6 +20,83 @@ _FORMAT_SPEC_FILE_PATH = "/usr/lib/obs/service/format_spec_file"
 MAX_ARCHIVE_READ_SIZE = 512 * 1024  # 500 KB
 _ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
 
+# Directories searched, in order, when run_tool_script gets a bare script name.
+_TOOL_SCRIPT_DIRS = ("tool-scripts", "skills", ".agents/skills")
+
+# Scripts the user interactively approved for execution during this process.
+# Grants are per script name, process-scoped and never persisted.
+_GRANTED_TOOL_SCRIPTS = set()
+
+
+def tool_script_granted(script_name):
+    """True if the user interactively approved execution of this script name."""
+    return (script_name or "").strip() in _GRANTED_TOOL_SCRIPTS
+
+
+def grant_tool_script(script_name):
+    """Record user consent to run this script name for the rest of the process."""
+    _GRANTED_TOOL_SCRIPTS.add((script_name or "").strip())
+
+
+def reset_tool_script_grants():
+    """Drop all interactive grants."""
+    _GRANTED_TOOL_SCRIPTS.clear()
+
+
+def _resolve_tool_script(workspace, manager, script_name):
+    """Resolve a run_tool_script reference to a path inside the workspace.
+
+    Accepts a bare script name (searched under tool-scripts/, skills/ and
+    .agents/skills/) or a workspace-relative path such as
+    '.agents/skills/post-update.sh'. Returns (path, error); path is None when
+    unresolvable, and error is None when nothing exists at all and no script
+    directory is present.
+    """
+    name = (script_name or "").strip()
+    if not name:
+        return None, "Error: run_tool_script requires a script_name."
+    if "/" in name:
+        candidate = (workspace / name).resolve(strict=False)
+        if not manager._is_safe_path(candidate):
+            return None, f"Error: Script '{script_name}' is outside the workspace directory."
+        if candidate.is_file():
+            return candidate, None
+    for base in _TOOL_SCRIPT_DIRS:
+        candidate = (workspace / base / name).resolve(strict=False)
+        if manager._is_safe_path(candidate) and candidate.is_file():
+            return candidate, None
+    if not any((workspace / base).is_dir() for base in _TOOL_SCRIPT_DIRS):
+        return None, None
+    return None, (f"Error: Script '{script_name}' not found in tool-scripts/, skills/, "
+                  "or .agents/skills/ (a workspace-relative path is also accepted).")
+
+
+def _ask_tool_script_consent(script_path, args):
+    """Ask the user to allow execution of one specific tool script."""
+    arg_text = " ".join(str(a) for a in (args or [])) or "(none)"
+    print("\n[ASK USER] Tool-script execution is disabled (--allow-tool-scripts not set),")
+    print("           but the project rules appear to require this script:")
+    print(f"             Script: {script_path}")
+    print(f"             Args:   {arg_text}")
+    try:
+        answer = input("      Allow running this script for this session? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer in ("y", "yes")
+
+
+def _blocked_tool_script_message(script_name, script_path):
+    """Result text returned when a tool script may not be executed."""
+    shown = str(script_path) if script_path else script_name
+    return (
+        f"BLOCKED: execution of '{shown}' is not permitted because tool-script execution "
+        "is disabled (re-run with --allow-tool-scripts, or with --interactive to be asked "
+        "for permission per script). If AGENTS.md or the skill rules mark this step as "
+        "required, do NOT continue and do NOT claim success: respond with a line "
+        f"containing exactly [ABORT: tool-script {script_name} execution blocked]."
+    )
+
 
 def format_tool_display(name, inp, r, debug):
     """Format a tool result for user-facing display.
@@ -311,13 +388,13 @@ def build_tools_list(interactive=False):
             "type": "function",
             "function": {
                 "name": "run_tool_script",
-                "description": "Execute a script from the tool-scripts directory within the workspace. The script must exist in <workspace>/tool-scripts/.",
+                "description": "Execute a script inside the workspace. Pass either a bare script name (looked up in tool-scripts/, skills/ and .agents/skills/) or a workspace-relative path exactly as written in AGENTS.md, e.g. .agents/skills/post-update.sh.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "script_name": {
                             "type": "string",
-                            "description": "Name of the script file (e.g., 'setup.sh')"
+                            "description": "Bare script name (e.g. 'setup.sh') or a workspace-relative path such as '.agents/skills/post-update.sh'"
                         },
                         "args": {
                             "type": "array",
@@ -502,6 +579,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 if file_path.resolve().is_relative_to(workspace / "tool-scripts"):
                     results.append(f"Error: Cannot write to tool-scripts/ directory: {tool_input['path']}")
                     continue
+                if file_path.resolve().is_relative_to(workspace / "skills") or file_path.resolve().is_relative_to(workspace / ".agents" / "skills"):
+                    results.append(f"Error: Cannot write to tool-scripts/ or skills/ directory: {tool_input['path']}")
+                    continue
             except ValueError:
                 pass
             try:
@@ -551,6 +631,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             try:
                 if file_path.resolve().is_relative_to(workspace / "tool-scripts"):
                     results.append(f"Error: Cannot edit files in tool-scripts/ directory: {path}")
+                    continue
+                if file_path.resolve().is_relative_to(workspace / "skills") or file_path.resolve().is_relative_to(workspace / ".agents" / "skills"):
+                    results.append(f"Error: Cannot edit files in tool-scripts/ or skills/ directory: {path}")
                     continue
             except ValueError:
                 pass
@@ -607,6 +690,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             try:
                 if file_path.resolve().is_relative_to(workspace / "tool-scripts"):
                     results.append(f"Error: Cannot patch files in tool-scripts/ directory: {path}")
+                    continue
+                if file_path.resolve().is_relative_to(workspace / "skills") or file_path.resolve().is_relative_to(workspace / ".agents" / "skills"):
+                    results.append(f"Error: Cannot patch files in tool-scripts/ or skills/ directory: {path}")
                     continue
             except ValueError:
                 pass
@@ -814,6 +900,11 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 if file_path.resolve().is_relative_to(workspace / "tool-scripts"):
                     results.append(f"Error: Cannot download to tool-scripts/ directory: {filename}")
                     continue
+                if file_path.resolve().is_relative_to(workspace / "skills") or file_path.resolve().is_relative_to(workspace / ".agents" / "skills"):
+                    results.append(f"Error: Cannot download to tool-scripts/ or skills/ directory: {filename}")
+                    continue
+            except ValueError:
+                pass
             except ValueError:
                 pass
             try:
@@ -969,19 +1060,20 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 except (subprocess.TimeoutExpired, PermissionError) as e:
                     results.append(f"Warning: format_spec_file error: {e}")
                 continue
-            if not allow_tool_scripts:
-                if (workspace / "tool-scripts").is_dir():
-                    results.append("Warning: run_tool_script requires --allow-tool-scripts")
-                else:
+            script_path, _resolve_error = _resolve_tool_script(workspace, manager, script_name)
+            if script_path is None:
+                if _resolve_error is None and not any((workspace / _d).is_dir() for _d in _TOOL_SCRIPT_DIRS):
                     results.append("")
+                else:
+                    results.append(_resolve_error or f"Error: Script '{script_name}' not found.")
                 continue
-            script_path = workspace / "tool-scripts" / script_name
-            if not manager._is_safe_path(script_path):
-                results.append(f"Error: Script '{script_name}' is outside the workspace directory.")
-                continue
-            if not script_path.is_file():
-                results.append(f"Error: Script '{script_name}' not found in tool-scripts/ directory.")
-                continue
+            if not allow_tool_scripts and not tool_script_granted(script_name):
+                if interactive and _ask_tool_script_consent(script_path, args):
+                    grant_tool_script(script_name)
+                    print(f"[GRANT] Tool-script execution enabled for this session: {script_name}")
+                else:
+                    results.append(_blocked_tool_script_message(script_name, script_path))
+                    continue
             full_cmd = [str(script_path)] + args
             try:
                 result = subprocess.run(full_cmd, capture_output=True, text=True, cwd=workspace)

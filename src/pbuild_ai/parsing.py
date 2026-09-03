@@ -192,7 +192,7 @@ def parse_agents_md_scripts(agents_text, scripts_dir):
                 startup.append(m.group(1))
                 continue
 
-        if scripts_dir.is_dir():
+        if in_startup_section and scripts_dir.is_dir():
             for f in scripts_dir.iterdir():
                 if f.is_file() and f.name in stripped:
                     if f.name not in startup:

@@ -13,7 +13,12 @@ if SRC_DIR not in sys.path:
 
 from pbuild_ai.utils import resolve_path
 from pbuild_ai.workspace import RpmSourceManager
-from pbuild_ai.tools import execute_tool_calls
+from pbuild_ai.tools import (
+    execute_tool_calls,
+    grant_tool_script,
+    reset_tool_script_grants,
+    tool_script_granted,
+)
 
 
 class TestResolvePath(unittest.TestCase):
@@ -489,6 +494,160 @@ class TestExecuteToolCallsSandbox(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertIn("Wrote", results[0])
         self.assertEqual(results[1], "")
+
+
+class TestToolScriptPathResolution(unittest.TestCase):
+    """run_tool_script accepts bare names and workspace-relative paths."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_test_")
+        self.ws = Path(self.tmpdir).resolve()
+        self.manager = RpmSourceManager(str(self.ws))
+        reset_tool_script_grants()
+
+    def tearDown(self):
+        reset_tool_script_grants()
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _script(self, rel, body="#!/bin/sh\necho ran-ok\n"):
+        p = self.ws / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+        p.chmod(0o755)
+        return p
+
+    def _run(self, script_name, **kw):
+        return execute_tool_calls(
+            [("run_tool_script", {"script_name": script_name, "args": []})],
+            self.manager, str(self.ws), **kw,
+        )
+
+    def test_agents_skills_relative_path_resolves(self):
+        self._script(".agents/skills/post-update.sh")
+        results = self._run(".agents/skills/post-update.sh", allow_tool_scripts=True)
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("Error", results[0])
+        self.assertIn("ran-ok", results[0])
+
+    def test_skills_dir_relative_path_resolves(self):
+        self._script("skills/post-update.sh")
+        results = self._run("skills/post-update.sh", allow_tool_scripts=True)
+        self.assertIn("ran-ok", results[0])
+
+    def test_bare_name_found_in_agents_skills(self):
+        self._script(".agents/skills/post-update.sh")
+        results = self._run("post-update.sh", allow_tool_scripts=True)
+        self.assertIn("ran-ok", results[0])
+
+    def test_relative_escape_outside_workspace_blocked(self):
+        results = self._run("../evil.sh", allow_tool_scripts=True)
+        self.assertEqual(len(results), 1)
+        self.assertIn("outside the workspace", results[0])
+
+    def test_path_form_still_blocked_without_flag(self):
+        self._script(".agents/skills/post-update.sh")
+        results = self._run(".agents/skills/post-update.sh", allow_tool_scripts=False)
+        self.assertEqual(len(results), 1)
+        self.assertIn("BLOCKED", results[0])
+        self.assertIn("--allow-tool-scripts", results[0])
+
+    def test_blocked_message_tells_ai_to_abort(self):
+        self._script(".agents/skills/post-update.sh")
+        results = self._run(".agents/skills/post-update.sh", allow_tool_scripts=False)
+        self.assertIn("[ABORT:", results[0])
+
+
+class TestToolScriptInteractiveConsent(unittest.TestCase):
+    """With --interactive the user is asked once per script name."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_test_")
+        self.ws = Path(self.tmpdir).resolve()
+        self.manager = RpmSourceManager(str(self.ws))
+        reset_tool_script_grants()
+        for name in ("post-update.sh", "other.sh"):
+            p = self.ws / ".agents" / "skills" / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("#!/bin/sh\necho ran-ok\n")
+            p.chmod(0o755)
+
+    def tearDown(self):
+        reset_tool_script_grants()
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _run(self, script_name="post-update.sh", answers=(), interactive=True):
+        with mock.patch("builtins.input", side_effect=list(answers)) as inp:
+            results = execute_tool_calls(
+                [("run_tool_script", {"script_name": script_name, "args": []})],
+                self.manager, str(self.ws),
+                allow_tool_scripts=False, interactive=interactive,
+            )
+        return results, inp.call_count
+
+    def test_consent_yes_executes_script(self):
+        results, asked = self._run(answers=["y"])
+        self.assertEqual(asked, 1)
+        self.assertIn("ran-ok", results[0])
+
+    def test_consent_declined_blocks_with_abort_hint(self):
+        results, asked = self._run(answers=["n"])
+        self.assertEqual(asked, 1)
+        self.assertIn("BLOCKED", results[0])
+        self.assertIn("[ABORT:", results[0])
+
+    def test_empty_answer_defaults_to_denied(self):
+        results, _ = self._run(answers=[""])
+        self.assertIn("BLOCKED", results[0])
+
+    def test_grant_is_not_asked_twice_for_same_script(self):
+        with mock.patch("builtins.input", return_value="y") as inp:
+            first = execute_tool_calls(
+                [("run_tool_script", {"script_name": "post-update.sh", "args": []})],
+                self.manager, str(self.ws), allow_tool_scripts=False, interactive=True,
+            )
+            second = execute_tool_calls(
+                [("run_tool_script", {"script_name": "post-update.sh", "args": []})],
+                self.manager, str(self.ws),
+                allow_tool_scripts=False, interactive=True,
+            )
+        self.assertIn("ran-ok", first[0])
+        self.assertIn("ran-ok", second[0])
+        self.assertEqual(inp.call_count, 1)
+
+    def test_different_script_asks_again(self):
+        with mock.patch("builtins.input", return_value="y") as inp:
+            execute_tool_calls(
+                [("run_tool_script", {"script_name": "post-update.sh", "args": []})],
+                self.manager, str(self.ws), allow_tool_scripts=False, interactive=True,
+            )
+            execute_tool_calls(
+                [("run_tool_script", {"script_name": "other.sh", "args": []})],
+                self.manager, str(self.ws), allow_tool_scripts=False, interactive=True,
+            )
+        self.assertEqual(inp.call_count, 2)
+
+    def test_non_interactive_never_prompts(self):
+        results, asked = self._run(answers=[], interactive=False)
+        self.assertEqual(asked, 0)
+        self.assertIn("BLOCKED", results[0])
+
+    def test_flag_skips_consent_prompt(self):
+        with mock.patch("builtins.input") as inp:
+            results = execute_tool_calls(
+                [("run_tool_script", {"script_name": "post-update.sh", "args": []})],
+                self.manager, str(self.ws), allow_tool_scripts=True, interactive=True,
+            )
+        inp.assert_not_called()
+        self.assertIn("ran-ok", results[0])
+
+    def test_grant_helpers_round_trip(self):
+        self.assertFalse(tool_script_granted("x.sh"))
+        grant_tool_script("x.sh")
+        self.assertTrue(tool_script_granted("x.sh"))
+        reset_tool_script_grants()
+        self.assertFalse(tool_script_granted("x.sh"))
 
 
 class TestGitPushBlocked(unittest.TestCase):

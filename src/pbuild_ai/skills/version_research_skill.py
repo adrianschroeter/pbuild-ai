@@ -8,6 +8,11 @@ CRITICAL: FIRST determine the current version from the Version tag in the spec. 
 
 If a newer version exists, you MUST complete ALL steps before stopping.
 
+MANDATORY PROJECT STEPS: The "Additional context (AGENTS.md + skill rules)" section at the end of this message may define REQUIRED project steps that must run after a version change (for example a rule such as "After changed the package version in the spec file: make sure to call .agents/skills/something.sh"). Treat every such rule as MANDATORY, with the same priority as the numbered steps below.
+- Perform those project steps AFTER the Version tag and .changes edits are done, and BEFORE you stop.
+- A script named in AGENTS.md must be executed with run_tool_script, passing the script reference exactly as written in AGENTS.md — a workspace-relative path such as .agents/skills/something.sh is a valid script_name.
+- If a mandated step cannot be performed because the script is missing, execution is blocked, or the script exits with a non-zero status, do NOT continue silently and do NOT report success. Respond with a line containing exactly [ABORT: reason] and make no further file changes.
+
 Steps (do them in order, never skip any):
 1. Examine the Source URLs in the spec to identify the upstream project. Also check the `URL:` tag (upstream homepage) — it may point to the current project home even if the Source URL is stale.
  2. Use web_fetch to find the latest stable version:
@@ -31,7 +36,7 @@ Steps (do them in order, never skip any):
    - Change the Version tag to the new version number
    - When updating Source/Patch URLs, keep all RPM macros (%{{version}}, %{{name}}, etc.) intact — never expand them to literal values. Only replace literal OLD version numbers that appear in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if 1.0.19 was the old version). If the current Source is a plain tarball URL (.tar.gz, .tar.xz, .tar.bz2) without _service or RemoteAsset/CreateArchive lines, keep it as a plain tarball URL — do NOT create _service or add RemoteAsset/CreateArchive.
    - If the Source line contains only a local filename (e.g., `Source: %{{name}}-%{{version}}.tar.gz`) without a proper download scheme (http://, https://, ftp://, git+), AND you have determined the actual upstream download URL: update the Source line to include the full URL with %{{version}} and %{{name}} macros. Example: change `Source: %{{name}}-%{{version}}.tar.gz` to `Source: https://github.com/OWNER/REPO/releases/download/v%{{version}}/%{{name}}-%{{version}}.tar.gz`. IMPORTANT: In OBS, Source URLs use direct scheme-based URLs (https://, http://, ftp://, git+). Do NOT use `filename::url` or double-colon syntax — it is NOT valid in OBS.
-   - GitHub archive URLs (github.com/.../archive/refs/tags/vVERSION.tar.gz) redirect: the server delivers the file as `{repo}-{version}.tar.gz` (not `v{version}.tar.gz`). After calling download_file, check the result for "Server suggests filename" — if the actual filename differs from the URL basename, append `#/{actual_filenames}` to the Source URL in the spec. Example: `Source0: https://github.com/owner/repo/archive/refs/tags/v%{{version}}.tar.gz#/repo-%{{version}}.tar.xz`. Do NOT add `#` fragments for non-GitHub tarball URLs that serve the correct filename directly.
+   - GitHub archive URLs (github.com/.../archive/refs/tags/vVERSION.tar.gz) redirect: the server delivers the file as `{{repo}}-{{version}}.tar.gz` (not `v{{version}}.tar.gz`). After calling download_file, check the result for "Server suggests filename" — if the actual filename differs from the URL basename, append `#/{{actual_filenames}}` to the Source URL in the spec. Example: `Source0: https://github.com/owner/repo/archive/refs/tags/v%{{version}}.tar.gz#/repo-%{{version}}.tar.xz`. Do NOT add `#` fragments for non-GitHub tarball URLs that serve the correct filename directly.
    - If you remove any Patch: lines, the changelog entry MUST name the exact patch filename(s) and state why (e.g., "Remove alevt-gcc15.patch (upstream applied the fix in this release)"). This is openSUSE policy.
    - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 5. Update the .changes file (same name as the .spec but with .changes extension):
@@ -50,7 +55,7 @@ Steps (do them in order, never skip any):
  7. Download the new source tarball using download_file — this is MANDATORY when the package is using a tar ball, do not skip it. Use download_file, NOT web_fetch: web_fetch only reads content into memory and does NOT save the file to disk. Include the package subdirectory in the filename argument (e.g., "libopenshot/libopenshot-0.4.0.tar.xz" not just "libopenshot-0.4.0.tar.xz") — use list_files output to find the correct relative path from the workspace root. Look at the Source URL in the spec file to determine the correct download URL pattern, then substitute %{{version}} and any old version literals with the new version number. Do NOT pick download URLs from the release page assets — those are often precompiled binaries. The correct source tarball URL is the one defined in the spec's Source tag, reconstructed with the new version.
  8. After downloading the new tarball, remove old source archives from previous versions. Use list_files to find files matching the old version number (e.g., `packagename-OLDVERSION.tar.*`) and remove them with remove_file. Also, when removing _service in step 6, remove the orphaned tarball that the service had generated.
 
-Also consult the AGENTS.md / skill rules below for project-specific update steps (e.g., tarball updates, _service file changes, additional files to update).
+Review the AGENTS.md / skill rules below for project-specific update steps (e.g., tarball updates, _service file changes, additional files to update). Any step they require after a version change is MANDATORY — see "MANDATORY PROJECT STEPS" above; if you cannot perform it, respond with [ABORT: reason].
 
 {prefetched_context}
 {release_notes}
@@ -62,6 +67,7 @@ Additional context (AGENTS.md + skill rules):
 
 VERSION_UPDATE_PROMPT = """Update the spec file to version {target_version}:
 - CRITICAL: If the spec file's Version tag already reads "Version: {target_version}", make NO changes to any files and respond with "already-at-version". Do NOT edit any files when the version hasn't changed.
+- MANDATORY PROJECT STEPS: The "Additional context (AGENTS.md + skill rules)" section at the end of this message may define REQUIRED project steps that must run after a version change (for example a rule such as "After changed the package version in the spec file: make sure to call .agents/skills/something.sh"). Treat every such rule as MANDATORY, with the same priority as the bullets below. Perform those project steps AFTER the Version tag and .changes edits are done, and BEFORE you stop. A script named in AGENTS.md must be executed with run_tool_script, passing the script reference exactly as written in AGENTS.md — a workspace-relative path such as .agents/skills/something.sh is a valid script_name. If a mandated step cannot be performed because the script is missing, execution is blocked, or the script exits with a non-zero status, do NOT continue silently and do NOT claim success: respond with a line containing exactly [ABORT: reason] and make no further file changes.
 - Release notes may already be provided below (in the "Release notes" section). If so, use them directly for the changelog — do NOT web_fetch the release page unless the provided notes are clearly insufficient.
   Otherwise, use web_fetch to get the release notes for version {target_version} from the upstream project page (GitHub releases, GitLab releases, PyPI, etc.):
   - If the GitHub API returns 404 (project moved), try searching via `https://api.github.com/search/repositories?q=PROJECTNAME+in:name&sort=stars&per_page=5` or fetch the `URL:` tag from the spec to find the new project home
@@ -69,7 +75,7 @@ VERSION_UPDATE_PROMPT = """Update the spec file to version {target_version}:
 - Update the Version tag
 - Update Source and Patch URLs: keep all RPM macros (%{{version}}, %{{name}}) intact — never expand them to literal values. Only replace literal old version numbers in the URL (e.g., change "1.0.19" to "3.0.0" in the URL path if present). If the current Source is a plain tarball URL (.tar.gz, .tar.xz, .tar.bz2) without _service or RemoteAsset/CreateArchive lines, keep it as a plain tarball URL — do NOT create _service or add RemoteAsset/CreateArchive.
 - If the Source line is just a local filename (e.g., `Source: %{{name}}-%{{version}}.tar.gz`) without a proper scheme, AND you determined the actual upstream download URL: update it to include the full URL with %{{version}}/%{{name}} macros. IMPORTANT: In OBS, Source URLs use direct scheme-based URLs (https://, http://, ftp://, git+). Do NOT use `filename::url` or double-colon syntax — it is NOT valid in OBS.
-- GitHub archive URLs (github.com/.../archive/refs/tags/vVERSION.tar.gz) redirect: the server delivers the file as `{repo}-{version}.tar.gz` (not `v{version}.tar.gz`). After calling download_file, check the result for "Server suggests filename" — if the actual filename differs from the URL basename, append `#/{actual_filenames}` to the Source URL in the spec. Example: `Source0: https://github.com/owner/repo/archive/refs/tags/v%{{version}}.tar.gz#/repo-%{{version}}.tar.xz`. Do NOT add `#` fragments for non-GitHub tarball URLs that serve the correct filename directly.
+- GitHub archive URLs (github.com/.../archive/refs/tags/vVERSION.tar.gz) redirect: the server delivers the file as `{{repo}}-{{version}}.tar.gz` (not `v{{version}}.tar.gz`). After calling download_file, check the result for "Server suggests filename" — if the actual filename differs from the URL basename, append `#/{{actual_filenames}}` to the Source URL in the spec. Example: `Source0: https://github.com/owner/repo/archive/refs/tags/v%{{version}}.tar.gz#/repo-%{{version}}.tar.xz`. Do NOT add `#` fragments for non-GitHub tarball URLs that serve the correct filename directly.
 - If you remove any Patch: lines, the changelog entry MUST name the exact patch filename(s) and state why (e.g., "Remove alevt-gcc15.patch (upstream applied the fix in this release)"). This is openSUSE policy.
 - PRESERVE ALL OTHER LINES VERBATIM — do not add, remove, or modify anything else
 - Then update the .changes file (same stem as the spec, e.g., PACKAGE.changes) with a new entry based on the release notes.
@@ -87,7 +93,7 @@ VERSION_UPDATE_PROMPT = """Update the spec file to version {target_version}:
 {prefetched_context}
 {release_notes}
 
-Also consult the AGENTS.md / skill rules below for version specific update steps (e.g., tarball updates, service file changes, additional files to update).
+Review the AGENTS.md / skill rules below for version specific update steps (e.g., tarball updates, service file changes, additional files to update). Any step they require after a version change is MANDATORY — see "MANDATORY PROJECT STEPS" above; if you cannot perform it, respond with [ABORT: reason].
 
 Additional context (AGENTS.md + skill rules):
 {full_context}"""

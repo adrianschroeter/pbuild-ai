@@ -853,8 +853,29 @@ def _check_arg_conflicts(parser, args):
             parser.error(f"--analyze cannot be used with: {', '.join(_analyze_conflicts)}")
 
 
+_ABORT_RE = re.compile(r'\[ABORT:\s*([^\]\n]*)\]')
+
+
+def _ai_requested_abort(messages):
+    """Return the reason the AI asked to abort, or None if it did not."""
+    if not messages:
+        return None
+    text = " ".join(m.get("content", "") or "" for m in messages if m.get("role") == "assistant")
+    match = _ABORT_RE.search(text)
+    if not match:
+        return None
+    return match.group(1).strip() or "aborted by AI"
+
+
 def _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager):
-    """After an AI phase, check for [REBUILD: pkg] hints and cross-package spec edits."""
+    """After an AI phase, check for [REBUILD: pkg] hints and cross-package spec edits.
+
+    Returns True if the AI requested an abort via [ABORT: reason].
+    """
+    abort_reason = _ai_requested_abort(messages)
+    if abort_reason:
+        print(f"[ABORT] {abort_reason}")
+        return True
     if messages:
         assistant_text = " ".join(m.get("content", "") or "" for m in messages if m.get("role") == "assistant")
         for m in re.finditer(r'\[REBUILD:\s*(\S+?)(?:\.spec)?\]', assistant_text):
@@ -871,6 +892,7 @@ def _check_update_hints(results, messages, spec_files, spec_originals, updated_p
         if original is not None and current != original and spec not in updated_packages:
             updated_packages.add(spec)
             print(f"[UPDATE] AI modified {spec.name} ({len(current)}b vs {len(original)}b original)")
+    return False
 
 
 # ==========================================
@@ -2232,7 +2254,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             else:
                                 display = r[:500] + "..." if len(r) > 500 else r
                             print(f"[UPDATE] {display}")
-                    _check_update_hints(results, research_messages, spec_files, spec_originals, updated_packages, manager)
+                    if _check_update_hints(results, research_messages, spec_files, spec_originals, updated_packages, manager):
+                        print("[UPDATE] Aborting: a mandatory project step could not be completed.")
+                        sys.exit(1)
                     if not target_version and results:
                         for _r in results:
                             if _r.startswith("web_fetch: [Fetched ") and "\n" in _r:
@@ -2309,10 +2333,6 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             changelog_prompt=CHANGELOG_PROMPT,
                             release_notes=_release_notes,
                             prefetched_context=_prefetched_context,
-                            repo='',
-                            name='',
-                            version=target_version,
-                            actual_filenames='',
                         )
                         messages = [
                             {"role": "system", "content": update_prompt},
@@ -2332,7 +2352,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 print(f"[UPDATE] {display}")
                         else:
                             print("[UPDATE] No changes made.")
-                        _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager)
+                        if _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager):
+                            print("[UPDATE] Aborting: a mandatory project step could not be completed.")
+                            sys.exit(1)
 
                     # Clean up old source tarballs after update
                     def _source_fn(_spec_text, _pkg, _ver):
