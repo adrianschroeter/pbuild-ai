@@ -77,6 +77,12 @@ class SkillManager:
         else:
             print(f"[SKILL ACTIVE] {skill_name} for {filename}")
 
+    def note_skill_used(self, skill_name):
+        """Track a static skill whose prompt was embedded into a system message
+        without going through pattern matching (e.g. the .changes skill). Does
+        not print [SKILL ACTIVE] — that line is only emitted at match time."""
+        self.activated_skills.add(skill_name)
+
     def _matches_skill(self, skill, filename, content, prompt):
         """Check if a skill matches the given filename, content, or prompt."""
         if hasattr(skill, 'TARGET_PATTERN') and re.search(skill.TARGET_PATTERN, filename):

@@ -58,16 +58,18 @@ if __name__ == "__main__" and "--version" in sys.argv:
     print(f"pbuild-ai version {_ver}")
     sys.exit(0)
 
-from pbuild_ai.manifest import list_packages
+from pbuild_ai.manifest import list_packages, find_spec_files
 from pbuild_ai.diff_utils import show_diff
 from pbuild_ai.tools import execute_tool_calls, build_tools_list
 from pbuild_ai.skill_manager import SkillManager
 from pbuild_ai.llm_client import LlmAnalyzer
 from pbuild_ai.workspace import RpmSourceManager
-from pbuild_ai.parsing import parse_agents_md_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions
+from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions, fix_remote_asset_formatting
 from pbuild_ai.context import PbuildContext
-from pbuild_ai.skills.changelog_skill import CHANGELOG_PROMPT, write_changelog_entry
-from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_UPDATE_PROMPT
+from pbuild_ai.skills.changelog_skill import (
+    CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
+)
+from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_RESEARCH_TASK_PROMPT, VERSION_UPDATE_SYSTEM_PROMPT, VERSION_UPDATE_TASK_PROMPT, POST_UPDATE_CHECK_PROMPT
 from pbuild_ai.generate_mode import run_generate_mode
 from pbuild_ai.modify_mode import run_modify_mode
 
@@ -435,7 +437,7 @@ def _migrate_to_project_mode(workspace_dir: str, pkg_name: str) -> Path | None:
     new_spec = subdir / f"{pkg_name}.spec"
     if new_spec.exists():
         return new_spec
-    specs = list(subdir.rglob("*.spec"))
+    specs = list(subdir.glob("*.spec"))
     return specs[0] if specs else None
 
 
@@ -495,7 +497,7 @@ def _search_git_log_for_version(repo_dir: str, dep_name: str, op: str, constrain
             subprocess.run(["git", "checkout", _h, "--force"], capture_output=True, text=True)
             _sp = Path(repo_dir) / f"{dep_name}.spec"
             if not _sp.exists():
-                _sps = list(Path(repo_dir).rglob("*.spec"))
+                _sps = list(Path(repo_dir).glob("*.spec"))
                 _sp = _sps[0] if _sps else None
             if _sp:
                 _v = _extract_spec_version(_sp)
@@ -554,7 +556,7 @@ def _try_clone_dependency(dep_name: str, target_dir: str,
 
     _sp = Path(target_dir) / f"{dep_name}.spec"
     if not _sp.exists():
-        _sps = list(Path(target_dir).rglob("*.spec"))
+        _sps = list(Path(target_dir).glob("*.spec"))
         _sp = _sps[0] if _sps else None
     if not _sp:
         return True  # No spec found, can't align
@@ -616,7 +618,7 @@ def _create_dependency_package(dep_name: str, dep_dir: str, ctx) -> bool:
     if dep_spec.exists():
         print(f"[AUTO-DEPS] Generated spec: {dep_spec}")
         return True
-    specs = list(Path(dep_dir).rglob("*.spec"))
+    specs = list(Path(dep_dir).glob("*.spec"))
     if specs:
         print(f"[AUTO-DEPS] Generated spec: {specs[0]}")
         return True
@@ -786,7 +788,7 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
             print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ai.model}...")
             if not ctx.fix_mode:
                 _err_ctx = _extract_error_context(build_out)
-                error_analysis = ai.analyze(error_prompt, f"{_err_ctx}\n\n{_sanitize_analysis_context(build_out)}" if _err_ctx else _sanitize_analysis_context(build_out), full_context, format_json=True)
+                error_analysis = ai.analyze(error_prompt, f"{_err_ctx}\n\n{_sanitize_analysis_context(build_out)}" if _err_ctx else _sanitize_analysis_context(build_out), full_context, format_json=True, task="Analyzing build failure")
                 print(f"\n{_color(AI_COLOR, '--- AI ERROR ANALYSIS ---')}\n{error_analysis}\n{_color(AI_COLOR, '-----------------------------')}\n")
                 ai._write_analysis_file(error_analysis)
 
@@ -895,6 +897,293 @@ def _check_update_hints(results, messages, spec_files, spec_originals, updated_p
     return False
 
 
+_CHANGELOG_TOOLS = {"edit_file", "read_file"}
+
+
+def _norm_ws(text):
+    """Collapse whitespace for a lossy containment comparison."""
+    return re.sub(r'\s+', ' ', text or '').strip()
+
+
+_PREFETCH_KEEP_KEYS = frozenset({
+    "tag_name", "html_url", "name", "released_at",
+    "target_commitish", "prerelease", "draft", "version", "info",
+    "project_urls", "home_page", "releases_url", "url",
+})
+
+
+def _prefetch_summary(data):
+    """Reduce a version-API JSON payload to the fields relevant for a version
+    upgrade, dropping huge blobs (release assets, author metadata, archive
+    bodies/descriptions, the giant PyPI ``releases`` map). Kept values are
+    recursed so long strings are truncated and lists are capped."""
+    if isinstance(data, dict):
+        out = {}
+        for _k, _v in data.items():
+            if _k in _PREFETCH_KEEP_KEYS:
+                out[_k] = _prefetch_summary(_v)
+            elif isinstance(_v, dict) and ("version" in _v or "tag_name" in _v):
+                out[_k] = _prefetch_summary(_v)
+        return out
+    if isinstance(data, list):
+        return [_prefetch_summary(_x) for _x in data[:20]]
+    if isinstance(data, str) and len(data) > 1200:
+        return data[:1200] + "…"
+    return data
+
+
+def _agent_skill_blocks(agent_skills):
+    """Render workspace agent-skill documents (.agents/skills/*.md) as named
+    context blocks, so the AI sees the same project skills a human would."""
+    return "\n\n".join(
+        f"--- Skill: {name} ---\n{content}"
+        for name, content in agent_skills
+    )
+
+
+def _unique_script_refs(refs):
+    """De-duplicate post-update script references by basename, preferring the
+    explicit workspace-relative form (e.g. .agents/skills/foo.sh) over a bare
+    name that is resolved via the search directories. Keeps first-seen order."""
+    out = []
+    idx = {}
+    for ref in refs:
+        base = Path(ref).name
+        if base not in idx:
+            idx[base] = len(out)
+            out.append(ref)
+        elif "/" in ref and "/" not in out[idx[base]]:
+            out[idx[base]] = ref
+    return out
+
+
+def _mandated_script_failed(results, post_scripts):
+    """Return the basename of a mandated post-update script that failed, or None.
+
+    AGENTS.md may require a post-version-change script (e.g.
+    ``.agents/skills/update_references.sh``). If any of those runs returned an
+    error, the update is incomplete and must ABORT regardless of what the model
+    answered afterwards.
+    """
+    mandated = {Path(s).name for s in post_scripts}
+    if not mandated:
+        return None
+    for r in results or []:
+        r = str(r)
+        if not r.startswith("run_tool_script:"):
+            continue
+        if "Error:" not in r:
+            continue
+        for base in mandated:
+            if base in r:
+                return base
+    # A run_tool_script error that never even carried a script name (the model
+    # passed the wrong argument key).  With a single mandated script this is
+    # almost certainly that script failing to start.
+    if len(mandated) == 1:
+        for r in results or []:
+            r = str(r)
+            if r.startswith("run_tool_script:") and "requires a script_name" in r:
+                return next(iter(mandated))
+    return None
+
+
+def _extract_changelog_author(changes_text):
+    """Return the author of the newest .changes entry (e.g. 'Name <email>')
+    or None when the file has (no top entry yet or is) unparseable."""
+    for line in (changes_text or '').splitlines():
+        line = line.strip()
+        if not line or line.startswith('---'):
+            continue
+        m = re.match(r'^Unknown:', line)
+        if m:
+            return None
+        m = re.search(r'\s-\s+(.+?)\s*$', line)
+        if m:
+            return m.group(1).strip()
+        return None
+    return None
+
+
+def _changelog_ai_round(ai, changes_path, old_version, new_version,
+                        release_notes, email_author, manager, tools,
+                        workspace_dir, allow_tool_scripts, max_rounds=3,
+                        interactive=False, skill_manager=None):
+    """Give the AI one short, focused turn to prepend a .changes entry.
+
+    The prompt is deliberately tiny (release notes + the current .changes head)
+    and single-purpose — short prompts reliably produce real tool_calls even on
+    models that collapse on the big multi-mandate update prompt.
+
+    Safety: only 'edit_file' (not 'write_file') is offered so the AI can never
+    overwrite the whole file. When the file already exists, the prior content is
+    captured before the round and must still be present afterwards; otherwise
+    the round is treated as failed and the caller uses the deterministic
+    prepend (which never touches older entries). A non-existent .changes file
+    skips the AI entirely — the deterministic path creates it.
+
+    Returns True when the file received the entry AND kept all older entries;
+    False otherwise.  Never raises — on any failure the caller falls back to
+    the deterministic enriched entry.
+    """
+    if not changes_path or not manager:
+        return False
+    # Deterministic write_changelog_entry creates a missing file with only the
+    # new entry; there is nothing to preserve, so skip the AI round.
+    if not changes_path.exists():
+        return False
+    _before = manager.read_file_safe(changes_path) or ""
+    _before_norm = _norm_ws(_before)
+    _rel = str(changes_path)
+    try:
+        _rel = str(changes_path.relative_to(Path(workspace_dir)))
+    except ValueError:
+        try:
+            _rel = str(Path(workspace_dir) / changes_path.name)
+        except Exception:
+            pass
+    _notes = (release_notes or "").strip() or "(no upstream release notes available)"
+    if len(_notes) > 4000:
+        _notes = _notes[:4000] + "\n... (truncated) ..."
+    _changes_head = _before[:2500]
+    # The .changes skill from skills/changelog_skill.py is authoritative for
+    # the entry format and rules; always include it so the round follows the
+    # same policy as the big update prompt.
+    _system = (
+        "You are pbuild-ai, an openSUSE package updater. This turn has exactly "
+        "one task: record a .changes entry for the upstream version bump.\n"
+        "Only tool calls are accepted — never paste file contents as text.\n"
+        "Call edit_file EXACTLY ONCE to prepend a new entry at the top of "
+        f"{changes_path.name} for version {new_version} (old version: {old_version}).\n"
+        "Use the existing first entry as the anchor: set old_string to the very "
+        "first lines of the file (including the leading '---' separator) and "
+        "new_string to your new entry followed by exactly those same lines.\n"
+        "NEVER alter, reorder, or remove any existing entry below the new one. "
+        "Do NOT call write_file — editing the whole file is forbidden.\n\n"
+        + CHANGELOG_PROMPT
+    )
+    _release_notes_ctx = _notes if _notes else "(none)"
+    _user = (
+        f"Target version: {new_version} (old: {old_version})\n"
+        f"Author: {email_author}\n"
+        "If upstream shipped former releases between the old version and the "
+        f"target (the package source is older than those releases), cover them "
+        "per the skill rules above.\n\n"
+        f"Upstream release notes:\n\n{_release_notes_ctx}\n\n"
+        f"Current {changes_path.name} (head):\n\n{_changes_head}\n"
+    )
+    _messages = [{"role": "system", "content": _system}, {"role": "user", "content": _user}]
+    _tools = [t for t in (tools or [])
+              if (t.get("function", {}) or {}).get("name") in _CHANGELOG_TOOLS]
+    if not _tools:
+        _tools = tools
+    try:
+        if skill_manager is not None:
+            skill_manager.note_skill_used("changelog")
+        results = ai.call_with_tools(
+            _messages, _tools, manager, workspace_dir,
+            allow_tool_scripts, interactive=interactive,
+            max_rounds=max_rounds, task="Adding changelog entry")
+    except SystemExit:
+        # This round is best-effort; a tool-loop abort must not kill the run.
+        results = []
+    _changed = manager.read_file_safe(changes_path) if changes_path.exists() else ""
+    # Accept any native entry style the AI may have produced (- Updated to
+    # version X, - Update to X, ...), not just the canonical literal.
+    _entry_present = has_changelog_version(_changed, new_version)
+    # The old content must still be reachable in the new file (edit_file
+    # prepends; a lossy whitespace-normalized containment check tolerates
+    # harmless reformatting while catching whole-file overwrites).
+    _older_preserved = _norm_ws(_changed).find(_before_norm) != -1
+    if results and _entry_present and _older_preserved:
+        for _r in results:
+            _d = _r[:300] + "..." if len(_r) > 300 else _r
+            print(f"[UPDATE] {_d}")
+        return True
+    return False
+
+
+_SPEC_SECTIONS = ("%description", "%prep", "%build", "%install", "%files")
+
+
+def _extract_rewritten_spec(text, current_spec):
+    """Extract a full spec body the AI dumped as plain TEXT instead of tool calls.
+
+    Last-resort recovery, used only when a phase produced zero tool calls but
+    the assistant still returned prose.  Returns the validated candidate spec
+    text (with the current spec's copyright header restored), or None when no
+    reliable full spec could be derived.
+
+    Validation guarantees: same Name:, a Version: tag, and every one of
+    %description / %prep / %build / %install / %files is present.  A spec that
+    swaps openSUSE macros for %{?dist} (a Fedora/RHEL restyle) is rejected, as
+    is one that drops #!RemoteAsset lines the current spec relies on.
+    """
+    if not text or not current_spec:
+        return None
+    candidate = None
+    # 1) Prefer the last fenced spec block (```spec / ```rpm / ```suse / bare ```).
+    _fence_re = re.compile(r"^```(?:spec|rpm|rpm-spec|suse|suse-spec)?\s*$", re.M)
+    for _m in _fence_re.finditer(text):
+        _start = _m.end()
+        _end = text.find("\n```", _start)
+        if _end == -1:
+            _end = len(text)
+        _block = text[_start:_end].strip("\n")
+        if "Name:" in _block and "%files" in _block:
+            candidate = _block
+    # 2) Bare 'Name:' block fallback (first Name: line through end of text).
+    if candidate is None:
+        _m = re.search(r"^Name:\s*\S+", text, re.M)
+        if _m:
+            candidate = text[_m.start():].strip("\n")
+    if candidate is None:
+        return None
+    _lines = candidate.split("\n")
+    while _lines and (not _lines[-1].strip() or _lines[-1].strip().startswith("```")):
+        _lines.pop()
+    candidate = "\n".join(_lines).rstrip("\n") + "\n"
+    if candidate == current_spec:
+        return None
+    # The last non-empty line must look like a spec line, not prose commentary
+    # ("This updates the version...") that would corrupt the spec if written.
+    for _l in reversed(_lines):
+        if _l.strip():
+            _end = _l.strip()
+            if not (_end.startswith("%") or _end.startswith("#")
+                    or "/" in _end or ":" in _end):
+                return None
+            break
+    _cur_name = re.search(r"^Name:\s*(\S+)", current_spec, re.M)
+    _new_name = re.search(r"^Name:\s*(\S+)", candidate, re.M)
+    if not _cur_name or not _new_name or _cur_name.group(1) != _new_name.group(1):
+        return None
+    if not re.search(r"^Version:\s*\S+", candidate, re.M):
+        return None
+    for _section in _SPEC_SECTIONS:
+        if not re.search(r"^%s\b" % re.escape(_section), candidate, re.M):
+            return None
+    # Distro-restyle guard: %{?dist} is Fedora/RHEL style, not openSUSE.
+    if re.search(r"%\{?\?dist\}", candidate):
+        return None
+    # Never drop #!RemoteAsset asset hints the current spec relies on.
+    if "#!RemoteAsset:" in current_spec and "#!RemoteAsset:" not in candidate:
+        return None
+    # Restore the copyright header if the dump dropped it.
+    if not candidate.lstrip().startswith("#"):
+        _header = []
+        for _line in current_spec.split("\n"):
+            if _line.startswith("#"):
+                _header.append(_line)
+            elif not _line.strip() and _header:
+                break
+            elif _header:
+                break
+        if _header:
+            candidate = "\n".join(_header) + "\n\n" + candidate
+    return candidate if candidate != current_spec else None
+
+
 # ==========================================
 # Main Application Logic
 # ==========================================
@@ -964,9 +1253,9 @@ if __name__ == "__main__":
     parser.add_argument("--fresh", action="store_true", help="Discard saved .pai.context and start fresh")
     parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when AI proposes multiple tool calls")
     parser.add_argument("--ai-server", default=None, help="AI server URL, OpenAI-compatible (overrides AI_HOST env var; legacy OLLAMA_HOST is also honored, default http://localhost:11434)")
-    parser.add_argument("--model", default=None, help="AI model name (overrides AI_MODEL env var; legacy OLLAMA_MODEL is also honored, default gemma4)")
+    parser.add_argument("--model", "--ai-model", default=None, help="AI model name (overrides AI_MODEL env var; legacy OLLAMA_MODEL is also honored, default gemma4)")
     parser.add_argument("--ai-timeout", type=int, default=None, help="Timeout in seconds for AI API requests (default: 900, overrides AI_TIMEOUT env var; legacy OLLAMA_TIMEOUT is also honored)")
-    parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). For reasoning/thinking models, use --ai-option thinking=false to disable thinking.")
+    parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). Thinking-capable models (e.g. qwen3.6) auto-default to thinking=true for tool-calling rounds so they emit tool calls; an explicit value here overrides that default.")
     parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries. Falls back to EMAIL env var.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     parser.add_argument("--skills-dir", action="append", default=[], help="Extra directory to load skill .py files from (repeatable). Combined with the built-in skills dir and ~/.config/pbuild-ai/skills/ if it exists.")
@@ -1100,7 +1389,20 @@ if __name__ == "__main__":
         full_context = f"{agents_md_content}\n\n--- Base Skill (OPENSUSE.md) ---\n{base_skill_content}"
     else:
         full_context = agents_md_content
-    
+
+    # Workspace agent skills (.agents/skills/*.md) are project rules, not
+    # pbuild-ai skills. They are part of the "Additional context" every AI
+    # round receives, so the model actually acts on them; the system prompts
+    # still keep the mechanical update round from running their scripts.
+    agent_skills = manager.read_agent_skills()
+    for _skill_name, _skill_content in agent_skills:
+        print(f"[SKILL LOADED] {_skill_name}.md (agent skill) from "
+              f"{manager.base_dir / '.agents' / 'skills'}")
+        skill_manager.note_skill_used(_skill_name)
+    agent_skills_text = _agent_skill_blocks(agent_skills)
+    if agent_skills_text:
+        full_context = f"{full_context}\n\n{agent_skills_text}"
+
     ai = LlmAnalyzer(host=AI_SERVER, model=AI_MODEL_ARG or os.environ.get("AI_MODEL", os.environ.get("OLLAMA_MODEL", "default")), debug=DEBUG, timeout=ctx.ai_timeout, options=ai_options)
     ai.manager = manager
     ctx.ai = ai
@@ -1174,7 +1476,8 @@ if __name__ == "__main__":
         
         scripts_dir = Path(WORKSPACE_DIR) / "tool-scripts"
         if not scripts_dir.is_dir():
-            print("[INFO] --allow-tool-scripts set but no tool-scripts/ directory found.")
+            if not any((Path(WORKSPACE_DIR) / _d).is_dir() for _d in ("skills", ".agents/skills")):
+                print("[INFO] --allow-tool-scripts set but no tool-scripts/ directory found.")
             return
 
         # Make all scripts executable
@@ -1359,7 +1662,7 @@ if __name__ == "__main__":
                         dep_prompt = "\n\n".join(dep_prompt_parts) if dep_prompt_parts else DEFAULT_SPEC_PROMPT
                     else:
                         dep_prompt = DEFAULT_SPEC_PROMPT
-                    dep_spec_analysis = ai.analyze(dep_prompt, manager.read_file_safe(dep_spec), full_context)
+                    dep_spec_analysis = ai.analyze(dep_prompt, manager.read_file_safe(dep_spec), full_context, task="Analyzing dependency spec")
                     print(f"-> AI({ai.model}) says about {dep_spec.name}:\n{dep_spec_analysis}\n")
                     dep_success, dep_out = manager.run_project_build(suggested, preset=PRESET, dist=DIST, stream_output=SHOW_BUILDLOG)
                     if dep_success:
@@ -1537,7 +1840,7 @@ if __name__ == "__main__":
                     if _spec_review else f"--- Current spec ---\n{_current_spec_a[:5000]}\n\n" + _fixes_ctx + _sanitized_error
                 )
                 error_prompt = _merge_build_skills(error_prompt, current_build_out)
-                error_analysis = ai.analyze(error_prompt, _error_analysis_ctx, full_context, format_json=True)
+                error_analysis = ai.analyze(error_prompt, _error_analysis_ctx, full_context, format_json=True, task="Analyzing build failure")
                 _prev_error_context = error_context
                 _prev_error_analysis = error_analysis
             _latest_analysis = error_analysis
@@ -1581,7 +1884,7 @@ if __name__ == "__main__":
                         deep_context = f"{full_context}\n\n--- Deep investigation data ---\n{manager.deep_exploration[-20000:]}"
                         _fixes_ctx = _build_attempted_fixes_context()
                         _current_spec_da = manager.read_file_safe(spec)
-                        error_analysis = ai.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(error_context), deep_context, format_json=True)
+                        error_analysis = ai.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_da[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(error_context), deep_context, format_json=True, task="Analyzing build failure")
                         error_analysis = error_analysis.replace("[DEEP_ANALYZE]", "").strip()
                         _latest_analysis = error_analysis
                         print(f"\n{_color(AI_COLOR, '--- AI ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '------------------------------------------')}\n")
@@ -1684,7 +1987,7 @@ Here is the new error context:
                             if len(content) > 200:
                                 kept[i]["content"] = content[:100] + f"\n... (truncated, {len(content)} bytes) ...\n" + content[-50:]
                     messages = kept
-            tool_results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
+            tool_results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds, task="Analyzing build failure")
             if isinstance(tool_results, str):
                 print(f"[FIX ERROR] {tool_results}")
             elif tool_results:
@@ -1733,7 +2036,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 - Output the COMPLETE spec, not just the changed parts
 - Just raw spec content and nothing else
 - Do NOT repeat any fix listed in the previously attempted fixes above — they all failed."""
-                        result = ai.analyze("You are an RPM spec expert.", prompt, full_context)
+                        result = ai.analyze("You are an RPM spec expert.", prompt, full_context, task="Analyzing spec")
                         if not result:
                             return None
                         extracted = extract_spec(result)
@@ -1888,7 +2191,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 _fixes_ctx = _build_attempted_fixes_context()
                 _current_spec_re = manager.read_file_safe(spec)
                 error_prompt = _merge_build_skills(error_prompt, build_out2)
-                error_analysis2 = ai.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(build_out2), full_context, format_json=True)
+                error_analysis2 = ai.analyze(error_prompt, f"--- Current spec ---\n{_current_spec_re[:5000]}\n\n" + _fixes_ctx + _sanitize_analysis_context(build_out2), full_context, format_json=True, task="Analyzing build failure")
                 _latest_analysis = error_analysis2
                 print(f"\n{_color(AI_COLOR, f'--- AI ERROR ANALYSIS (attempt {fix_attempt}) ---')}\n{error_analysis2}\n{_color(AI_COLOR, '------------------------------------------')}\n")
                 ai._write_analysis_file(error_analysis2)
@@ -2006,7 +2309,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         # Get project packages list (used for building with correct relative paths)
         packages = list_packages(WORKSPACE_DIR) if PROJECT_MODE else []
 
-        spec_files = [f for f in Path(WORKSPACE_DIR).rglob("*.spec") if manager._is_safe_path(f)]
+        spec_files = [f for f in find_spec_files(WORKSPACE_DIR, PROJECT_MODE) if manager._is_safe_path(f)]
 
         # For project mode, filter to only manifest packages; skip others
         if PROJECT_MODE and packages:
@@ -2058,7 +2361,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 sys.exit(0)
             # Re-scan for spec files created by generate mode before entering fix phase
-            spec_files = [f for f in Path(WORKSPACE_DIR).rglob("*.spec") if manager._is_safe_path(f)]
+            spec_files = [f for f in find_spec_files(WORKSPACE_DIR, PROJECT_MODE) if manager._is_safe_path(f)]
             ctx.spec_files = spec_files
 
         # --modify mode: hand sources + prompt to AI, apply changes locally
@@ -2096,6 +2399,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 else:
                     print("[INFO] No specific skill found. Using default profile.")
 
+                messages = []
                 spec_before_update = manager.read_file_safe(spec)
                 if spec in updated_packages:
                     current = manager.read_file_safe(spec)
@@ -2154,7 +2458,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             _resp = urllib.request.urlopen(_req, timeout=10)
                             _data = json.loads(_resp.read())
                             _latest = _extract_by_key(_data, _v_key)
-                            _prefetched_data[_v_url] = json.dumps(_data, indent=2)[:2000]
+                            _prefetched_data[_v_url] = json.dumps(_prefetch_summary(_data), indent=2)[:2000]
                             if _latest:
                                 _latest = str(_latest).lstrip('v')
                                 if _current_version and _latest == _current_version:
@@ -2184,7 +2488,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     _release_notes = (_data.get("body") or "")[:10000]
                                     _tag = _data.get('tag_name', '')
                                     _latest = _tag.lstrip('v') if _tag else ''
-                                    _prefetched_data[_github_api_url] = json.dumps(_data, indent=2)[:2000]
+                                    _prefetched_data[_github_api_url] = json.dumps(_prefetch_summary(_data), indent=2)[:2000]
                                     if _latest and _current_version and _latest == _current_version:
                                         print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
                                         continue
@@ -2209,7 +2513,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     _release_notes = (_data.get("description") or "")[:10000]
                                     _tag = _data.get('tag_name', '')
                                     _latest = _tag.lstrip('v') if _tag else ''
-                                    _prefetched_data[_gl_api_url] = json.dumps(_data, indent=2)[:2000]
+                                    _prefetched_data[_gl_api_url] = json.dumps(_prefetch_summary(_data), indent=2)[:2000]
                                     if _latest and _current_version and _latest == _current_version:
                                         print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
                                         continue
@@ -2227,24 +2531,28 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         for _u in _prefetched_data:
                             _parts.append(f"Source: {_u}\n{_prefetched_data[_u]}")
                         _prefetched_context = "## Pre-fetched project data\n\nThe following data was fetched from version APIs. Avoid re-fetching these URLs:\n\n" + "\n---\n".join(_parts) + "\n"
-                    if _release_notes:
-                        _prefetched_context += "\n## Release notes\n\n" + _release_notes + "\n"
+                    # NOTE: do NOT fold release notes into prefetched_context — the
+                    # task prompts render {release_notes} separately. Appending them
+                    # here duplicates the notes in the user turn.
 
                 if not target_version:
+                    skill_manager.note_skill_used("changelog")
                     research_system_content = VERSION_RESEARCH_SYSTEM_PROMPT.format(
-                        spec=spec,
-                        spec_content=spec_content,
                         full_context=full_context,
                         changelog_prompt=CHANGELOG_PROMPT,
-                        prefetched_context=_prefetched_context,
-                        release_notes=_release_notes,
                     )
                     research_messages = [
                         {"role": "system", "content": research_system_content},
+                        {"role": "user", "content": VERSION_RESEARCH_TASK_PROMPT.format(
+                            spec=spec,
+                            spec_content=spec_content,
+                            prefetched_context=_prefetched_context,
+                            release_notes=_release_notes,
+                        )},
                     ]
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
-                    results = ai.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
+                    results = ai.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds, task="Researching latest version")
                     if results:
                         for r in results:
                             if r.startswith("web_fetch: [Fetched ") or r.startswith("read_file: "):
@@ -2326,21 +2634,20 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     if _v_now == target_version:
                         print(f"[UPDATE] Research phase already updated {spec.name} to {target_version}. Skipping update phase.")
                     else:
-                        print(f"\n[UPDATE] Updating {spec.name} to {target_version}...")
-                        update_prompt = VERSION_UPDATE_PROMPT.format(
-                            target_version=target_version,
+                        update_system = VERSION_UPDATE_SYSTEM_PROMPT.format(
                             full_context=full_context,
-                            changelog_prompt=CHANGELOG_PROMPT,
-                            release_notes=_release_notes,
-                            prefetched_context=_prefetched_context,
                         )
                         messages = [
-                            {"role": "system", "content": update_prompt},
-                            {"role": "user", "content": f"Update this spec file to version {target_version}:\n\n{_spec_now}"}
+                            {"role": "system", "content": update_system},
+                            {"role": "user", "content": VERSION_UPDATE_TASK_PROMPT.format(
+                                target_version=target_version,
+                                spec=spec.name,
+                                cur_version=_current_version or '',
+                            )},
                         ]
                         _changes_file = spec.parent / (spec.stem + '.changes')
                         _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
-                        results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds)
+                        results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds, task=f"Updating spec to {target_version}")
                         if results:
                             for r in results:
                                 if r.startswith("web_fetch: [Fetched ") or r.startswith("read_file: "):
@@ -2352,6 +2659,18 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 print(f"[UPDATE] {display}")
                         else:
                             print("[UPDATE] No changes made.")
+                            _ai_text = ai.last_text_response
+                            _abort_match = _ABORT_RE.search(_ai_text) if _ai_text else None
+                            if _abort_match:
+                                print(f"[ABORT] {_abort_match.group(1).strip() or 'aborted by AI'}")
+                                print("[UPDATE] Aborting: a mandatory project step could not be completed.")
+                                sys.exit(1)
+                            _rewritten = _extract_rewritten_spec(_ai_text, _spec_now)
+                            if _rewritten:
+                                spec.write_text(_rewritten, encoding='utf-8')
+                                _spec_now = _rewritten
+                                print(f"[UPDATE] AI returned a full spec rewrite as TEXT "
+                                      f"(no tool calls) — wrote {spec.name}. REVIEW REQUIRED.")
                         if _check_update_hints(results, messages, spec_files, spec_originals, updated_packages, manager):
                             print("[UPDATE] Aborting: a mandatory project step could not be completed.")
                             sys.exit(1)
@@ -2376,7 +2695,18 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             _old_name = _m.group(1)
                             break
                     _old_ver = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
-                    if _old_name and _old_ver and target_version and target_version != 'latest':
+                    # Did the spec really move to a new version? Source archives may only
+                    # be touched when it did, otherwise the workspace ends up with a
+                    # tarball of a version the spec does not describe. This must be
+                    # evaluated after the AI update phase, not before.
+                    _v_pre = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                    _v_post = re.search(r'^Version:\s*(\S+)', manager.read_file_safe(spec), re.M)
+                    _spec_version_moved = bool(_v_post and _v_pre
+                                         and _v_post.group(1) != _v_pre.group(1))
+                    if not _spec_version_moved:
+                        print("[UPDATE] Spec version did not change — "
+                              "leaving source archives untouched.")
+                    elif _old_name and _old_ver and target_version and target_version != 'latest':
                         _spec_after = manager.read_file_safe(spec)
                         _old_src = _source_fn(spec_before_update, _old_name, _old_ver.group(1))
                         _new_src = _source_fn(_spec_after, _old_name, target_version)
@@ -2433,60 +2763,69 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             _changes_file.write_text(_changes_before)
                     target_version = None  # prevent download and update tracking
 
+                # If AI didn't update the Version tag but target_version differs,
+                # force the mechanical update (Version tag + changelog) and run
+                # post-update checks so AGENTS.md rules are executed.
+                _spec_after_ai = manager.read_file_safe(spec)
+                _actual_v = re.search(r'^Version:\s*(\S+)', _spec_after_ai, re.M)
+                if target_version and target_version not in ('latest',) and _actual_v and _actual_v.group(1) != target_version:
+                    print(f"[WARNING] AI did not update version; forcing mechanical update "
+                          f"{_actual_v.group(1)} -> {target_version}")
+                    # Update Version tag
+                    _spec_updated = re.sub(
+                        r'^Version:\s*\S+',
+                        f'Version: {target_version}',
+                        _spec_after_ai,
+                        count=1,
+                        flags=re.M
+                    )
+                    spec.write_text(_spec_updated)
+                    # Changelog entry is handled by the unified step after
+                    # downloads complete; only bump the Version tag here.
+                    # Mark as moved so download/cleanup proceeds
+                    _spec_version_moved = True
+
                 # Post-format fix: repair mangled RemoteAsset/CreateArchive lines
                 _spec_current = manager.read_file_safe(spec)
-                _fixed = False
-                # Case 1: #!RemoteAsset inline on a Source: line — extract to its own line before Source:
-                _m_src = re.search(r'^(Source\d*:\s*)(#!RemoteAsset:[^\n]+\s*)(.*)$', _spec_current, re.M)
-                if _m_src:
-                    _replacement = f'  {_m_src.group(2).strip()}\n{_m_src.group(1)}{_m_src.group(3).strip()}'
-                    _spec_current = _spec_current.replace(_m_src.group(0), _replacement)
-                    _fixed = True
-                # Case 2: merged onto one line — "!#!CreateArchive" or "#!RemoteAsset: ... #!CreateArchive"
-                _m_merged = re.search(r'(#!RemoteAsset:[^\n]+)\s+#?!?CreateArchive[^\n]*', _spec_current)
-                if _m_merged:
-                    _spec_current = _spec_current.replace(_m_merged.group(0), _m_merged.group(1))
-                    _fixed = True
-                # Case 3: #!CreateArchive on a continuation line or after Source:
-                _m_ca = re.search(r'^(\s+.*)?#!CreateArchive[^\n]*', _spec_current, re.M)
-                if _m_ca and not re.search(r'^#!CreateArchive$', _m_ca.group(0), re.M):
-                    _spec_current = _spec_current.replace(_m_ca.group(0), '')
-                    _fixed = True
-                # Case 4: Source: renamed to Source0: when RemoteAsset is present
-                if '#!RemoteAsset:' in _spec_current and 'Source0:' in _spec_current and 'Source:' not in _spec_current:
-                    _spec_current = _spec_current.replace('Source0:', 'Source:')
-                    _fixed = True
-                # Ensure #!CreateArchive exists after #!RemoteAsset:
-                if '#!RemoteAsset:' in _spec_current and '#!CreateArchive' not in _spec_current:
-                    _spec_current = re.sub(
-                        r'(#!RemoteAsset:[^\n]+)\n',
-                        r'\1\n#!CreateArchive\n',
-                        _spec_current,
-                        count=1
-                    )
-                    _fixed = True
-                # Case 6: Strip filename::url pattern in Source lines (invalid OBS syntax)
-                _m_dc = re.search(r'^(Source\d*:\s*)(\S+)::(https?://\S+)', _spec_current, re.M)
-                if _m_dc:
-                    _spec_current = _spec_current.replace(_m_dc.group(0), _m_dc.group(1) + _m_dc.group(3))
-                    _fixed = True
-                    print(f"[UPDATE] Fixed invalid 'filename::url' Source syntax.")
+                _repaired, _fixed, _fix_notes = fix_remote_asset_formatting(_spec_current)
                 if _fixed:
-                    spec.write_text(_spec_current)
-                    print("[UPDATE] Fixed RemoteAsset/CreateArchive formatting.")
+                    spec.write_text(_repaired)
+                    print(f"[UPDATE] Fixed RemoteAsset/CreateArchive formatting: "
+                          f"{'; '.join(_fix_notes)}.")
 
                 # Deterministic source tarball download (not relying on AI tool calls)
-                if target_version and target_version not in ('latest',):
-                    _dl_failed = False
+                _dl_failed = False
+                if target_version and target_version not in ('latest',) and not _spec_version_moved:
+                    print("[UPDATE] Spec version did not change — skipping tarball download.")
+                elif target_version and target_version not in ('latest',):
                     try:
                         _spec_content = manager.read_file_safe(spec)
                         _skip_dl = False
-                        if '#!CreateArchive' in _spec_content:
-                            print(f"[UPDATE] #!CreateArchive found — source from git. Skipping download.")
-                            _skip_dl = True
-                        elif re.search(r'#!RemoteAsset:\s+(?!git\+)', _spec_content):
-                            print(f"[UPDATE] RemoteAsset (non-git) handles source. Skipping download.")
-                            _skip_dl = True
+                        # Check if MAIN source (Source0/Source) uses CreateArchive or RemoteAsset
+                        _main_source_line = None
+                        for _line in _spec_content.split('\n'):
+                            _m = re.match(r'^(Source|Source0):\s*(.+)', _line, re.I)
+                            if _m:
+                                _main_source_line = _m.group(0)
+                                break
+                        if _main_source_line:
+                            # Look for CreateArchive/RemoteAsset immediately before this Source line
+                            _lines = _spec_content.split('\n')
+                            for _i, _line in enumerate(_lines):
+                                if _line.strip() == _main_source_line.strip():
+                                    # Check preceding lines for CreateArchive/RemoteAsset
+                                    for _j in range(max(0, _i-3), _i):
+                                        _prev = _lines[_j].strip()
+                                        if _prev.startswith('#!CreateArchive'):
+                                            _skip_dl = True
+                                            print(f"[UPDATE] Main source uses #!CreateArchive — skipping download.")
+                                            break
+                                        if _prev.startswith('#!RemoteAsset:'):
+                                            _skip_dl = True
+                                            print(f"[UPDATE] Main source uses #!RemoteAsset — skipping download.")
+                                            break
+                                    break
+                        # Old source cleanup — runs even when _skip_dl is True
                         # Old source cleanup — runs even when _skip_dl is True
                         _old_source_url = None
                         for _oline in spec_before_update.split('\n'):
@@ -2654,15 +2993,146 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 if spec_after != spec_before_update and _new_v and _old_v and _new_v.group(1) != _old_v.group(1):
                     # Deterministic changes file update if AI didn't handle it
                     _changes_file = spec.parent / (spec.stem + '.changes')
+                    # Baseline is the pre-update snapshot; fall back to the
+                    # current content when the snapshot was never taken
+                    # (e.g. the forced-update path).
+                    _changes_before_text = (_changes_before
+                                            if _changes_before is not None
+                                            else (manager.read_file_safe(_changes_file)
+                                                  if _changes_file.exists() else ''))
+                    _author_from_changes = _extract_changelog_author(_changes_before_text)
+                    if _author_from_changes:
+                        email_author = _author_from_changes
+                        print(f"[UPDATE] Reusing changelog author: {email_author}")
                     _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
-                    if _changes_after == (_changes_before or ''):
-                        if write_changelog_entry(_changes_file, _old_v.group(1), _new_v.group(1), email_author):
-                            print(f"[UPDATE] Added changelog entry for {_old_v.group(1)} -> {_new_v.group(1)}.")
+                    _changelog_restored = False
+                    if (_changes_after != _changes_before_text
+                            and _changes_before_text
+                            and _norm_ws(_changes_before_text)
+                            and _norm_ws(_changes_after).find(_norm_ws(_changes_before_text)) == -1):
+                        # The AI rewrote the whole .changes file and dropped
+                        # older entries. Restore it so no history is lost, then
+                        # regenerate the new entry deterministically below.
+                        print("[UPDATE] AI dropped older .changes entries — "
+                              "restoring file and regenerating entry.")
+                        _changes_file.write_text(_changes_before_text)
+                        _changes_after = _changes_before_text
+                        _changelog_restored = True
+                    if _changes_after == _changes_before_text and not _changelog_restored:
+                        # Untouched by AI — dedicated short AI round: a tiny,
+                        # single-purpose prompt that reliably provokes real
+                        # tool_calls even on models that collapse on the big
+                        # multi-mandate update prompt.
+                        print(f"[UPDATE] Asking AI to write .changes entry "
+                              f"for {spec.name}...")
+                        if _changelog_ai_round(
+                                ai, _changes_file, _old_v.group(1), _new_v.group(1),
+                                _release_notes, email_author, manager,
+                                TOOLS, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS,
+                                interactive=INTERACTIVE,
+                                skill_manager=ctx.skill_manager):
+                            _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
+                    if _changelog_restored or _changes_after == _changes_before_text:
+                        # Deterministic fallback: enriched from release notes
+                        if write_changelog_entry(
+                                _changes_file, _old_v.group(1),
+                                _new_v.group(1), email_author,
+                                release_notes=_release_notes):
+                            print(f"[UPDATE] Added changelog entry for "
+                                  f"{_old_v.group(1)} -> {_new_v.group(1)}.")
                     if not _dl_failed:
                         updated_packages.add(spec)
                         print(f"[UPDATE] Updated {spec.name}.")
                 elif spec_after != spec_before_update:
                     print(f"[UPDATE] No changes for {spec.name}.")
+
+                # Ask the AI what the project rules still require after this upgrade.
+                # The mechanical upgrade was done by pbuild-ai, so the mandatory
+                # follow-up steps are handed to the AI as its own focused turn.
+                if (_new_v and _old_v and _new_v.group(1) != _old_v.group(1)
+                        and not _ai_requested_abort(messages)):
+                    print(f"\n[UPDATE] Asking AI about follow-up steps required for "
+                          f"{spec.name} {_old_v.group(1)} -> {_new_v.group(1)}...")
+                    _followup_system = POST_UPDATE_CHECK_PROMPT.format(
+                        spec=spec.name,
+                        old_version=_old_v.group(1),
+                        new_version=_new_v.group(1),
+                        full_context=full_context,
+                    )
+                    _agents_text = manager.read_agents_md() or ""
+                    if agent_skills_text:
+                        _agents_text = f"{_agents_text}\n\n{agent_skills_text}"
+                    _post_scripts = _unique_script_refs(
+                        parse_post_update_scripts(_agents_text))
+                    if _post_scripts:
+                        _post_directive = (
+                            "AGENTS.md mandates these post-version-change scripts: "
+                            + ", ".join(f"`{s}`" for s in _post_scripts)
+                            + ". Call run_tool_script for each one now, then reply "
+                            "exactly: nothing-to-do."
+                        )
+                    else:
+                        _post_directive = (
+                            "AGENTS.md defines no post-version-change scripts. "
+                            "Reply exactly: nothing-to-do. Do NOT edit .changes or "
+                            "any other file."
+                        )
+                    _followup_messages = [
+                        {"role": "system", "content": _followup_system},
+                        {"role": "user", "content": (
+                            f"{_post_directive}\n\n"
+                            f"Perform the mandated post-update steps on {spec.name} using "
+                            f"run_tool_script tool calls per the system instructions. Do NOT "
+                            f"paste any file contents as text."
+                        )},
+                    ]
+                    _followup_results = ai.call_with_tools(
+                        _followup_messages, TOOLS, manager, WORKSPACE_DIR,
+                        ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds,
+                        task="Running post-update steps")
+                    if _followup_results:
+                        for _r in _followup_results:
+                            if _r.startswith("web_fetch: [Fetched ") or _r.startswith("read_file: "):
+                                display = _r.split("\n", 1)[0]
+                            elif DEBUG:
+                                display = _r
+                            else:
+                                display = _r[:500] + "..." if len(_r) > 500 else _r
+                            print(f"[UPDATE] {display}")
+                    _failed_script = _mandated_script_failed(_followup_results, _post_scripts)
+                    if _failed_script:
+                        print(f"[ABORT] {_failed_script} could not be executed.")
+                        sys.exit(1)
+                    if _check_update_hints(_followup_results, _followup_messages,
+                                           spec_files, spec_originals, updated_packages, manager):
+                        print("[UPDATE] Aborting: a mandatory follow-up step could not be completed.")
+                        sys.exit(1)
+                    # Validate the AI actually did its job.  The follow-up prompt
+                    # expects the AI to either (a) call run_tool_script for mandated
+                    # scripts, (b) respond with exactly "nothing-to-do", or (c)
+                    # respond with [ABORT: reason].  A text-only response that is
+                    # none of these means the AI failed to produce tool calls —
+                    # treat it as a hard failure instead of silently continuing.
+                    if not _followup_results:
+                        _assistant_text = " ".join(
+                            m.get("content", "") or "" for m in _followup_messages
+                            if m.get("role") == "assistant"
+                        ).strip()
+                        if not _assistant_text:
+                            _assistant_text = ai.last_text_response
+                        _is_valid_terminal = (
+                            _assistant_text.lower() in ("nothing-to-do",)
+                            or bool(_ABORT_RE.search(_assistant_text))
+                        )
+                        if not _is_valid_terminal:
+                            _preview = _assistant_text[:200]
+                            print(f"[UPDATE] Follow-up failed: AI produced no tool calls. "
+                                  f"Response: {_preview!r}. Aborting.")
+                            sys.exit(1)
+                        _abort_match = _ABORT_RE.search(_assistant_text)
+                        if _abort_match:
+                            print(f"[ABORT] {_abort_match.group(1).strip() or 'aborted by AI'}")
+                            sys.exit(1)
 
             if ctx.update_only:
                 ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
@@ -2762,7 +3232,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             analysis_context = f"{analysis_context}\n\n--- User Hint ---\n{PROMPT_HINT}"
                         _tok = ai.count_tokens(spec_prompt + "\n\nHere is the context:\n" + _spec_content + (f"\n\n--- AGENTS.md ---\n{analysis_context}" if analysis_context else ""))
                         print(f"[AI] Analyzing Spec-file: {spec.name}... ({_tok//1024}k/{ai.max_tokens//1024}k tok)")
-                        spec_analysis = ai.analyze(spec_prompt, _spec_content, analysis_context, format_json=True)
+                        spec_analysis = ai.analyze(spec_prompt, _spec_content, analysis_context, format_json=True, task="Analyzing spec")
                         print(f"-> AI({ai.model}) says:\n{spec_analysis}\n")
                         manager._spec_analysis = spec_analysis
                         if not FIX_MODE or manager.has_prior_failed_build() or PROMPT_HINT:

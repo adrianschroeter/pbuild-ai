@@ -3,6 +3,7 @@ import os
 import re
 import yaml
 import configparser
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
@@ -217,3 +218,33 @@ def list_packages(directory: str) -> List[Tuple[str, str, Optional[str]]]:
         validated_results.append((pkg, subdir, submod))
 
     return validated_results
+
+
+def find_spec_files(directory: str, project_mode: bool = False) -> List[Path]:
+    """Locate the build recipes of the workspace, never descending into sources.
+
+    Vendored upstream sources shipped inside a package (or inside a project
+    directory) may ship their own .spec files; those are not build targets of
+    this workspace. In orphan mode only the workspace top level is scanned, in
+    project mode only the package directories declared by _manifest are.
+    """
+    base = Path(directory)
+    if not base.is_dir():
+        return []
+
+    pkg_dirs: List[Path] = []
+    if project_mode:
+        for _name, subdir, _url in list_packages(directory):
+            if not subdir:
+                continue
+            pkg_dir = base / subdir
+            if pkg_dir.is_dir():
+                pkg_dirs.append(pkg_dir)
+
+    if not pkg_dirs:
+        pkg_dirs = [base]
+
+    specs: List[Path] = []
+    for pkg_dir in pkg_dirs:
+        specs.extend(sorted(pkg_dir.glob("*.spec")))
+    return specs

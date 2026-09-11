@@ -144,21 +144,21 @@ def run_modify_mode(ctx):
 
 The spec file content is ALREADY provided below in the user message. Do NOT call read_file — the content is right here.
 
+The user's request is also in the user message below.
+
 To make changes, prefer edit_file for small targeted changes — it replaces only the matching text and preserves all other lines. IMPORTANT: when using edit_file, include enough surrounding lines (full target line + 1-2 lines before/after) so old_string matches EXACTLY ONE location. For multiple changes to the same file, prefer apply_patch — it accepts a unified diff and applies all hunks in a single tool call, avoiding multiple round trips. Use write_file only for large rewrites or new files. IMPORTANT: write_file writes the ENTIRE file — you must include ALL lines. PRESERVE EVERY LINE YOU ARE NOT CHANGING VERBATIM; do not add, remove, or modify anything beyond the specific change. Keep in mind that your changes need to be reviewed. So keep changes minimal unless stated otherwise. If you are unsure or need to choose between options, ask the user by responding with your question — you will get their answer in the next round.
 Note: only the last 2 tool-calling rounds are kept in context — older messages are pruned each round. Do not rely on history beyond the most recent exchange. If you need information you provided earlier, include it again in your current output.
-
-User request: {ctx.modify_prompt}{hint}
 
 Skill instructions (follow these):
 {spec_prompt}"""
 
         if saved_messages:
             messages = [{"role": "system", "content": system_content}] + (saved_messages[1:] if len(saved_messages) > 1 else [])
-            messages.append({"role": "user", "content": f"Continuing from previous session. Current spec content (full file — do NOT call read_file for the spec):\n{spec_content}\n\nApply remaining changes."})
+            messages.append({"role": "user", "content": f"User request: {ctx.modify_prompt}{hint}\n\nContinuing from previous session. Current spec content (full file — do NOT call read_file for the spec):\n{spec_content}\n\nApply remaining changes."})
         else:
             messages = [
                 {"role": "system", "content": system_content},
-                {"role": "user", "content": f"Spec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content (full file — do NOT call read_file for the spec):\n{spec_content}\n\nDo NOT explain. Do NOT ask questions. Apply the changes using write_file or edit_file NOW."}
+                {"role": "user", "content": f"User request: {ctx.modify_prompt}{hint}\n\nSpec file path: {spec.relative_to(ctx.workspace_dir)}\n\nCurrent content (full file — do NOT call read_file for the spec):\n{spec_content}\n\nDo NOT explain. Do NOT ask questions. Apply the changes using write_file or edit_file NOW."}
             ]
         modify_max_rounds = 20
         changes_made = False
@@ -192,7 +192,7 @@ Skill instructions (follow these):
             _all_text = "\n".join(msg.get('content', '') or '' for msg in messages)
             _tok = ctx.ai.count_tokens(_all_text)
             _ctx_str = f" ({_tok//1024}k/{ctx.ai.max_tokens//1024}k tok)"
-            with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", color=AI_COLOR):
+            with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", suffix="Analyzing build failure", color=AI_COLOR):
                 result = chat_completion(ctx.ai, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
             message = result.get('message', {})

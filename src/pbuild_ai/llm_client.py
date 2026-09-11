@@ -17,6 +17,7 @@ import difflib
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -24,6 +25,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from pbuild_ai.spinner import Spinner, AI_COLOR
+from pbuild_ai.skills.changelog_skill import would_duplicate_changelog_entry
 from pbuild_ai.utils import resolve_path, ReadCoverageTracker
 from pbuild_ai.tools import execute_tool_calls, format_tool_display
 
@@ -79,6 +81,46 @@ def prune_messages(messages, keep_rounds=2):
     return preserved
 
 
+def _primary_arg(tool_name, tool_input):
+    """Return the most informative argument of a tool call for log display."""
+    for key in ("script_name", "filename", "path", "url", "old_string", "content"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            val = val.strip().splitlines()[0]
+            val = val.strip().strip('`')
+            return val[:60]
+    return ""
+
+
+def _summarize_round_calls(merged_results):
+    """Build a short human summary of one tool round from ``(name, inp, result)``
+    triples, e.g. ``edit_file ollama.changes -> skipped; read_file ollama.changes -> ok``."""
+    parts = []
+    for name, inp, result in merged_results:
+        result = str(result)
+        if result.startswith("OK:"):
+            status = "ok"
+        elif result.startswith("SKIP:"):
+            status = "skipped"
+        elif result.startswith("Error:") or result.startswith("[ERROR"):
+            status = "error"
+        else:
+            status = "done"
+        arg = _primary_arg(name, inp)
+        parts.append(f"{name}{f' {arg}' if arg else ''} -> {status}")
+    return "; ".join(parts)
+
+
+def _format_round_task(base, n, total, activity=""):
+    """Compose the per-round spinner label, e.g. ``Running post-update steps
+    (3/30) — read_file ollama.changes``. When *base* is empty only the
+    activity (round-independent) is shown."""
+    label = f"{base} ({n}/{total})" if base and total else (base or "")
+    if activity:
+        label = f"{label} — {activity}" if label else activity
+    return label
+
+
 class LlmAnalyzer:
     def __init__(self, host=None, model="default", debug=False, timeout=None, options=None):
         self.host = (host or os.environ.get("AI_HOST") or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
@@ -86,30 +128,54 @@ class LlmAnalyzer:
         self.debug = debug
         self.timeout = timeout if timeout is not None else int(os.environ.get("AI_TIMEOUT", os.environ.get("OLLAMA_TIMEOUT", "900")))
         self.options = options or {}
-        # Detect OpenAI-compatible server from URL containing /v1
-        self._openai_mode = '/v1' in self.host
-        if self._openai_mode:
-            base = self.host.rstrip('/')
-            self.api_url = f"{base}/chat/completions"
-            self.chat_api_url = f"{base}/chat/completions"
-        else:
-            self.api_url = f"{self.host}/api/generate"
-            self.chat_api_url = f"{self.host}/api/chat"
-        self._context = None
-        self._chat_context = None
+        # Current human-readable label shown in the [AI] spinner while a
+        # request runs (e.g. "Analyzing build failure"). Set by the callers.
+        self._task = ""
+        # Create opener early for Ollama detection
         self._opener = urllib.request.build_opener()
         self._opener.addheaders = [('Connection', 'keep-alive')]
+
+        # Detect OpenAI-compatible mode
+        _raw_host = self.host
+        if '/v1' in _raw_host:
+            # Explicit /v1 in URL → OpenAI mode
+            self._openai_mode = True
+            _base_host = _raw_host.replace('/v1', '').rstrip('/')
+        else:
+            # Auto-detect Ollama → use native API (supports tools + num_ctx)
+            self._is_ollama = self._detect_ollama(_raw_host)
+            self._openai_mode = False
+            _base_host = _raw_host.rstrip('/')
+
+        if self._openai_mode:
+            self.api_url = f"{_base_host}/v1/chat/completions"
+            self.chat_api_url = f"{_base_host}/v1/chat/completions"
+        else:
+            self.api_url = f"{_raw_host}/api/generate"
+            self.chat_api_url = f"{_raw_host}/api/chat"
+        self._context = None
+        self._chat_context = None
+        self.last_text_response = ""
         self._chat_supported = True
+        self._tool_capability_cache = None
+        self._model_thinking_capable = False
+        self._tool_capable_names = []
         self.manager = None
         self._changed_files: set[str] = set()
         self.reset_stats()
 
-        # Discover the actual model name and context size from OpenAI-compatible server
+        # Discover the actual model name and context size
+        # Only auto-discover when no explicit model was provided (i.e. still "default")
         self.max_tokens = 32768
-        if self._openai_mode:
-            self._discover_openai_model()
+        if self.model == "default":
+            if getattr(self, '_is_ollama', False):
+                # Ollama detected — use /api/tags for model discovery
+                self._discover_ollama_model()
+            elif self._openai_mode:
+                self._discover_openai_model()
             if self.debug:
-                print(f"[DEBUG] OpenAI-compatible server detected: {self.host} (model: {self.model})", flush=True)
+                source = "explicit /v1" if '/v1' in self.host else ("Ollama" if getattr(self, '_is_ollama', False) else "server")
+                print(f"[DEBUG] Server detected ({source}): {self.host} (model: {self.model})", flush=True)
 
         if self.options.get("num_ctx"):
             self.max_tokens = int(self.options["num_ctx"])
@@ -117,6 +183,200 @@ class LlmAnalyzer:
             _ctx = self._fetch_default_num_ctx()
             if _ctx:
                 self.max_tokens = _ctx
+
+    def _detect_ollama(self, host):
+        """Detect if the server is Ollama by querying /api/version.
+        Returns True if Ollama is detected, False otherwise."""
+        try:
+            req = urllib.request.Request(
+                f"{host.rstrip('/')}/api/version",
+                headers={"Content-Type": "application/json"}
+            )
+            with self._opener.open(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode())
+            # Ollama returns {"version": "0.x.x"} or similar
+            is_ollama = isinstance(data, dict) and "version" in data
+            if is_ollama:
+                self._is_ollama = True
+            return is_ollama
+        except Exception:
+            return False
+
+    def _model_supports_tools(self):
+        """Whether the resolved model advertises the 'tools' capability on an
+        Ollama host (cached after the first query).
+
+        Fail-open: returns True on any error, on non-Ollama hosts and for
+        unknown model names, so a transient network failure never blocks a run.
+        """
+        if not getattr(self, '_is_ollama', False):
+            return True
+        if self._tool_capability_cache is not None:
+            return self._tool_capability_cache
+        supported = True
+        self._model_thinking_capable = False
+        self._tool_capable_names = []
+        try:
+            req = urllib.request.Request(
+                f"{self.host}/api/tags",
+                headers={"Content-Type": "application/json"}
+            )
+            with self._opener.open(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            models = data.get("models") or []
+            if models and isinstance(models, list):
+                self._tool_capable_names = sorted(
+                    (m.get("name") or m.get("model") or "")
+                    for m in models
+                    if "tools" in m.get("capabilities", [])
+                )
+                entry = next(
+                    (m for m in models
+                     if (m.get("name") or m.get("model")) == self.model),
+                    None
+                )
+                if entry is not None:
+                    supported = "tools" in entry.get("capabilities", [])
+                    self._model_thinking_capable = (
+                        "thinking" in entry.get("capabilities", [])
+                    )
+        except Exception:
+            supported = True
+        self._tool_capability_cache = supported
+        return supported
+
+    def _discover_ollama_model(self):
+        """Discover Ollama model via /api/tags.
+        Picks the first model that supports tool calling."""
+        try:
+            req = urllib.request.Request(
+                f"{self.host}/api/tags",
+                headers={"Content-Type": "application/json"}
+            )
+            with self._opener.open(req, timeout=10) as resp:
+                raw = resp.read().decode()
+            if self.debug:
+                print(f"[DEBUG] /api/tags response: {raw[:500]}", flush=True)
+            data = json.loads(raw)
+            models = data.get("models") or []
+            if models and isinstance(models, list):
+                # Prefer models with "tools" capability
+                tool_models = [m for m in models if "tools" in m.get("capabilities", [])]
+                candidates = tool_models if tool_models else models
+                # Sort by parameter_size descending (prefer largest model)
+                def _param_size(m):
+                    s = m.get("details", {}).get("parameter_size", "")
+                    # Parse "36.0B" -> 36.0, "5.1B" -> 5.1, "4.7B" -> 4.7
+                    try:
+                        return float(s.rstrip("Bb"))
+                    except (ValueError, AttributeError):
+                        return 0.0
+                candidates.sort(key=_param_size, reverse=True)
+                first = candidates[0]
+                discovered = first.get("name") or first.get("model") or ""
+                if discovered:
+                    self.model = discovered
+                    if self.debug:
+                        print(f"[DEBUG] Discovered Ollama model: {self.model}", flush=True)
+        except Exception as e:
+            if self.debug:
+                print(f"[DEBUG] Ollama model discovery failed: {e}", flush=True)
+
+    def _extract_tool_calls_from_content(self, text):
+        """Extract tool calls from message content when model outputs them as JSON text.
+        Handles formats like:
+        - Single JSON object per line: {"name": "edit_file", "arguments": {...}}
+        - Multiple JSON objects concatenated
+        - JSON with "args" or "arguments" field
+        """
+        tool_calls = []
+
+        # First, fix literal newlines inside JSON string values
+        def fix_json_newlines(s):
+            result = []
+            i = 0
+            in_string = False
+            escape = False
+            while i < len(s):
+                c = s[i]
+                if escape:
+                    escape = False
+                    result.append(c)
+                    i += 1
+                    continue
+                if c == '\\\\':
+                    escape = True
+                    result.append(c)
+                    i += 1
+                    continue
+                if c == '\"':
+                    in_string = not in_string
+                    result.append(c)
+                    i += 1
+                    continue
+                if in_string and c == '\n':
+                    result.append('\\\\n')
+                    i += 1
+                    continue
+                result.append(c)
+                i += 1
+            return ''.join(result)
+
+        fixed_text = fix_json_newlines(text)
+
+        # Extract complete JSON objects by tracking brace balance
+        i = 0
+        while i < len(fixed_text):
+            if fixed_text[i] == '{':
+                depth = 0
+                in_string = False
+                escape = False
+                start = i
+                for j in range(i, len(fixed_text)):
+                    c = fixed_text[j]
+                    if escape:
+                        escape = False
+                        continue
+                    if c == '\\\\':
+                        escape = True
+                        continue
+                    if c == '\"' and not escape:
+                        in_string = not in_string
+                        continue
+                    if not in_string:
+                        if c == '{':
+                            depth += 1
+                        elif c == '}':
+                            depth -= 1
+                            if depth == 0:
+                                obj_str = fixed_text[start:j+1]
+                                try:
+                                    obj = json.loads(obj_str)
+                                    if isinstance(obj, dict) and "name" in obj:
+                                        name = obj["name"]
+                                        # Handle different argument formats
+                                        args = None
+                                        if "arguments" in obj and isinstance(obj["arguments"], dict):
+                                            args = obj["arguments"]
+                                        elif "args" in obj and isinstance(obj["args"], dict):
+                                            args = obj["args"]
+                                        elif "path" in obj or "old_string" in obj or "new_string" in obj:
+                                            # Inline format: {name, path, old_string, new_string}
+                                            args = {k: v for k, v in obj.items() if k != "name" and k != "type"}
+                                        if args is not None:
+                                            tool_calls.append({
+                                                "function": {"name": name, "arguments": json.dumps(args)},
+                                                "type": "function"
+                                            })
+                                except json.JSONDecodeError:
+                                    pass
+                                i = j + 1
+                                break
+                else:
+                    i += 1
+            else:
+                i += 1
+        return tool_calls
 
     @staticmethod
     def _estimate_tokens(text):
@@ -196,6 +456,7 @@ class LlmAnalyzer:
     def reset_context(self):
         self._context = None
         self._chat_context = None
+        self.last_text_response = ""
 
     def _apply_options_and_format(self, payload, tool_calling=False):
         """Inject AI options and format into payload.
@@ -217,6 +478,28 @@ class LlmAnalyzer:
             pass
         elif not tool_calling:
             payload["format"] = "json"
+        # Always set num_ctx/num_predict so large prompts (e.g. a spec file
+        # plus AGENTS.md context) are not clipped by Ollama's 4096 default.
+        # Must not run after format removal failed or the caller may get a
+        # truncated prompt and start answering prose instead of tool calls.
+        opts.setdefault("num_ctx", self.max_tokens)
+        # Cap the output budget on tool-calling rounds: a collapsed model with a
+        # huge num_predict (defaults to max_tokens = full context) otherwise
+        # rambles for tens of thousands of tokens (e.g. fenced 'write_file(...)'
+        # escapes) instead of returning a structured tool_call. An explicit user
+        # value wins. 16384 leaves room for thinking-capable models (qwen3.6) to
+        # reason about the change AND still emit the tool call — 8192 was fully
+        # consumed by the reasoning itself on big prompts, so _extract_tool_calls
+        # never saw a complete call.
+        _tool_budget = 16384
+        opts.setdefault("num_predict", (_tool_budget if tool_calling else self.max_tokens))
+        # Thinking-capable models (e.g. qwen3.6) drift into prose replies and
+        # skip tool calls when 'thinking' is not explicitly enabled on Ollama,
+        # so default it on for tool-calling rounds. An explicit user value
+        # (thinking or think) always wins.
+        if tool_calling and self._model_thinking_capable:
+            if "thinking" not in opts and "think" not in opts:
+                opts["thinking"] = True
         if opts:
             payload["options"] = opts
         return payload
@@ -232,12 +515,16 @@ class LlmAnalyzer:
             openai_params["top_p"] = opts["top_p"]
         if "num_predict" in opts:
             openai_params["max_tokens"] = opts["num_predict"]
-        if "num_ctx" in opts:
+        elif "num_ctx" in opts:
             openai_params["max_tokens"] = opts["num_ctx"]
         if "seed" in opts:
             openai_params["seed"] = opts["seed"]
         if "stop" in opts:
             openai_params["stop"] = opts["stop"]
+        # Always set max_tokens to avoid Ollama's default 4096 limit
+        # which is too small for thinking models + long prompts
+        if "max_tokens" not in openai_params:
+            openai_params["max_tokens"] = self.max_tokens
         return openai_params
 
     def _to_openai_tools(self, tools):
@@ -416,8 +703,8 @@ class LlmAnalyzer:
             if payload.get("context") is None:
                 payload.pop("context", None)
         if self.debug:
-            payload_preview = json.dumps(payload)
-            print(f"[DEBUG] AI request: {url} ({len(payload_preview)} bytes payload, model={payload.get('model', '?')})", flush=True)
+            payload_str = json.dumps(payload)
+            print(f"[DEBUG] AI request ({len(payload_str)} bytes):\n{payload_str}", flush=True)
         t0 = time.time()
         req = urllib.request.Request(
             url,
@@ -436,7 +723,9 @@ class LlmAnalyzer:
                 _ctx_str = f" ({_tok//1024}k/{self.max_tokens//1024}k tok)"
             else:
                 _ctx_str = ""
-            with Spinner(prefix=f"[AI] {model_name}{_ctx_str}", color=AI_COLOR):
+            with Spinner(prefix=f"[AI] {model_name}{_ctx_str}",
+                         suffix=getattr(self, "_task", "") or "",
+                         color=AI_COLOR):
                 with self._opener.open(req, timeout=self.timeout) as response:
                     raw = response.read().decode('utf-8')
         except urllib.error.HTTPError as e:
@@ -469,7 +758,8 @@ class LlmAnalyzer:
             result = self._ai_response_from_openai(result)
         return result
 
-    def analyze(self, system_prompt, context_data, agents_md=None, format_json=False):
+    def analyze(self, system_prompt, context_data, agents_md=None, format_json=False, task=""):
+        self._task = task or ""
         _char_limit = self.max_tokens * 6
         context_data = (context_data or "")[:_char_limit]
         if agents_md:
@@ -687,8 +977,43 @@ class LlmAnalyzer:
             return text
         return filtered
 
-    def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False):
+    def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False, task=""):
+        # Human-readable task label shown in the [AI] spinner while a round runs.
+        self._task = task or ""
+        _base_task = task or ""
+        _max_display = max_rounds if max_rounds > 0 else 999999
+        _last_activity = ""
         max_rounds = max_rounds if max_rounds > 0 else 999999
+        # Reset the Ollama conversation context only when this call starts a FRESH
+        # conversation (no prior assistant tool-calling rounds in `messages`).
+        # Fresh calls — version research, version update, post-update follow-up,
+        # or the first fix attempt — must not inherit stale context from an earlier
+        # unrelated call (which previously made the AI echo unrelated text instead
+        # of producing tool calls).  Continuation calls (2nd+ fix attempt on the
+        # same package) keep the context, because message-pruning drops older
+        # rounds from `messages` and `_chat_context` is the remaining memory of
+        # the earlier fix attempts and build failures.
+        if not any(m.get("role") == "assistant" and m.get("tool_calls") for m in messages):
+            self._chat_context = None
+        # Tool calling is the only thing this method can do.  If the chat API
+        # is unavailable (e.g. a server that only speaks /api/generate), do not
+        # silently degrade to a tool-less text round — that used to produce
+        # "results" nobody looked at.  Fail loudly instead.
+        if not self._chat_supported:
+            print("[AI ERROR] Tool calling requires the chat API, which is "
+                  "unavailable on this server. Cannot proceed without tools.",
+                  flush=True)
+            sys.exit(2)
+        if not self._model_supports_tools():
+            _hint = ""
+            if self._tool_capable_names:
+                _hint = (" Tool-capable models on this server: "
+                         + ", ".join(self._tool_capable_names[:6]) + ".")
+            print(f"[AI ERROR] Model {self.model} does not advertise a 'tools' "
+                  f"capability on {self.host}; tool-calling phases cannot work. "
+                  f"Select a tool-capable model with --model.{_hint}", flush=True)
+            sys.exit(2)
+        _nudged = False
         all_results = []
         _file_versions = {}
         _blocked_files = set()
@@ -710,63 +1035,87 @@ class LlmAnalyzer:
             except Exception:
                 pass
         for round_idx in range(max_rounds):
-            if self._chat_supported:
-                payload = {
-                    "model": self.model,
-                    "messages": messages,
-                    "tools": tools,
-                    "stream": False,
-                }
-                self._apply_options_and_format(payload, tool_calling=True)
-                if self._chat_context is not None:
-                    payload["context"] = self._chat_context
-            else:
-                payload = self._chat_to_generate_payload(messages)
+            self._task = _format_round_task(_base_task, round_idx + 1, _max_display, _last_activity)
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "tools": tools,
+                "stream": False,
+            }
+            self._apply_options_and_format(payload, tool_calling=True)
+            if self._chat_context is not None:
+                payload["context"] = self._chat_context
             try:
-                result = self._request(
-                    self.chat_api_url if self._chat_supported else self.api_url,
-                    payload
-                )
-                if self._chat_supported:
-                    self._chat_context = result.get("context")
+                result = self._request(self.chat_api_url, payload)
+                self._chat_context = result.get("context")
             except RuntimeError as e:
-                if "HTTP Error 405" in str(e) and self._chat_supported:
-                    print(f"[INFO] Chat API not supported at {self.chat_api_url}, falling back to {self.api_url}")
-                    self._chat_supported = False
-                    payload = self._chat_to_generate_payload(messages)
-                    try:
-                        result = self._request(self.api_url, payload)
-                    except Exception as e2:
-                        print(f"[AI ERROR] {e2}")
-                        sys.exit(2)
+                if "HTTP Error 405" in str(e):
+                    print(f"[AI ERROR] Chat API not supported at {self.chat_api_url}; "
+                          "tool calling cannot proceed without /api/chat.", flush=True)
                 else:
-                    print(f"[AI ERROR] {e}")
-                    sys.exit(2)
+                    print(f"[AI ERROR] {e}", flush=True)
+                sys.exit(2)
             except Exception as e:
-                print(f"[AI ERROR] {e}")
+                print(f"[AI ERROR] {e}", flush=True)
                 sys.exit(2)
 
-            if not self._chat_supported:
-                # /api/generate returns text in 'response', no tool calls
-                text = result.get('response', '').strip()
-                if text:
-                    print(f"[FIX] {text[:500]}", flush=True)
-                    all_results.append(text)
-                return all_results
-
             message = result.get('message', {})
-            if 'tool_calls' not in message or not message['tool_calls']:
-                text = (message.get('content') or '').strip()
+            self.last_text_response = (message.get('content') or '').strip()
+            tool_calls = message.get('tool_calls', [])
+            if not tool_calls:
+                # Some models (e.g., qwen via Ollama) put tool calls in content as JSON text
+                text = self.last_text_response
                 if text:
-                    preview = text[:500].replace('\n', ' | ')
-                    if self.debug:
-                        print(f"[AI] No tool calls. Text response: {preview}", flush=True)
-                if all_results:
-                    return all_results
-                return []
+                    tool_calls = self._extract_tool_calls_from_content(text)
+                    if tool_calls and self.debug:
+                        print(f"[DEBUG] Extracted {len(tool_calls)} tool calls from content", flush=True)
+                if not tool_calls:
+                    # Thinking models (qwen3 via Ollama) can finalize the tool call inside
+                    # the 'thinking' field and leave message.content empty (e.g. generation
+                    # stopped right after <|endofthinking|>). Recover the call from there.
+                    _thinking = (message.get('thinking') or '').strip()
+                    if not text and _thinking:
+                        text = _thinking
+                        tool_calls = self._extract_tool_calls_from_content(text)
+                        if tool_calls and self.debug:
+                            print(f"[DEBUG] Extracted {len(tool_calls)} tool calls from thinking", flush=True)
+                if tool_calls:
+                    # Round-trip the extracted (as opposed to native) calls back
+                    # onto the message, so the assistant-message append below
+                    # (message['tool_calls']) and followed-up rounds can see them.
+                    message['tool_calls'] = tool_calls
+                if not tool_calls:
+                    if text:
+                        preview = text[:500].replace('\n', ' | ')
+                        if self.debug:
+                            print(f"[AI] No tool calls. Text response: {preview}", flush=True)
+                    # One nudge: a text-only round-1 (not a legitimate terminal
+                    # reply such as nothing-to-do / already-at-version / [ABORT:])
+                    # is asked once more to emit a real tool call.
+                    terminal = ("[abort:" in text.lower() or text.strip().lower()
+                                in ("nothing-to-do", "already-at-version"))
+                    if text and tools and not _nudged and not terminal:
+                        print("[AI] No tool calls in first round — nudging to use tools.", flush=True)
+                        _nudged = True
+                        messages.append({"role": "user", "content":
+                            "Your previous answer contained no tool call. You MUST now respond "
+                            "by calling one of the available tools (e.g. edit_file). Do not "
+                            "explain — issue the tool call."})
+                        continue
+                    if all_results:
+                        return all_results
+                    if not terminal and self._model_thinking_capable:
+                        for _k in ("thinking", "think"):
+                            _opt = (self.options or {}).get(_k)
+                            if _opt is False:
+                                print("[AI] Hint: tool calls may fail while "
+                                      f"--ai-option {_k}=false is set for this "
+                                      f"thinking model; try {_k}=true.", flush=True)
+                                break
+                    return []
 
             round_calls = []
-            for tc in message['tool_calls']:
+            for tc in tool_calls:
                 tool_name = tc['function']['name']
                 raw_args = tc['function']['arguments']
                 if isinstance(raw_args, dict):
@@ -866,6 +1215,13 @@ class LlmAnalyzer:
                         _skipped_indices.append(_ci)
                         print(f"[FIX] {_msg}", flush=True)
                         continue
+                    if _resolved and _resolved.name.endswith('.changes') and would_duplicate_changelog_entry(_new_content):
+                        _blocked_files.add(_path)
+                        _msg = f"SKIP: write_file to {_path} would create duplicate changelog entries for the same version. File is now blocked."
+                        _skipped_results.append(_msg)
+                        _skipped_indices.append(_ci)
+                        print(f"[FIX] {_msg}", flush=True)
+                        continue
                     _filtered_calls.append((name, tool_input))
                     _filtered_indices.append(_ci)
                     _all_skipped = False
@@ -904,6 +1260,13 @@ class LlmAnalyzer:
                         _skipped_indices.append(_ci)
                         print(f"[FIX] {_msg}", flush=True)
                         continue
+                    if _resolved.name.endswith('.changes') and would_duplicate_changelog_entry(_new_content):
+                        _blocked_files.add(_path)
+                        _msg = f"SKIP: edit_file to {_path} would create duplicate changelog entries for the same version. File is now blocked."
+                        _skipped_results.append(_msg)
+                        _skipped_indices.append(_ci)
+                        print(f"[FIX] {_msg}", flush=True)
+                        continue
                     _filtered_calls.append((name, tool_input))
                     _filtered_indices.append(_ci)
                     _all_skipped = False
@@ -913,10 +1276,6 @@ class LlmAnalyzer:
                     name, inp = round_calls[_ci]
                     _skip_msg = _skipped_results[_si]
                     all_results.append(f"{name}: {_skip_msg}")
-                messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
-                for _si, _ci in enumerate(_skipped_indices):
-                    name, inp = round_calls[_ci]
-                    messages.append({"role": "tool", "content": str(_skipped_results[_si]), "name": name})
                 print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
                 break
 
@@ -944,6 +1303,10 @@ class LlmAnalyzer:
                 print(f"[FIX] {display}", flush=True)
             all_results.extend(f"{name}: {r}" for name, _, r in _merged_results if r)
 
+            _last_activity = _summarize_round_calls(_merged_results)
+            print(f"[AI] round {round_idx + 1}/{_max_display}: "
+                  f"{_last_activity or 'no tool calls'}", flush=True)
+
             # Record file versions after successful write/edit
             for name, inp, r in _merged_results:
                 if name in _WRITE_TOOLS and r.startswith("OK:"):
@@ -968,7 +1331,17 @@ class LlmAnalyzer:
                 workspace_dir, manager
             )
 
-            messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
+            # Round-trip the assistant turn. Ollama thinking models require
+            # the<think>content to be included in the assistant message for
+            # proper multi-turn context; without it the template breaks and
+            # the server rejects the payload.  Pass it as the separate
+            # 'thinking' field (not embedded in content) so the template
+            # renders it correctly without confusing the model.
+            _asst_msg = {"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']}
+            _thinking = (message.get('thinking') or '').strip()
+            if _thinking:
+                _asst_msg['thinking'] = _thinking
+            messages.append(_asst_msg)
             _injected_edit_help = False
             for name, inp, content in _merged_results:
                 content = str(content)
@@ -1014,12 +1387,17 @@ def chat_completion(ai, messages, tools, debug=False, track_stats=False):
         payload.update(openai_params)
     else:
         payload = {"model": ai.model, "messages": messages, "tools": tools, "stream": False}
-        _opts = (ai.options or {}).copy()
-        fmt = _opts.pop("format", None)
+        _opts = (ai.options or {}).copy() if isinstance(ai.options, dict) else {}
+        fmt = _opts.pop("format", None) if _opts else None
         if fmt == "text":
             pass
         elif not tools:
             payload["format"] = "json"
+        # Always set num_ctx/num_predict to avoid Ollama's 4096 default
+        if "num_ctx" not in _opts:
+            _opts["num_ctx"] = ai.max_tokens
+        if "num_predict" not in _opts:
+            _opts["num_predict"] = ai.max_tokens
         if _opts:
             payload["options"] = _opts
     _payload_str = None
@@ -1035,15 +1413,14 @@ def chat_completion(ai, messages, tools, debug=False, track_stats=False):
                 if val is not None and not isinstance(val, (str, type(None))):
                     print(f"[AI ERROR] Message {mi} field '{field}' is {type(val).__name__}, not str: {val!r}", flush=True)
         print(f"[AI ERROR] Failed to serialize payload: {e}", flush=True)
-        # Dump first few messages for debugging
-        import pprint
-        for mi, msg in enumerate(messages[:3]):
-            pprint.pprint(msg, depth=3)
-        sys.exit(2)
+        # Use minimal fallback so HTTP error handling can still trigger
+        data_bytes = b'{}'
 
     for attempt in range(3):
         try:
             _t0 = time.time()
+            if debug and _payload_str:
+                print(f"[DEBUG] AI request ({len(_payload_str)} bytes):\n{_payload_str}", flush=True)
             req = urllib.request.Request(
                 ai.chat_api_url,
                 data=data_bytes,

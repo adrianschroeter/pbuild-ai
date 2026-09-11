@@ -249,6 +249,132 @@ def parse_agents_md_scripts(agents_text, scripts_dir):
     return unique_startup, unique_order, unique_skip
 
 
+_POST_UPDATE_KEYWORDS = ("version", "update", "upgrade", "after", "post", "changed")
+_POST_UPDATE_SCRIPT_RE = re.compile(
+    r'(?<![A-Za-z0-9_\.\/\-#])((?:\.agents/skills/|tool-scripts/|skills/)?[A-Za-z0-9][A-Za-z0-9._-]*\.sh)'
+)
+
+
+def parse_post_update_scripts(agents_text):
+    """Extract script references that AGENTS.md mandates after a package version
+    change.  A script is considered post-update when it appears on (or right
+    after) a line mentioning a version change, or under an explicit
+    ``post-update``/``post-update-script:`` marker.  Returns a deduplicated list
+    in document order."""
+    if not agents_text:
+        return []
+    found = []
+    seen = set()
+    in_post_section = False
+    prev_hint = False
+    for raw in agents_text.splitlines():
+        stripped = raw.strip()
+        lower = stripped.lower()
+        if stripped.startswith("#") and ("post-update" in lower or "post update" in lower):
+            in_post_section = True
+            continue
+        if stripped.startswith("#"):
+            if not stripped.startswith("##"):
+                in_post_section = False
+        marker_match = re.match(r'^post-update-script:\s*(\S+)', stripped, re.I)
+        if marker_match:
+            candidates = [marker_match.group(1)]
+        else:
+            candidates = re.findall(_POST_UPDATE_SCRIPT_RE, stripped)
+        hint = not stripped.startswith("#") and any(k in lower for k in _POST_UPDATE_KEYWORDS)
+        for ref in candidates:
+            if not ref:
+                continue
+            if in_post_section or hint or prev_hint or marker_match:
+                if ref not in seen:
+                    seen.add(ref)
+                    found.append(ref)
+        prev_hint = hint
+    return found
+
+
+def fix_remote_asset_formatting(spec_text):
+    """Repair mangled `#!RemoteAsset` / `#!CreateArchive` lines in a spec file.
+
+    Returns (text, changed, notes). A `#!RemoteAsset:` line immediately followed
+    by a `#!CreateArchive` line is the correct OBS form and is never touched —
+    only same-line merges, glued lines and missing markers are repaired.
+    """
+    notes = []
+    _spec_current = spec_text
+    fixed = False
+
+    # Case 1: #!RemoteAsset inline on a Source: line — move it to its own line
+    m_src = re.search(r'^(Source\d*:\s*)(#!RemoteAsset:[^\n]+\s*)(.*)$', _spec_current, re.M)
+    if m_src:
+        replacement = f'  {m_src.group(2).strip()}\n{m_src.group(1)}{m_src.group(3).strip()}'
+        _spec_current = _spec_current.replace(m_src.group(0), replacement)
+        fixed = True
+        notes.append("moved inline #!RemoteAsset onto its own line")
+
+    # Case 2: #!CreateArchive merged onto the #!RemoteAsset: line. Only horizontal
+    # whitespace counts here — a #!CreateArchive on the NEXT line is the correct
+    # OBS form and must not be treated as a merge.
+    m_merged = re.search(r'(#!RemoteAsset:[^\n]+?)[ \t]+#?!?CreateArchive[^\n]*', _spec_current)
+    if m_merged:
+        _spec_current = _spec_current.replace(m_merged.group(0), m_merged.group(1))
+        fixed = True
+        notes.append("split #!CreateArchive off the #!RemoteAsset line")
+
+    # Case 3: #!CreateArchive glued to the end of another line. A standalone
+    # #!CreateArchive line is always left alone. When the marker belongs to a
+    # #!RemoteAsset: above it, only the remainder of the line is kept — the pass
+    # below re-inserts #!CreateArchive at the position OBS expects.
+    split_lines = []
+    seen_asset = False
+    for line in _spec_current.split('\n'):
+        if line.startswith('#!RemoteAsset:'):
+            seen_asset = True
+        if '#!CreateArchive' not in line or line.strip() == '#!CreateArchive':
+            split_lines.append(line)
+            continue
+        rest = re.sub(r'#?!{0,2}CreateArchive\s*$', '', line).strip()
+        if rest and not seen_asset:
+            split_lines.append(rest)
+            split_lines.append('#!CreateArchive')
+        elif rest:
+            split_lines.append(rest)
+        fixed = True
+        notes.append("split glued #!CreateArchive off the line")
+    _spec_current = '\n'.join(split_lines)
+
+    # Case 4: Source: was renamed to Source0: while a RemoteAsset is present
+    if ('#!RemoteAsset:' in _spec_current and 'Source0:' in _spec_current
+            and 'Source:' not in _spec_current):
+        _spec_current = _spec_current.replace('Source0:', 'Source:')
+        fixed = True
+        notes.append("restored Source0: to Source:")
+
+    # Every #!RemoteAsset: needs its own #!CreateArchive line right below it
+    lines = _spec_current.split('\n')
+    rebuilt = []
+    for idx, line in enumerate(lines):
+        rebuilt.append(line)
+        if not line.startswith('#!RemoteAsset:'):
+            continue
+        nxt = lines[idx + 1] if idx + 1 < len(lines) else ''
+        if idx + 1 < len(lines) and lines[idx + 1].strip() == '#!CreateArchive':
+            continue
+        rebuilt.append('#!CreateArchive')
+        fixed = True
+        notes.append("added missing #!CreateArchive after #!RemoteAsset")
+    _spec_current = '\n'.join(rebuilt)
+
+    # Case 6: strip the invalid 'filename::url' syntax from Source lines
+    m_dc = re.search(r'^(Source\d*:\s*)(\S+)::(https?://\S+)', _spec_current, re.M)
+    if m_dc:
+        _spec_current = _spec_current.replace(m_dc.group(0), m_dc.group(1) + m_dc.group(3))
+        fixed = True
+        notes.append("removed invalid 'filename::url' Source syntax")
+
+    return _spec_current, fixed, notes
+
+
 def extract_spec(text):
     t = text.strip()
     m = re.search(r"```(?:spec)?\s*\n(.*?)```", t, re.DOTALL)

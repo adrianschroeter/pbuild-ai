@@ -117,9 +117,12 @@ class TestReadCoverageTracker(unittest.TestCase):
         self.assertIn(0, skipped)
         self.assertIn("READ SKIP", skipped[0])
 
-    # --- filter_reads: skips partial range when covered ---
+    # --- filter_reads: range reads are never suppressed ---
 
-    def test_filter_skips_partial_range(self):
+    def test_filter_keeps_partial_range(self):
+        # A read with an explicit offset/limit is a fresh, focused request
+        # (e.g. after a truncated full read) and must be served even when
+        # range coverage already exists.
         tracker = ReadCoverageTracker()
         content = "0123456789"
         self._write("foo.c", content)
@@ -129,8 +132,24 @@ class TestReadCoverageTracker(unittest.TestCase):
             "ranges": [(0, 10)]
         }
         filtered, skipped = tracker.filter_reads(calls, self.ws, self._manager())
-        self.assertEqual(filtered, [])
-        self.assertIn(0, skipped)
+        self.assertEqual(filtered, calls)
+        self.assertEqual(skipped, {})
+
+    def test_filter_keeps_range_read_after_full_coverage(self):
+        # The regression behind the update-round deadlock: the model read the
+        # full spec (result truncated to 2000 chars), then asked for the top
+        # lines with limit=50. That must NOT be skipped as a redundant read.
+        tracker = ReadCoverageTracker()
+        content = "0123456789"
+        self._write("foo.c", content)
+        calls = [("read_file", {"path": "foo.c", "limit": 50})]
+        tracker._file_coverage[os.path.join(self.ws, "foo.c")] = {
+            "hash": self._hash(content),
+            "ranges": [(0, None)]
+        }
+        filtered, skipped = tracker.filter_reads(calls, self.ws, self._manager())
+        self.assertEqual(filtered, calls)
+        self.assertEqual(skipped, {})
 
     # --- filter_reads: does not skip when range not covered ---
 

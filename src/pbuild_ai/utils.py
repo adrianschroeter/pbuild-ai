@@ -91,13 +91,17 @@ class ReadCoverageTracker:
                 if resolved and resolved.exists():
                     offset = inp.get("offset")
                     limit = inp.get("limit")
-                    start = offset if offset is not None else 0
-                    end = start + limit if limit is not None else None
-                    prev = self._file_coverage.get(str(resolved))
-                    if prev and manager:
-                        current_hash = hashlib.md5(manager.read_file_safe(resolved).encode()).hexdigest()
-                        if prev["hash"] == current_hash and ranges_covered(prev["ranges"], start, end):
-                            skipped[ci] = f"READ SKIP: {path} already read \u2014 see earlier tool result"
+                    # Only suppress EXACT full-file re-reads. A read that
+                    # requests a specific range (offset/limit) is a fresh,
+                    # focused request — e.g. after a full read whose result
+                    # was truncated for the model — and must be served even
+                    # when range coverage already exists.
+                    if offset is None and limit is None:
+                        prev = self._file_coverage.get(str(resolved))
+                        if prev and manager:
+                            current_hash = hashlib.md5(manager.read_file_safe(resolved).encode()).hexdigest()
+                            if prev["hash"] == current_hash and ranges_covered(prev["ranges"], 0, None):
+                                skipped[ci] = f"READ SKIP: {path} already read \u2014 see earlier tool result"
             elif name == "read_file_from_archive":
                 archive_path = inp.get("archive_path", "")
                 file_path = inp.get("file_path", "")
@@ -105,11 +109,10 @@ class ReadCoverageTracker:
                 if arch_resolved:
                     offset = inp.get("offset")
                     limit = inp.get("limit")
-                    start = offset if offset is not None else 0
-                    end = start + limit if limit is not None else None
-                    cache_key = (str(arch_resolved), file_path)
-                    if ranges_covered(self._archive_coverage.get(cache_key, []), start, end):
-                        skipped[ci] = f"READ SKIP: {archive_path}/{file_path} already read \u2014 see earlier tool result"
+                    if offset is None and limit is None:
+                        cache_key = (str(arch_resolved), file_path)
+                        if ranges_covered(self._archive_coverage.get(cache_key, []), 0, None):
+                            skipped[ci] = f"READ SKIP: {archive_path}/{file_path} already read \u2014 see earlier tool result"
 
         filtered = [c for ci, c in enumerate(round_calls) if ci not in skipped]
         return filtered, skipped

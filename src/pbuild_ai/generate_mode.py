@@ -22,7 +22,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from pbuild_ai.llm_client import chat_completion, prune_messages
+from pbuild_ai.llm_client import chat_completion, prune_messages, _summarize_round_calls
 from pbuild_ai.tools import execute_tool_calls, format_tool_display, resolve_path
 from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.utils import ReadCoverageTracker
@@ -96,20 +96,17 @@ def run_generate_mode(ctx):
     generate_skill = ctx.skill_manager.get_skill_by_name("generate_mode")
     if generate_skill:
         system_content = generate_skill.GENERATE_SYSTEM_PROMPT.format(
-            generate_prompt=ctx.generate_prompt,
             full_context=ctx.full_context or 'No AGENTS.md',
         )
         user_content = generate_skill.GENERATE_USER_PROMPT.format(
             workspace_dir=ctx.workspace_dir,
+            generate_prompt=ctx.generate_prompt,
         )
     else:
         print("[INFO] generate_mode skill not found, using inline fallback.")
-        system_content = f"""You are an RPM packager assistant. Your task is to create a new openSUSE RPM package from scratch based on the user's specification below.
+        system_content = f"""You are an RPM packager assistant. Your task is to create a new openSUSE RPM package from scratch based on the user's specification in the user message.
 
-THE USER'S SPECIFICATION (this is the complete request, not a conversation starter):
-{ctx.generate_prompt}
-
-IMPORTANT: The specification above IS the request. Do NOT ask the user "what would you like to package?" or otherwise request information they already provided. Start working immediately based on the specification given.
+IMPORTANT: The specification in the user message IS the request, not a conversation starter. Do NOT ask the user "what would you like to package?" or otherwise request information they already provided. Start working immediately based on the specification given.
 
 Follow these rules:
 1. Research the upstream project first using web_fetch if a URL is provided or you can infer one, then create the package. Do NOT fetch the same URL more than once — the result is cached.
@@ -134,9 +131,12 @@ Follow these rules:
 
 AGENTS.md instructions (follow these):
 {ctx.full_context or 'No AGENTS.md'}"""
-        user_content = f"""Workspace directory: {ctx.workspace_dir}
+        user_content = f"""THE USER'S SPECIFICATION (this is the complete request, not a conversation starter):
+{ctx.generate_prompt}
 
-The specification for the package to create is in the system prompt above. Start researching and building — do NOT ask me what to package, I already told you."""
+Workspace directory: {ctx.workspace_dir}
+
+Start researching and building — do NOT ask me what to package, I already told you."""
 
     messages = [
         {"role": "system", "content": system_content},
@@ -152,7 +152,7 @@ The specification for the package to create is in the system prompt above. Start
         _all_text = "\n".join(msg.get('content', '') or '' for msg in messages)
         _tok = ctx.ai.count_tokens(_all_text)
         _ctx_str = f" ({_tok//1024}k/{ctx.ai.max_tokens//1024}k tok)"
-        with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", color=AI_COLOR):
+        with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", suffix=f"Analyzing spec ({round_idx+1}/{generate_max_rounds})", color=AI_COLOR):
             result = chat_completion(ctx.ai, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
         message = result.get('message', {})
@@ -250,6 +250,13 @@ The specification for the package to create is in the system prompt above. Start
                 if display is None:
                     continue
                 print(f"[GENERATE] {display}", flush=True)
+            _summary_items = [
+                ("web_fetch (cached)", {}, r) if name == "_skip" else (name, inp, r)
+                for (name, inp), r in zip(round_calls, round_results)
+            ]
+            round_summary = _summarize_round_calls(_summary_items)
+            print(f"[GENERATE] round {round_idx+1}/{generate_max_rounds}: "
+                  f"{round_summary or 'no tool calls'}", flush=True)
             response_content = message.get('content', '') or ''
             tc_arg = dict(tool_calls=message['tool_calls'])
             messages.append({"role": "assistant", "content": response_content, **tc_arg})
@@ -262,7 +269,7 @@ The specification for the package to create is in the system prompt above. Start
                     content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
                 messages.append({"role": "tool", "content": content, "name": tool_name})
             prune_messages(messages, keep_rounds=2)
-            spec_files = sorted(Path(ctx.workspace_dir).rglob("*.spec"))
+            spec_files = sorted(Path(ctx.workspace_dir).glob("*.spec"))
             for spec_path in spec_files:
                 spec_str = str(spec_path)
                 if spec_str in _evaluated_specs:
@@ -298,7 +305,7 @@ The specification for the package to create is in the system prompt above. Start
             print("[GENERATE] No response from AI.")
             break
 
-    for spec_file in sorted(Path(ctx.workspace_dir).rglob("*.spec")):
+    for spec_file in sorted(Path(ctx.workspace_dir).glob("*.spec")):
         try:
             fmt_cmd = ["/usr/lib/obs/service/format_spec_file", str(spec_file.parent)]
             subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)

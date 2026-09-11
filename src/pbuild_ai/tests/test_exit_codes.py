@@ -127,12 +127,12 @@ class TestOuterHandlerExitCode(unittest.TestCase):
         sys.argv = ["pbuild-ai", "--analyze", "/tmp"]
 
         from pathlib import Path
-        _original_rglob = Path.rglob
-        def _broken_rglob(self, pattern):
+        _original_glob = Path.glob
+        def _broken_glob(self, pattern):
             if pattern == "*.spec":
                 raise RuntimeError("Simulated spec discovery failure")
-            return _original_rglob(self, pattern)
-        Path.rglob = _broken_rglob
+            return _original_glob(self, pattern)
+        Path.glob = _broken_glob
 
         import pbuild_ai.pbuild_ai
         try:

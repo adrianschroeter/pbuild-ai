@@ -795,7 +795,9 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
                         pass
         elif tool_name == "read_file":
-            path = tool_input.get("path")
+            # Some models confuse read_file with read_file_from_archive and
+            # send 'file_path' instead of 'path' — accept it as an alias.
+            path = tool_input.get("path") or tool_input.get("file_path")
             if not path:
                 results.append(f"Error: read_file: missing 'path'. Got keys: {list(tool_input.keys())}.")
                 continue

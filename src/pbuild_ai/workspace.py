@@ -174,8 +174,9 @@ class RpmSourceManager:
         except ValueError:
             return False
 
-    def find_spec_files(self):
-        return [f for f in self.base_dir.rglob("*.spec") if self._is_safe_path(f)]
+    def find_spec_files(self, project_mode=False):
+        from pbuild_ai.manifest import find_spec_files as _find_spec_files
+        return [f for f in _find_spec_files(str(self.base_dir), project_mode) if self._is_safe_path(f)]
 
     def read_file_safe(self, file_path):
         if not self._is_safe_path(file_path):
@@ -591,7 +592,7 @@ Do you have enough information to diagnose and fix the {package_name} build fail
                 print(f"\n[DEEP] Asking AI (round {round_i+1}/{max_rounds})...")
                 if debug:
                     print(f"[DEEP PROMPT]\n{combined_prompt}\n[/DEEP PROMPT]")
-                raw = ai.analyze("You are investigating a failed RPM build interactively.", combined_prompt, full_context).strip()
+                raw = ai.analyze("You are investigating a failed RPM build interactively.", combined_prompt, full_context, task="Investigating build failure").strip()
                 if not raw:
                     print(f"[DEEP] Empty response, skipping round.")
                     continue
@@ -626,7 +627,7 @@ Do you have enough information to diagnose and fix the {package_name} build fail
 Summarize the root cause of the {package_name} build failure and what fix is needed. Be specific."""
                 if debug:
                     print(f"\n[DEEP PROMPT]\n{final_prompt}\n[/DEEP PROMPT]")
-                summary = ai.analyze("You summarize build failure investigations.", final_prompt, full_context)
+                summary = ai.analyze("You summarize build failure investigations.", final_prompt, full_context, task="Summarizing build investigation")
                 print(f"\n[DEEP] Final diagnosis:\n{summary}\n")
 
         except Exception as e:
@@ -701,3 +702,16 @@ Summarize the root cause of the {package_name} build failure and what fix is nee
         if agents_file:
             return agents_file.read_text(encoding="utf-8")
         return None
+
+    def read_agent_skills(self):
+        """Return sorted (name, content) pairs for workspace agent-skill
+        documents in <workspace>/.agents/skills/*.md. Scripts and other
+        non-.md files in that directory are not skill documents and are
+        skipped; a missing directory yields an empty list."""
+        skills_dir = self.base_dir / ".agents" / "skills"
+        if not skills_dir.is_dir():
+            return []
+        out = []
+        for skill_file in sorted(skills_dir.glob("*.md")):
+            out.append((skill_file.stem, skill_file.read_text(encoding="utf-8")))
+        return out

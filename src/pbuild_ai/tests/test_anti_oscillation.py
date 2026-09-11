@@ -31,9 +31,11 @@ def _make_tool_call(name, arguments):
     }
 
 
-def _make_response(tool_calls=None, content=""):
+def _make_response(tool_calls=None, content="", thinking=None):
     """Build a mock AI /api/chat response."""
     msg = {"content": content}
+    if thinking is not None:
+        msg["thinking"] = thinking
     if tool_calls is not None:
         msg["tool_calls"] = tool_calls
     return {"message": msg}
@@ -91,6 +93,37 @@ class TestAntiOscillation(unittest.TestCase):
                 workspace_dir=self.tmpdir, max_rounds=max_rounds,
             )
         return results, call_count[0]
+
+    def test_tool_call_recovered_from_thinking_field(self):
+        """A tool call the model finalized inside message.thinking (with empty
+        content) is extracted and executed instead of being dropped."""
+        thinking = ('I should bump the version line. '
+                    '{"name": "edit_file", "arguments": {"path": "testpkg.spec", '
+                    '"old_string": "Version: 1.0", "new_string": "Version: 2.0"}}')
+        responses = [
+            _make_response(content="", thinking=thinking),
+            _make_response(content="Done."),
+        ]
+        results, n_calls = self._run_call_with_tools(responses, max_rounds=3)
+
+        self.assertTrue(results, "expected the extracted tool call to execute")
+        self.assertIn("Version: 2.0", self.spec_path.read_text())
+        self.assertEqual(n_calls, 2, "round 2 should just terminate the loop")
+
+    def test_tool_call_recovered_from_content_text(self):
+        """A tool call emitted as JSON text in message.content (no native
+        tool_calls) is extracted, round-tripped and executed."""
+        content = ('{"name": "edit_file", "arguments": {"path": "testpkg.spec", '
+                   '"old_string": "Version: 1.0", "new_string": "Version: 3.0"}}')
+        responses = [
+            _make_response(content=content),
+            _make_response(content="Done."),
+        ]
+        results, n_calls = self._run_call_with_tools(responses, max_rounds=3)
+
+        self.assertTrue(results, "expected the extracted tool call to execute")
+        self.assertIn("Version: 3.0", self.spec_path.read_text())
+        self.assertEqual(n_calls, 2, "round 2 should just terminate the loop")
 
     # -- write_file revert detection --
 
@@ -356,6 +389,235 @@ class TestAntiOscillation(unittest.TestCase):
         self.assertEqual(edit_count, 2)
         # Third edit should be blocked (revert)
         self.assertTrue(any("SKIP" in r and "reverts" in r for r in results))
+
+    # -- one-nudge round on text-only replies --
+
+    def _run_with_nudge_tools(self, response_sequence, max_rounds=15):
+        """Run call_with_tools with a non-empty tools list so nudging may trigger."""
+        self.tools = [{
+            "type": "function",
+            "function": {
+                "name": "edit_file",
+                "description": "edit a file",
+                "parameters": {"type": "object"},
+            },
+        }]
+        return self._run_call_with_tools(response_sequence, max_rounds=max_rounds)
+
+    def test_text_only_round1_nudged_then_tool_call(self):
+        """A text-only round 1 gets one corrective nudge, then tool calls proceed."""
+        nudge_before = len(self.messages)
+        responses = [
+            _make_response(content="I'll fix that for you."),
+            [_make_tool_call("edit_file", {
+                "path": self.spec_name,
+                "old_string": "Version: 1.0",
+                "new_string": "Version: 2.0",
+            })],
+        ]
+        results, n_calls = self._run_with_nudge_tools(responses)
+
+        # rounds: 1=text, 2=tool call, 3=loop-termination "Done." text
+        self.assertEqual(n_calls, 3)
+        self.assertTrue(any("OK" in r for r in results))
+        nudge_messages = [m for m in self.messages[nudge_before:]
+                          if m.get("role") == "user" and "tool call" in m.get("content", "")]
+        self.assertEqual(len(nudge_messages), 1)
+
+    def test_terminal_reply_not_nudged(self):
+        """already-at-version text replies are terminal and must not be nudged."""
+        nudge_before = len(self.messages)
+        responses = [_make_response(content="already-at-version")]
+        results, n_calls = self._run_with_nudge_tools(responses)
+
+        self.assertEqual(results, [])
+        self.assertEqual(n_calls, 1)
+        self.assertEqual(len(self.messages), nudge_before)
+
+    def test_abort_reply_not_nudged(self):
+        """[ABORT: reason] text replies are terminal and must not be nudged."""
+        nudge_before = len(self.messages)
+        responses = [_make_response(content="[ABORT: cannot run update_references.sh]")]
+        results, n_calls = self._run_with_nudge_tools(responses)
+
+        self.assertEqual(results, [])
+        self.assertEqual(n_calls, 1)
+        self.assertEqual(len(self.messages), nudge_before)
+
+    def test_no_nudge_without_tools(self):
+        """Without any tools declared there is nothing to nudge towards."""
+        nudge_before = len(self.messages)
+        responses = [_make_response(content="Just talking.")]
+        results, n_calls = self._run_call_with_tools(responses)
+
+        self.assertEqual(results, [])
+        self.assertEqual(n_calls, 1)
+        self.assertEqual(len(self.messages), nudge_before)
+
+    def test_two_text_rounds_stop_without_infinite_nudge(self):
+        """Only one nudge is sent; a second text reply returns without retry."""
+        nudge_before = len(self.messages)
+        responses = [
+            _make_response(content="Round one prose."),
+            _make_response(content="Round two prose still."),
+        ]
+        results, n_calls = self._run_with_nudge_tools(responses)
+
+        self.assertEqual(results, [])
+        self.assertEqual(n_calls, 2)
+        nudge_messages = [m for m in self.messages[nudge_before:]
+                          if m.get("role") == "user" and "tool call" in m.get("content", "")]
+        self.assertEqual(len(nudge_messages), 1)
+
+
+class TestDuplicateChangelogGuard(unittest.TestCase):
+    """The .changes anti-oscillation guard must block edits that would leave
+    two or more '- Updated to version <ver>' entries for the same version,
+    without touching ordinary (non-changes) files."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_dup_chg_")
+        self.changes_name = "testpkg.changes"
+        self.changes_path = Path(self.tmpdir) / self.changes_name
+
+        self.manager = RpmSourceManager(self.tmpdir)
+        self.ai = LlmAnalyzer(model="test-model")
+        self.ai.manager = self.manager
+        self.ai._chat_supported = True
+        self.tools = []
+        self.messages = [
+            {"role": "system", "content": "You are a test assistant."},
+            {"role": "user", "content": "Update the changelog."},
+        ]
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @staticmethod
+    def _entry(version, author="Test Author <t@example.com>"):
+        return ("-------------------------------------------------------------------\n"
+                "Fri Sep 11 09:00:00 UTC 2026 - " + author + "\n"
+                "\n"
+                f"- Updated to version {version}\n"
+                "\n")
+
+    def _run_call_with_tools(self, response_sequence, max_rounds=15):
+        call_count = [0]
+
+        def mock_request(url, payload):
+            idx = call_count[0]
+            call_count[0] += 1
+            if idx >= len(response_sequence):
+                return _make_response(content="Done.")
+            resp = response_sequence[idx]
+            if isinstance(resp, list):
+                return _make_response(tool_calls=resp)
+            return resp
+
+        with patch.object(self.ai, '_request', side_effect=mock_request):
+            results = self.ai.call_with_tools(
+                self.messages, self.tools, self.manager,
+                workspace_dir=self.tmpdir, max_rounds=max_rounds,
+            )
+        return results
+
+    def test_edit_file_creating_duplicate_changelog_entry_blocked(self):
+        """edit_file that would leave two entries for the same version is blocked."""
+        self.changes_path.write_text(self._entry("2.0"))
+        responses = [
+            # Prepend the exact same entry block again -> duplicate version
+            [_make_tool_call("edit_file", {
+                "path": self.changes_name,
+                "old_string": self._entry("2.0"),
+                "new_string": self._entry("2.0") + self._entry("2.0"),
+            })],
+        ]
+        results = self._run_call_with_tools(responses)
+        self.assertTrue(any("duplicate changelog entries" in r for r in results))
+        self.assertIn("blocked", " ".join(results))
+        # File must be untouched on disk
+        self.assertEqual(self.changes_path.read_text(), self._entry("2.0"))
+
+    def test_edit_file_creating_duplicate_then_blocked_further_edits(self):
+        """After a duplicate attempt the file is blocked for the whole call."""
+        self.changes_path.write_text(self._entry("2.0"))
+        dup_new = self._entry("2.0") + self._entry("2.0")
+        responses = [
+            # Round 1: duplicate prepend (blocked, blocks the file)
+            [_make_tool_call("edit_file", {
+                "path": self.changes_name,
+                "old_string": self._entry("2.0"),
+                "new_string": dup_new,
+            })],
+            # Round 2: a legit single-entry attempt (must still be blocked)
+            [_make_tool_call("edit_file", {
+                "path": self.changes_name,
+                "old_string": self._entry("2.0"),
+                "new_string": self._entry("2.0"),
+            })],
+        ]
+        results = self._run_call_with_tools(responses)
+        self.assertTrue(any("duplicate changelog entries" in r for r in results))
+        self.assertTrue(any("blocked" in r and "No further edits" in r for r in results))
+        self.assertEqual(self.changes_path.read_text(), self._entry("2.0"))
+
+    def test_write_file_creating_duplicate_changelog_entry_blocked(self):
+        """write_file that provides two entries for the same version is blocked."""
+        self.changes_path.write_text(self._entry("1.0"))
+        responses = [
+            [_make_tool_call("write_file", {
+                "path": self.changes_name,
+                "content": self._entry("2.0") + self._entry("2.0"),
+            })],
+        ]
+        results = self._run_call_with_tools(responses)
+        self.assertTrue(any("duplicate changelog entries" in r for r in results))
+        self.assertEqual(self.changes_path.read_text(), self._entry("1.0"))
+
+    def test_single_changelog_entry_not_blocked(self):
+        """A write_file with exactly one entry per version proceeds normally."""
+        self.changes_path.write_text(self._entry("1.0"))
+        responses = [
+            [_make_tool_call("write_file", {
+                "path": self.changes_name,
+                "content": self._entry("2.0"),
+            })],
+        ]
+        results = self._run_call_with_tools(responses)
+        self.assertFalse(any("duplicate changelog entries" in r for r in results))
+        self.assertEqual(self.changes_path.read_text(), self._entry("2.0"))
+
+    def test_distinct_versions_not_blocked(self):
+        """Two different version entries ('1.0' and '2.0') are perfectly valid."""
+        self.changes_path.write_text(self._entry("1.0"))
+        responses = [
+            [_make_tool_call("write_file", {
+                "path": self.changes_name,
+                "content": self._entry("2.0") + self._entry("1.0"),
+            })],
+        ]
+        results = self._run_call_with_tools(responses)
+        self.assertFalse(any("duplicate changelog entries" in r for r in results))
+        self.assertEqual(self.changes_path.read_text(),
+                         self._entry("2.0") + self._entry("1.0"))
+
+    def test_spec_file_with_repeated_version_line_not_affected(self):
+        """The guard is .changes-specific: repeated Version: lines in a .spec
+        must not be treated as duplicated changelog entries."""
+        spec_name = "testpkg.spec"
+        spec_path = Path(self.tmpdir) / spec_name
+        spec_path.write_text("Name: testpkg\nVersion: 1.0\nVersion: 1.0\n")
+        responses = [
+            [_make_tool_call("write_file", {
+                "path": spec_name,
+                "content": "Name: testpkg\nVersion: 2.0\nVersion: 1.0\n",
+            })],
+        ]
+        results = self._run_call_with_tools(responses)
+        self.assertFalse(any("duplicate changelog entries" in r for r in results))
+        self.assertEqual(spec_path.read_text(),
+                         "Name: testpkg\nVersion: 2.0\nVersion: 1.0\n")
 
 
 if __name__ == '__main__':

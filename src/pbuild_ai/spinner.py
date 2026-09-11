@@ -30,8 +30,9 @@ class Spinner:
 
     CHARS = itertools.cycle("⣾⣽⣻⢿⡿⣟⣯⣷")
 
-    def __init__(self, prefix="", color=None, delay=0.1):
+    def __init__(self, prefix="", suffix="", color=None, delay=0.1):
         self.prefix = _color(color, prefix) if color else prefix
+        self.suffix = suffix
         self.delay = delay
         self._running = False
         self._thread = None
@@ -48,7 +49,8 @@ class Spinner:
     def _spin(self):
         while self._running:
             elapsed = time.time() - self._t0
-            self._stream_write(f"\r{self.prefix} {next(self.CHARS)}  ({elapsed:.1f}s)")
+            suffix_str = f"  {self.suffix}" if self.suffix else ""
+            self._stream_write(f"\r{self.prefix} {next(self.CHARS)}  ({elapsed:.1f}s){suffix_str}")
             time.sleep(self.delay)
 
     def stop(self):
