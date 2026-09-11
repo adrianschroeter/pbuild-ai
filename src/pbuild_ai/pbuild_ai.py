@@ -957,34 +957,70 @@ def _unique_script_refs(refs):
     return out
 
 
-def _mandated_script_failed(results, post_scripts):
-    """Return the basename of a mandated post-update script that failed, or None.
+_TOOL_SCRIPT_FAILURE_MARKERS = (
+    "Error: Script failed",
+    "Error executing script",
+    "requires a script_name",
+    "is outside the workspace directory",
+    "not found",
+)
 
-    AGENTS.md may require a post-version-change script (e.g.
-    ``.agents/skills/update_references.sh``). If any of those runs returned an
-    error, the update is incomplete and must ABORT regardless of what the model
-    answered afterwards.
+
+def _tool_script_failed_result(content):
+    """Return True when a run_tool_script tool result signals failure."""
+    content = str(content or "")
+    return any(marker in content for marker in _TOOL_SCRIPT_FAILURE_MARKERS)
+
+
+def _mandated_script_failed(results, post_scripts, messages=None):
+    """Return the basename of a mandated post-update script whose execution
+    failed, or None.
+
+    AGENTS.md may require a post-version-change script (e.g. any ``*.sh``
+    referenced by the workspace skill markdown under a "post-update" rule). If
+    that script was actually invoked and its run returned an error, the update
+    is incomplete and must ABORT regardless of what the model answered
+    afterwards.
+
+    Attribution is per tool call: only a ``run_tool_script`` call that named
+    the mandated script (via ``script_name``) and then errored counts.  This
+    avoids false aborts when the model first gasps a malformed call
+    ("requires a script_name") and then succeeds on a correctly formed retry.
     """
     mandated = {Path(s).name for s in post_scripts}
+    mandated.discard("")
     if not mandated:
         return None
-    for r in results or []:
-        r = str(r)
-        if not r.startswith("run_tool_script:"):
-            continue
-        if "Error:" not in r:
-            continue
-        for base in mandated:
-            if base in r:
-                return base
-    # A run_tool_script error that never even carried a script name (the model
-    # passed the wrong argument key).  With a single mandated script this is
-    # almost certainly that script failing to start.
-    if len(mandated) == 1:
-        for r in results or []:
-            r = str(r)
-            if r.startswith("run_tool_script:") and "requires a script_name" in r:
-                return next(iter(mandated))
+    if messages:
+        for _i, _m in enumerate(messages):
+            if _m.get("role") != "assistant":
+                continue
+            for _tcs in _m.get("tool_calls") or []:
+                _fn = _tcs.get("function") or {}
+                if _fn.get("name") != "run_tool_script":
+                    continue
+                _args = _fn.get("arguments") or {}
+                if isinstance(_args, str):
+                    try:
+                        _args = json.loads(_args) if _args else {}
+                    except (json.JSONDecodeError, TypeError):
+                        _args = {}
+                _base = Path(_args.get("script_name", "") or "").name
+                if _base not in mandated:
+                    continue
+                for _j in range(_i + 1, len(messages)):
+                    _next = messages[_j]
+                    if _next.get("role") == "tool" and _next.get("name") == "run_tool_script":
+                        if _tool_script_failed_result(_next.get("content")):
+                            return _base
+                        break
+    else:
+        for _r in results or []:
+            _r = str(_r)
+            if _r.startswith("run_tool_script:") and "Error:" in _r:
+                for _base in mandated:
+                    if _base in _r:
+                        return _base
     return None
 
 
@@ -3053,17 +3089,19 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         and not _ai_requested_abort(messages)):
                     print(f"\n[UPDATE] Asking AI about follow-up steps required for "
                           f"{spec.name} {_old_v.group(1)} -> {_new_v.group(1)}...")
-                    _followup_system = POST_UPDATE_CHECK_PROMPT.format(
-                        spec=spec.name,
-                        old_version=_old_v.group(1),
-                        new_version=_new_v.group(1),
-                        full_context=full_context,
-                    )
                     _agents_text = manager.read_agents_md() or ""
                     if agent_skills_text:
                         _agents_text = f"{_agents_text}\n\n{agent_skills_text}"
                     _post_scripts = _unique_script_refs(
                         parse_post_update_scripts(_agents_text))
+                    _followup_system = POST_UPDATE_CHECK_PROMPT.format(
+                        spec=spec.name,
+                        old_version=_old_v.group(1),
+                        new_version=_new_v.group(1),
+                        post_scripts=", ".join(
+                            f"`{s}`" for s in _post_scripts) or "(none)",
+                        full_context=full_context,
+                    )
                     if _post_scripts:
                         _post_directive = (
                             "AGENTS.md mandates these post-version-change scripts: "
@@ -3099,7 +3137,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             else:
                                 display = _r[:500] + "..." if len(_r) > 500 else _r
                             print(f"[UPDATE] {display}")
-                    _failed_script = _mandated_script_failed(_followup_results, _post_scripts)
+                    _failed_script = _mandated_script_failed(_followup_results, _post_scripts, _followup_messages)
                     if _failed_script:
                         print(f"[ABORT] {_failed_script} could not be executed.")
                         sys.exit(1)

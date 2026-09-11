@@ -130,7 +130,7 @@ treated as failure to perform required steps.
 1. Read the AGENTS.md / skill rules in the additional context below and list the steps
    they mandate after a version bump.
 2. Perform every mandated step NOW by calling `run_tool_script` with the exact
-   script reference from AGENTS.md (e.g., `.agents/skills/update_references.sh`).
+   script reference from AGENTS.md (the mandated scripts are: {post_scripts}).
 3. If a mandated step cannot be performed — the script is missing, its execution is
    blocked (tool-script execution disabled), or it exits with a non-zero status —
    change nothing else and answer with a line containing exactly [ABORT: reason].

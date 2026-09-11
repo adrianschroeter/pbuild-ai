@@ -106,8 +106,17 @@ def format_tool_display(name, inp, r, debug):
     if not r:
         return None
     if name == "read_file":
+        # Successful reads are already logged by the executor as a
+        # "[TOOL] read_file: <path> ..." line; the [FIX] summary would be
+        # redundant then.  Errors are not logged by the executor, so keep
+        # those visible.
+        if isinstance(r, str) and not r.startswith("Error"):
+            return None
         line_count = r.count('\n')
-        return f"read_file: {inp.get('path', '?')} ({line_count} lines)"
+        # Some models send file_path instead of path (alias accepted by the
+        # executor) — resolve the same way so the log shows the real file.
+        _p = (inp.get("path") or inp.get("file_path")) if isinstance(inp, dict) else None
+        return f"read_file: {_p or '?'} ({line_count} lines)"
     if name in ("list_archive", "list_files"):
         return None
     if name == "read_file_from_archive":

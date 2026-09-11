@@ -91,16 +91,53 @@ class TestMandatedScriptFailed(unittest.TestCase):
                    "run_tool_script: updated references\nall good"]
         self.assertIsNone(_mandated_script_failed(results, self.POST))
 
-    def test_failed_script_detected(self):
+    def test_failed_script_detected_from_results(self):
         results = ["run_tool_script: Error: Script failed (exit 127):\n"
                    ".../update_references.sh: line 8: osc: command not found"]
         self.assertEqual(_mandated_script_failed(results, self.POST),
                          "update_references.sh")
 
-    def test_missing_script_name_error_detected(self):
-        results = ["run_tool_script: Error: run_tool_script requires a script_name."]
-        self.assertEqual(_mandated_script_failed(
-            results, ["update_references.sh"]), "update_references.sh")
+    def test_malformed_call_then_success_not_flagged_from_messages(self):
+        # The model first calls run_tool_script without a script_name (error),
+        # then a correctly-formed call that successfully runs the mandated
+        # script.  That is NOT a failure and must not abort.
+        msgs = [
+            {"role": "system", "content": "run updates"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"function": {"name": "run_tool_script",
+                                          "arguments": {"script": ".agents/skills/update_references.sh"}}}]},
+            {"role": "tool", "name": "run_tool_script",
+             "content": "Error: run_tool_script requires a script_name."},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"function": {"name": "run_tool_script",
+                                          "arguments": {"script_name": ".agents/skills/update_references.sh"}}}]},
+            {"role": "tool", "name": "run_tool_script",
+             "content": "Running source_service 'download_files' ...\nall good"},
+        ]
+        self.assertIsNone(_mandated_script_failed([], self.POST, messages=msgs))
+
+    def test_malformed_call_then_failure_detected_from_messages(self):
+        msgs = [
+            {"role": "system", "content": "run updates"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"function": {"name": "run_tool_script",
+                                          "arguments": {"script_name": ".agents/skills/update_references.sh"}}}]},
+            {"role": "tool", "name": "run_tool_script",
+             "content": "Error: Script failed (exit 127):\n...: osc: command not found"},
+        ]
+        self.assertEqual(_mandated_script_failed([], self.POST, messages=msgs),
+                         "update_references.sh")
+
+    def test_string_arguments_handled(self):
+        msgs = [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"function": {"name": "run_tool_script",
+                                          "arguments": '{"script_name": ".agents/skills/update_references.sh"}'}}]},
+            {"role": "tool", "name": "run_tool_script",
+             "content": "Error executing script: boom"},
+        ]
+        self.assertEqual(_mandated_script_failed([], self.POST, messages=msgs),
+                         "update_references.sh")
 
     def test_unrelated_errors_ignored(self):
         results = ["edit_file: Error: old_string not found",
