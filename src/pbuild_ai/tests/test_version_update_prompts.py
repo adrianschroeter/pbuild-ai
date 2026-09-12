@@ -21,7 +21,7 @@ SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from pbuild_ai.pbuild_ai import _ai_requested_abort, _check_update_hints, _prefetch_summary
+from pbuild_ai.pbuild_ai import _ai_requested_abort, _check_update_hints, _notes_from_releases, _prefetch_summary
 from pbuild_ai.skills.version_research_skill import (
     VERSION_RESEARCH_SYSTEM_PROMPT,
     VERSION_RESEARCH_TASK_PROMPT,
@@ -217,6 +217,60 @@ class TestPrefetchSummary(unittest.TestCase):
         self.assertEqual(_prefetch_summary("plain"), "plain")
         self.assertEqual(_prefetch_summary(42), 42)
         self.assertEqual(_prefetch_summary(None), None)
+
+
+class TestNotesFromReleases(unittest.TestCase):
+    RELEASES = [
+        {"tag_name": "v0.34.0", "body": "New ChatGPT Desktop support"},
+        {"tag_name": "0.33.3", "body": "Windows GPU fix"},
+        {"tag_name": "v0.33.2", "body": "gguf memory mapping"},
+        {"tag_name": "0.33.0", "body": "Current version noted"},
+    ]
+
+    def test_latest_and_sections_oldest_first(self):
+        latest, notes = _notes_from_releases(self.RELEASES, "0.33.0", "body")
+        self.assertEqual(latest, "0.34.0")
+        self.assertIn("## 0.33.2", notes)
+        self.assertIn("## 0.33.3", notes)
+        self.assertIn("## 0.34.0", notes)
+        # oldest first (32, 33, 34) so the target's notes are last
+        self.assertLess(notes.index("## 0.33.2"), notes.index("## 0.33.3"))
+        self.assertLess(notes.index("## 0.33.3"), notes.index("## 0.34.0"))
+
+    def test_current_version_releases_excluded(self):
+        latest, notes = _notes_from_releases(self.RELEASES, "0.33.0", "body")
+        self.assertNotIn("Current version noted", notes)
+        self.assertNotIn("## 0.33.0", notes)
+
+    def test_already_at_latest_returns_empty_notes(self):
+        latest, notes = _notes_from_releases(
+            [{"tag_name": "0.33.0", "body": "current"}], "0.33.0", "body")
+        self.assertEqual(latest, "0.33.0")
+        self.assertEqual(notes, "")
+
+    def test_v_prefix_normalized_for_order(self):
+        # 'v0.9.9' must sort below '0.33.x' hence included.
+        releases = [{"tag_name": "v0.34.0", "body": "new"},
+                    {"tag_name": "v0.33.2", "body": "intermediate"},
+                    {"tag_name": "v0.9.9", "body": "old"}]
+        latest, notes = _notes_from_releases(releases, "0.9.9", "body")
+        self.assertEqual(latest, "0.34.0")
+        self.assertIn("## 0.33.2", notes)
+
+    def test_empty_and_non_list_inputs(self):
+        self.assertEqual(_notes_from_releases(None, "0.33.0", "body"),
+                         ("", ""))
+        self.assertEqual(_notes_from_releases([], "0.33.0", "body"),
+                         ("", ""))
+        self.assertEqual(_notes_from_releases([{"x": 1}], "0.33.0", "body"),
+                         ("", ""))
+
+    def test_gitlab_description_key(self):
+        releases = [{"tag_name": "0.34.0", "description": "GL notes"}]
+        latest, notes = _notes_from_releases(releases, "0.33.0", "description")
+        self.assertEqual(latest, "0.34.0")
+        self.assertIn("## 0.34.0", notes)
+        self.assertIn("GL notes", notes)
 
 
 if __name__ == "__main__":

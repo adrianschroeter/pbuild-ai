@@ -68,6 +68,7 @@ from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts
 from pbuild_ai.context import PbuildContext
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
+    collapse_repeated_separators,
 )
 from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_RESEARCH_TASK_PROMPT, VERSION_UPDATE_SYSTEM_PROMPT, VERSION_UPDATE_TASK_PROMPT, POST_UPDATE_CHECK_PROMPT
 from pbuild_ai.generate_mode import run_generate_mode
@@ -470,6 +471,36 @@ def _version_satisfies(version: str, op: str | None, constraint_ver: str | None)
     elif op == '<':
         return v < c
     return True
+
+
+def _notes_from_releases(releases, current_version, body_key):
+    """Build ``## <version>``-labelled release-note sections for a version bump.
+
+    ``releases`` is a list of upstream release dicts (as returned by the
+    GitHub/GitLab releases API), each carrying a ``tag_name`` and a body field
+    (``body`` for GitHub, ``description`` for GitLab).  Release notes for every
+    release strictly newer than ``current_version`` are kept, oldest first, so
+    the changelog can cover formerly-shipped intermediate releases.
+
+    Returns ``(latest_version, notes)`` where ``latest_version`` is the newest
+    tag in the list and ``notes`` is ``## <version>``-labelled blocks (or '').
+    """
+    latest = ''
+    parts = []
+    for rel in releases or []:
+        if not isinstance(rel, dict):
+            continue
+        tag = (rel.get('tag_name') or '').lstrip('v')
+        if not tag:
+            continue
+        if not latest:
+            latest = tag
+        if current_version and _parse_version(tag) <= _parse_version(current_version):
+            continue
+        body = (rel.get(body_key) or "").strip()
+        parts.append(f"## {tag}\n\n{body}".rstrip())
+    notes = "\n\n".join(reversed(parts))[:10000]
+    return latest, notes
 
 
 def _extract_spec_version(spec_path: Path) -> str | None:
@@ -1079,8 +1110,8 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
         except Exception:
             pass
     _notes = (release_notes or "").strip() or "(no upstream release notes available)"
-    if len(_notes) > 4000:
-        _notes = _notes[:4000] + "\n... (truncated) ..."
+    if len(_notes) > 8000:
+        _notes = _notes[:8000] + "\n... (truncated) ..."
     _changes_head = _before[:2500]
     # The .changes skill from skills/changelog_skill.py is authoritative for
     # the entry format and rules; always include it so the round follows the
@@ -1094,6 +1125,9 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
         "Use the existing first entry as the anchor: set old_string to the very "
         "first lines of the file (including the leading '---' separator) and "
         "new_string to your new entry followed by exactly those same lines.\n"
+        "Your new entry must NOT itself end with a '---' separator line — the "
+        "anchor lines you repeat below it already begin with the separator that "
+        "belongs to the older entry. Never produce two consecutive '---' lines.\n"
         "NEVER alter, reorder, or remove any existing entry below the new one. "
         "Do NOT call write_file — editing the whole file is forbidden.\n\n"
         + CHANGELOG_PROMPT
@@ -1105,7 +1139,8 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
         "If upstream shipped former releases between the old version and the "
         f"target (the package source is older than those releases), cover them "
         "per the skill rules above.\n\n"
-        f"Upstream release notes:\n\n{_release_notes_ctx}\n\n"
+        "Upstream release notes (sections are labeled with the release "
+        f"version):\n\n{_release_notes_ctx}\n\n"
         f"Current {changes_path.name} (head):\n\n{_changes_head}\n"
     )
     _messages = [{"role": "system", "content": _system}, {"role": "user", "content": _user}]
@@ -2515,15 +2550,20 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         _gh_m = re.search(r'github\.com[/:]([^/]+/[^/]+?)(?:\.git|/|$)', _source_url)
                         if _gh_m:
                             _repo = _gh_m.group(1).rstrip('/')
-                            _github_api_url = f'https://api.github.com/repos/{_repo}/releases/latest'
+                            _github_api_url = f'https://api.github.com/repos/{_repo}/releases?per_page=100'
                             if _current_version:
                                 try:
                                     _req = urllib.request.Request(_github_api_url, headers={"User-Agent": "pbuild-ai/1.0", "Accept": "application/vnd.github.v3+json"})
                                     _resp = urllib.request.urlopen(_req, timeout=10)
                                     _data = json.loads(_resp.read())
-                                    _release_notes = (_data.get("body") or "")[:10000]
-                                    _tag = _data.get('tag_name', '')
-                                    _latest = _tag.lstrip('v') if _tag else ''
+                                    # Collect release notes for every release in
+                                    # (current, latest] so the changelog can cover
+                                    # formerly-shipped intermediate releases too.
+                                    _latest, _notes = _notes_from_releases(
+                                        _data if isinstance(_data, list) else [],
+                                        _current_version, "body")
+                                    if _notes:
+                                        _release_notes = _notes
                                     _prefetched_data[_github_api_url] = json.dumps(_prefetch_summary(_data), indent=2)[:2000]
                                     if _latest and _current_version and _latest == _current_version:
                                         print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
@@ -2540,15 +2580,17 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         _gl_m = re.search(r'gitlab\.com[/:]([^/]+/[^/]+?)(?:\.git|/|$)', _source_url)
                         if _gl_m:
                             _repo = _gl_m.group(1).rstrip('/')
-                            _gl_api_url = f'https://gitlab.com/api/v4/projects/{urllib.parse.quote(_repo, safe="")}/releases/permalink/latest'
+                            _gl_api_url = f'https://gitlab.com/api/v4/projects/{urllib.parse.quote(_repo, safe="")}/releases?per_page=100'
                             if _current_version:
                                 try:
                                     _req = urllib.request.Request(_gl_api_url, headers={"User-Agent": "pbuild-ai/1.0"})
                                     _resp = urllib.request.urlopen(_req, timeout=10)
                                     _data = json.loads(_resp.read())
-                                    _release_notes = (_data.get("description") or "")[:10000]
-                                    _tag = _data.get('tag_name', '')
-                                    _latest = _tag.lstrip('v') if _tag else ''
+                                    _latest, _notes = _notes_from_releases(
+                                        _data if isinstance(_data, list) else [],
+                                        _current_version, "description")
+                                    if _notes:
+                                        _release_notes = _notes
                                     _prefetched_data[_gl_api_url] = json.dumps(_prefetch_summary(_data), indent=2)[:2000]
                                     if _latest and _current_version and _latest == _current_version:
                                         print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
@@ -3068,6 +3110,13 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 interactive=INTERACTIVE,
                                 skill_manager=ctx.skill_manager):
                             _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
+                            # The AI round sometimes emits the new entry with a
+                            # trailing '---' plus the older entry's own leading
+                            # '---'. Normalize runs of consecutive separators.
+                            _changes_norm = collapse_repeated_separators(_changes_after)
+                            if _changes_norm != _changes_after:
+                                _changes_file.write_text(_changes_norm)
+                                _changes_after = _changes_norm
                     if _changelog_restored or _changes_after == _changes_before_text:
                         # Deterministic fallback: enriched from release notes
                         if write_changelog_entry(
