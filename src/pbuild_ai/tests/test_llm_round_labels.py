@@ -1,7 +1,9 @@
 """Tests for the per-round AI spinner/log label helpers in llm_client.
 
-Guards that multi-round AI calls render a distinct label each round (round
-counter + last round's activity) instead of repeating a static suffix.
+Guards that multi-round AI calls render a distinct label every round (round
+counter) instead of repeating a static suffix.  The previous round's activity
+is printed on its own "round N/M:" line and is intentionally kept OFF the
+spinner label so the spinner stays short.
 """
 
 import os

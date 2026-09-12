@@ -1035,7 +1035,10 @@ class LlmAnalyzer:
             except Exception:
                 pass
         for round_idx in range(max_rounds):
-            self._task = _format_round_task(_base_task, round_idx + 1, _max_display, _last_activity)
+            # Only the round counter (+ task) goes on the spinner label: the
+            # previous round's activity is already printed on its own line and
+            # duplicating it here makes the spinner line too long.
+            self._task = _format_round_task(_base_task, round_idx + 1, _max_display)
             payload = {
                 "model": self.model,
                 "messages": messages,

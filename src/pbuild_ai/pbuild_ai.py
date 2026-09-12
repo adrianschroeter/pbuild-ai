@@ -3117,6 +3117,17 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             if _changes_norm != _changes_after:
                                 _changes_file.write_text(_changes_norm)
                                 _changes_after = _changes_norm
+                        else:
+                            # The AI round failed — it may have modified the
+                            # file (e.g. extended an existing entry instead of
+                            # prepending a new one). Restore the pre-round
+                            # snapshot so the deterministic path gets a clean
+                            # file.
+                            _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
+                            if _changes_after != _changes_before_text and _changes_before_text:
+                                _changes_file.write_text(_changes_before_text)
+                                _changes_after = _changes_before_text
+                                _changelog_restored = True
                     if _changelog_restored or _changes_after == _changes_before_text:
                         # Deterministic fallback: enriched from release notes
                         if write_changelog_entry(

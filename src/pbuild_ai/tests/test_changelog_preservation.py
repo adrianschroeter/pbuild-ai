@@ -283,6 +283,42 @@ class TestChangelogAiRoundPreservesHistory(unittest.TestCase):
             self.assertNotIn("write_file", offered)
             self.assertNotIn("web_fetch", offered)
 
+    def test_extending_existing_entry_is_rejected(self):
+        """When the model replaces the first entry's header and prepends new
+        bullets into it (instead of adding a completely new entry), the
+        round must detect that the old content was not fully preserved and
+        return False.  The caller then restores the file and falls back to
+        the deterministic writer."""
+        def extend_first_entry(manager):
+            # Simulate: model sets old_string to the first entry, but new_string
+            # replaces the header date and merges bullets — the old header line
+            # ("Thu Aug 27") disappears from the file.
+            for key, old in list(manager.files.items()):
+                mangled = (
+                    "-------------------------------------------------------------------\n"
+                    "Tue Sep 29 10:00:00 UTC 2026 - Adrian Schröter <adrian@suse.de>\n"
+                    "\n"
+                    "- Updated to version 0.34.0\n"
+                    "  * New feature\n"
+                    "- Update to 0.33.1\n"
+                    "  * MLX: Qwen3.8 Flash Next support\n"
+                    "  * cmake: make external compat patches idempotent\n"
+                    "  * MLX and llama.cpp update\n"
+                    "  * mlxrunner: add structured output support\n"
+                    "  * mlxrunner: avoid Metal GPU timeouts\n"
+                    "\n"
+                )
+                manager.files[key] = mangled
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # The round must reject the mangled content.
+            path, manager, ai, ok = self._round(
+                Path(tmp), behavior=extend_first_entry,
+                results=["edit_file: OK"],
+                create_entry=True)
+            self.assertFalse(ok,
+                "Round must reject an extended/mangled first entry")
+
     def test_round_uses_changelog_skill_and_former_release_hint(self):
         def prepend(manager):
             for key, old in list(manager.files.items()):
