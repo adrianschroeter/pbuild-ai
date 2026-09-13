@@ -104,5 +104,106 @@ class TestQwenToolCallExtraction(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
 
+class TestOpenAIModeAnalyze(unittest.TestCase):
+    """Test analyze() and _ai_response_from_openai in OpenAI /v1 mode.
+
+    Guards against regressions where the real model output (a non-empty
+    message.content) is dropped and reported as "(model returned empty
+    response)".
+    """
+
+    def _make_ai(self, request_handler):
+        import unittest.mock
+        ai = LlmAnalyzer(host="http://localhost:12345/v1", model="test",
+                         debug=False)
+        ai._request = unittest.mock.Mock(side_effect=request_handler)
+        return ai
+
+    def test_openai_analyze_extracts_message_content(self):
+        """The OpenAI response keeps the answer in message.content; analyze()
+        must use it instead of the native 'response' key."""
+        def handler(url, payload):
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "The spec is fine.",
+                }
+            }
+
+        ai = self._make_ai(handler)
+        result = ai.analyze("You are an expert.", "spec content here",
+                            format_json=True, task="Analyzing spec")
+        self.assertEqual(result, "The spec is fine.")
+
+    def test_openai_analyze_falls_back_to_thinking(self):
+        """When the model only produces reasoning_content, analyze() falls
+        back to the carried-over 'thinking' field."""
+        def handler(url, payload):
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "thinking": "{\"summary\": \"thinking-based output\"}",
+                }
+            }
+
+        ai = self._make_ai(handler)
+        result = ai.analyze("You are an expert.", "ctx", format_json=True)
+        self.assertIn("thinking-based output", result)
+
+    def test_openai_analyze_sends_system_role(self):
+        """In OpenAI mode the skill/system prompt goes into a dedicated
+        'system' field, not folded into the user prompt."""
+        captured = {}
+
+        def handler(url, payload):
+            captured.update(payload)
+            return {"message": {"role": "assistant", "content": "ok"}}
+
+        ai = self._make_ai(handler)
+        ai.analyze("SYS_PROMPT", "CONTEXT", agents_md="AGENTS",
+                   format_json=True)
+        self.assertEqual(captured.get("system"), "SYS_PROMPT")
+        self.assertIn("CONTEXT", captured.get("prompt", ""))
+        self.assertIn("AGENTS", captured.get("prompt", ""))
+
+    def test_ai_response_preserves_reasoning_content(self):
+        """llama.cpp /v1 responses carry chain-of-thought in
+        reasoning_content; it must survive as the AI 'thinking' field."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Answer text",
+                    "reasoning_content": "Hidden reasoning",
+                }
+            }]
+        }
+        ai = LlmAnalyzer(host="http://localhost:12345/v1", model="test",
+                         debug=False)
+        converted = ai._ai_response_from_openai(raw)
+        self.assertEqual(converted["message"]["content"], "Answer text")
+        self.assertEqual(converted["message"]["thinking"], "Hidden reasoning")
+
+    def test_native_mode_analyze_unchanged(self):
+        """Native /api/generate mode keeps reading the top-level 'response'
+        key and a flat single user prompt."""
+        import unittest.mock
+        ai = LlmAnalyzer(host="http://localhost:12345", model="test",
+                         debug=False)
+        ai._openai_mode = False
+        captured = {}
+
+        def handler(url, payload):
+            captured.update(payload)
+            return {"response": "native answer"}
+
+        ai._request = unittest.mock.Mock(side_effect=handler)
+        result = ai.analyze("SYS_PROMPT", "CONTEXT")
+        self.assertEqual(result, "native answer")
+        self.assertIn("SYS_PROMPT", captured.get("prompt", ""))
+        self.assertNotIn("system", captured)
+
+
 if __name__ == "__main__":
     unittest.main()

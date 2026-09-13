@@ -1326,7 +1326,7 @@ if __name__ == "__main__":
     parser.add_argument("--ai-server", default=None, help="AI server URL, OpenAI-compatible (overrides AI_HOST env var; legacy OLLAMA_HOST is also honored, default http://localhost:11434)")
     parser.add_argument("--model", "--ai-model", default=None, help="AI model name (overrides AI_MODEL env var; legacy OLLAMA_MODEL is also honored, default gemma4)")
     parser.add_argument("--ai-timeout", type=int, default=None, help="Timeout in seconds for AI API requests (default: 900, overrides AI_TIMEOUT env var; legacy OLLAMA_TIMEOUT is also honored)")
-    parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). Thinking-capable models (e.g. qwen3.6) auto-default to thinking=true for tool-calling rounds so they emit tool calls; an explicit value here overrides that default.")
+    parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). Thinking-capable models (e.g. qwen3.6) auto-default to thinking=true for tool-calling rounds so they emit tool calls; an explicit value here overrides that default. By default trust_tools=true is set so Ollama models that advertise only 'completion' (e.g. qwen3.8:27b-q4) can still receive tool-calling rounds; --ai-option trust_tools=false restores the strict advertised-capability gate.")
     parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries. Falls back to EMAIL env var.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     parser.add_argument("--skills-dir", action="append", default=[], help="Extra directory to load skill .py files from (repeatable). Combined with the built-in skills dir and ~/.config/pbuild-ai/skills/ if it exists.")
@@ -3262,6 +3262,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 
                 # 1. Determine skills
                 skills = skill_manager.get_skills_for(spec.name, manager.read_file_safe(spec), prompt=MODIFY_PROMPT)
+                skill_ctx_parts = []
                 if skills:
                     for s in skills:
                         print(f"[INFO] Using skill profile: {s.__name__}")
@@ -3306,7 +3307,16 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         print(f"[INFO] --try-build-first: Skipping AI analysis. Building {spec.name} first...")
                     elif not ctx.modify_prompt:
                         _spec_content = manager.read_file_safe(spec)
-                        analysis_context = full_context
+                        # full_context has the skill block appended as context;
+                        # spec_prompt already carries the same skill as its
+                        # system/user prompt, so strip the duplicated tail to
+                        # keep the model from losing track of the spec below.
+                        _base_context = full_context
+                        if skill_ctx_parts:
+                            _joined_skills = "\n\n".join(skill_ctx_parts)
+                            if _base_context.endswith(_joined_skills):
+                                _base_context = _base_context[:_base_context.rfind(_joined_skills)].rstrip()
+                        analysis_context = _base_context
                         # Check for saved .pai.context from a previous fix session
                         _pai_ctx = Path(WORKSPACE_DIR) / ".pai.context"
                         if FIX_MODE and _pai_ctx.exists():

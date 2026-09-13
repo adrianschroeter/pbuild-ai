@@ -103,6 +103,9 @@ class TestModelSupportsTools(unittest.TestCase):
     def setUp(self):
         self.ai = LlmAnalyzer(model="toolymodel")
         self.ai._is_ollama = True
+        # Default in production is trust_tools=True (guard skipped). These tests
+        # exercise the advertisement-based path, so disable the trust shortcut.
+        self.ai._trust_tools = False
 
     @staticmethod
     def _tags_response(caps):
@@ -137,6 +140,35 @@ class TestModelSupportsTools(unittest.TestCase):
     def test_unsupported_returns_false(self):
         self._stub_opener(self._tags_response(["completion"]))
         self.assertFalse(self.ai._model_supports_tools())
+
+    def test_trust_tools_overrides_unsupported(self):
+        self.ai._trust_tools = True
+        self._stub_opener(self._tags_response(["completion"]))
+        self.assertTrue(self.ai._model_supports_tools())
+        self.assertTrue(self.ai._model_thinking_capable)
+
+    def test_trust_tools_defaults_true(self):
+        ai = LlmAnalyzer(model="toolymodel")
+        ai._is_ollama = True
+        ai._opener = MagicMock()
+        ai._opener.open.side_effect = Exception("boom")
+        self.assertTrue(ai._model_supports_tools())
+        self.assertTrue(ai._model_thinking_capable)
+
+    def test_trust_tools_false_restores_gate(self):
+        self.ai._trust_tools = False
+        self._stub_opener(self._tags_response(["completion"]))
+        self.assertFalse(self.ai._model_supports_tools())
+
+    def test_trust_tools_popped_from_options(self):
+        ai = LlmAnalyzer(model="toolymodel", options={"trust_tools": True, "temperature": 0.1})
+        self.assertTrue(ai._trust_tools)
+        self.assertNotIn("trust_tools", ai.options)
+        ai2 = LlmAnalyzer(model="toolymodel", options={"trust_tools": False})
+        self.assertFalse(ai2._trust_tools)
+        self.assertNotIn("trust_tools", ai2.options)
+        ai3 = LlmAnalyzer(model="toolymodel")
+        self.assertTrue(ai3._trust_tools)
 
     def test_result_is_cached(self):
         self._stub_opener(self._tags_response(["completion"]))

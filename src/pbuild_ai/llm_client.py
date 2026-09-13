@@ -128,6 +128,12 @@ class LlmAnalyzer:
         self.debug = debug
         self.timeout = timeout if timeout is not None else int(os.environ.get("AI_TIMEOUT", os.environ.get("OLLAMA_TIMEOUT", "900")))
         self.options = options or {}
+        # Trust tool capability by default: pbuild-ai supplies the tools itself,
+        # and Ollama's advertised 'tools' tag is unreliable (e.g. qwen3.8:27b-q4
+        # performs tool calls correctly yet is tagged 'completion' only). The
+        # guard can be re-enabled on the strict path with trust_tools=false.
+        # Popped here so it is never forwarded to the model.
+        self._trust_tools = bool(self.options.pop("trust_tools", True))
         # Current human-readable label shown in the [AI] spinner while a
         # request runs (e.g. "Analyzing build failure"). Set by the callers.
         self._task = ""
@@ -203,12 +209,18 @@ class LlmAnalyzer:
             return False
 
     def _model_supports_tools(self):
-        """Whether the resolved model advertises the 'tools' capability on an
-        Ollama host (cached after the first query).
+        """Whether the resolved model can receive tool-calling rounds.
 
-        Fail-open: returns True on any error, on non-Ollama hosts and for
-        unknown model names, so a transient network failure never blocks a run.
-        """
+        Ollama's advertised 'tools' tag is unreliable (qwen3.8:27b-q4 performs
+        tool calls yet is tagged 'completion' only), and pbuild-ai supplies the
+        tools itself, so this defaults to True and skips the advertising check.
+        Setting trust_tools=false re-enables the strict advertised-capability
+        gate. Fail-open: returns True on any error and for unknown models."""
+        if getattr(self, '_trust_tools', False):
+            # The model is trusted (default). Treat it as thinking- and
+            # tool-capable so tool rounds get the usual reasoning defaults.
+            self._model_thinking_capable = True
+            return True
         if not getattr(self, '_is_ollama', False):
             return True
         if self._tool_capability_cache is not None:
@@ -596,6 +608,13 @@ class LlmAnalyzer:
         content = message.get("content", "")
         if content:
             ai_msg["content"] = content
+        # Thinking/CoT OpenAI-compatible servers (e.g. llama.cpp /v1 with
+        # reasoning models) put the chain-of-thought in 'reasoning_content';
+        # carry it over as the AI 'thinking' field so the native/OpenAI
+        # handling stays uniform.
+        reasoning = message.get("reasoning_content")
+        if reasoning:
+            ai_msg["thinking"] = reasoning
         if message.get("tool_calls"):
             ai_msg["tool_calls"] = []
             for tc in message["tool_calls"]:
@@ -764,11 +783,22 @@ class LlmAnalyzer:
         context_data = (context_data or "")[:_char_limit]
         if agents_md:
             agents_md = agents_md[:20000]
-        full_prompt = f"{system_prompt}\n\nHere is the context:\n{context_data}"
-        if agents_md:
-            full_prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
-        full_prompt = full_prompt[:_char_limit]
-        payload = {"model": self.model, "prompt": full_prompt, "stream": False}
+        # OpenAI-compatible chat servers keep the system prompt in a dedicated
+        # role instead of folding it into the user turn, so the skill rules do
+        # not get repeated inside the context and long prompts stay parseable.
+        # The native mode keeps the historical flat "system + context" prompt.
+        if self._openai_mode:
+            payload = {"model": self.model, "system": system_prompt, "stream": False}
+            prompt = f"Here is the context:\n{context_data}"
+            if agents_md:
+                prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
+            payload["prompt"] = prompt[:_char_limit]
+        else:
+            full_prompt = f"{system_prompt}\n\nHere is the context:\n{context_data}"
+            if agents_md:
+                full_prompt += f"\n\n--- AGENTS.md ---\n{agents_md}"
+            full_prompt = full_prompt[:_char_limit]
+            payload = {"model": self.model, "prompt": full_prompt, "stream": False}
         if format_json:
             self._apply_options_and_format(payload)
         else:
@@ -780,11 +810,19 @@ class LlmAnalyzer:
         try:
             result = self._request(self.api_url, payload)
             self._context = result.get("context")
-            response_text = result.get('response', '').strip()
-            # Some thinking/CoT models (e.g. qwen3.6) put the JSON output
-            # in the 'thinking' field when format=json is active.
-            if not response_text and result.get('thinking'):
-                response_text = result.get('thinking', '').strip()
+            if self._openai_mode:
+                # OpenAI responses keep the answer in message.content (and
+                # thinking in message.thinking via _ai_response_from_openai).
+                _ai_msg = result.get("message", {})
+                response_text = (_ai_msg.get("content") or "").strip()
+                if not response_text and _ai_msg.get("thinking"):
+                    response_text = _ai_msg.get("thinking", "").strip()
+            else:
+                response_text = result.get('response', '').strip()
+                # Some thinking/CoT models (e.g. qwen3.6) put the JSON output
+                # in the 'thinking' field when format=json is active.
+                if not response_text and result.get('thinking'):
+                    response_text = result.get('thinking', '').strip()
             # When format=json is sent, the model outputs JSON text.
             # Try to extract meaningful content from the JSON structure.
             if response_text:
