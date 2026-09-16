@@ -168,6 +168,8 @@ class LlmAnalyzer:
         self._tool_capable_names = []
         self.manager = None
         self._changed_files: set[str] = set()
+        self._transcript_log_base = None
+        self._transcript_index = 0
         self.reset_stats()
 
         # Discover the actual model name and context size
@@ -775,6 +777,7 @@ class LlmAnalyzer:
         # Transform OpenAI response to AI format
         if self._openai_mode:
             result = self._ai_response_from_openai(result)
+        self._write_ai_transcript(payload, raw)
         return result
 
     def analyze(self, system_prompt, context_data, agents_md=None, format_json=False, task=""):
@@ -857,6 +860,33 @@ class LlmAnalyzer:
             filtered = self._strip_spec_from_analysis(response_text)
             analyze_path.write_text(filtered, encoding='utf-8')
             print(f"[BUILD LOG] Wrote {len(filtered)} bytes to {analyze_path}")
+
+    def _write_ai_transcript(self, request_payload, response_raw):
+        """Store the raw AI request payload and raw HTTP response body next to
+        the current build log as build-N.log.ai_raw_request.<idx> and
+        build-N.log.ai_raw_answer.<idx>. The per-build counter restarts for
+        every new build step, so each build attempt gets its own numbering."""
+        try:
+            base = ""
+            if self.manager and hasattr(self.manager, '_last_log_path') and self.manager._last_log_path:
+                base = str(self.manager._last_log_path)
+            if not base:
+                return
+            if getattr(self, '_transcript_log_base', None) != base:
+                self._transcript_log_base = base
+                self._transcript_index = 0
+            self._transcript_index += 1
+            idx = self._transcript_index
+            req_path = Path(base + f'.ai_raw_request.{idx}')
+            ans_path = Path(base + f'.ai_raw_answer.{idx}')
+            req_path.parent.mkdir(parents=True, exist_ok=True)
+            req_text = json.dumps(request_payload, indent=2, ensure_ascii=False)
+            req_path.write_text(req_text, encoding='utf-8')
+            ans_path.write_text(response_raw, encoding='utf-8')
+            print(f"[BUILD LOG] Wrote {len(req_text)}/{len(response_raw)} bytes to "
+                  f"{req_path.name}, {ans_path.name}")
+        except Exception as e:
+            print(f"[WARNING] Failed to write AI transcript: {e}")
 
     def _add_changed_file(self, abs_or_rel_path):
         """Track a file modified outside call_with_tools (e.g. via spec rewrite)."""
@@ -1472,6 +1502,7 @@ def chat_completion(ai, messages, tools, debug=False, track_stats=False):
             if debug:
                 print(f"[DEBUG] AI response ({len(raw)} bytes):\n{raw}", flush=True)
             result = json.loads(raw)
+            ai._write_ai_transcript(payload, raw)
             if track_stats:
                 ai.ai_calls += 1
                 ai.ai_time += time.time() - _t0

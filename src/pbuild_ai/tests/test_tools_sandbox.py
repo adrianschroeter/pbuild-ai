@@ -1096,6 +1096,54 @@ class TestWriteToolChanges(unittest.TestCase):
         self.assertIn("my.spec", analyzer._changed_files)
 
 
+class TestWriteAiTranscript(unittest.TestCase):
+    """_write_ai_transcript writes build-N.log.ai_raw_request/answer pairs
+    beside the current build log, numbered per build step."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_test_ai_transcript_")
+        self.fake_log = Path(self.tmpdir) / "build-2.log"
+        self.fake_log.write_text("build log content")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_analyzer(self):
+        from pbuild_ai.llm_client import LlmAnalyzer
+        analyzer = LlmAnalyzer()
+        analyzer.manager = mock.MagicMock()
+        analyzer.manager._last_log_path = str(self.fake_log)
+        return analyzer
+
+    def test_writes_request_and_answer_pair(self):
+        analyzer = self._make_analyzer()
+        analyzer._write_ai_transcript({"model": "m", "prompt": "hi"}, '{"response": "x"}')
+        req = Path(str(self.fake_log) + ".ai_raw_request.1")
+        ans = Path(str(self.fake_log) + ".ai_raw_answer.1")
+        self.assertTrue(req.exists())
+        self.assertTrue(ans.exists())
+        self.assertIn('"prompt": "hi"', req.read_text())
+        self.assertEqual(ans.read_text(), '{"response": "x"}')
+
+    def test_numbering_restarts_per_build_step(self):
+        analyzer = self._make_analyzer()
+        analyzer._write_ai_transcript({"prompt": "1"}, "a1")
+        analyzer._write_ai_transcript({"prompt": "2"}, "a2")
+        self.assertTrue(Path(str(self.fake_log) + ".ai_raw_request.2").exists())
+        new_log = Path(self.tmpdir) / "build-3.log"
+        analyzer.manager._last_log_path = str(new_log)
+        analyzer._write_ai_transcript({"prompt": "3"}, "a3")
+        self.assertTrue(Path(str(new_log) + ".ai_raw_request.1").exists())
+        self.assertFalse(Path(str(new_log) + ".ai_raw_request.2").exists())
+
+    def test_no_manager_log_skips_silently(self):
+        analyzer = self._make_analyzer()
+        analyzer.manager = None
+        analyzer._write_ai_transcript({"prompt": "1"}, "a1")
+        self.assertEqual(list(Path(self.tmpdir).glob("*.ai_raw_*")), [])
+
+
 class TestApplyPatch(unittest.TestCase):
     """Test the apply_patch tool."""
 
