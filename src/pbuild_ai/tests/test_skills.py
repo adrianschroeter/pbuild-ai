@@ -209,5 +209,73 @@ class TestSkillManager(unittest.TestCase):
                           f"remoteasset_skill should match prompt: {prompt}")
 
 
+class TestPythonMacroGuidance(unittest.TestCase):
+    """The python-specific BuildRequires guidance lives in the lang_python skill,
+    and the base OPENSUSE.md skill only carries the generic macro rule."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sm = SkillManager(SKILLS_DIR)
+
+    def _skill_module(self, stem):
+        for s in self.sm.skills:
+            if getattr(s, "__name__", "") == stem:
+                return s
+        raise AssertionError(f"skill module {stem!r} not loaded")
+
+    def test_lang_python_spec_prompt_requires_python_module_macro(self):
+        sp = self._skill_module("lang_python_skill").AI_SPEC_PROMPT
+        self.assertIn("%{python_module MODULE_NAME}", sp)
+        self.assertIn("python-rpm-macros", sp)
+        self.assertIn("never remove the %{python_module } wrapper", sp)
+        # old typo must be gone
+        self.assertNotIn("MODLE_NAME", sp)
+
+    def test_lang_python_error_prompt_unresolvable_rename_guidance(self):
+        ep = self._skill_module("lang_python_skill").AI_ERROR_PROMPT
+        self.assertIn("nothing provides python3XX-NAME", ep)
+        self.assertIn("%{python_module pipper}", ep)
+        self.assertIn("%{python_module pip}", ep)
+        self.assertIn("do NOT remove a whole\ndependency block", ep)
+        self.assertIn("literal unexpanded macro name appearing in the error", ep)
+
+    def test_unresolvable_skill_project_mode_provision(self):
+        ep = self._skill_module("unresolvable_skill").AI_ERROR_PROMPT
+        self.assertIn("adding a further\npackage to the project", ep)
+        self.assertIn("rather than\ndropping the BuildRequires line", ep)
+
+    def test_opensuse_md_has_generic_macro_rule_only(self):
+        opensuse_md = os.path.join(SKILLS_DIR, "OPENSUSE.md")
+        with open(opensuse_md, encoding="utf-8") as f:
+            text = f.read()
+        # generic "preferred unless unusable" rule with always-present config
+        self.assertIn("Prefer RPM macros in BuildRequires", text)
+        self.assertIn("distribution config, plus the project _config in project mode", text)
+        self.assertIn("literal unexpanded %{...}", text)
+        self.assertIn("adding a further package to the project", text)
+        # python-specific claim that misled models must be gone
+        self.assertNotIn("%{python_module pytest}", text)
+        self.assertNotIn("is defined in the same spec file", text)
+
+    def test_lang_python_matches_oterm_style_spec_content(self):
+        """A spec named oterm.spec (non 'python-*') containing a
+        %{python_module } BuildRequires must activate the python skill, even
+        when the build log itself does not contain python macro strings."""
+        build_log = ". : unresolvable ( nothing provides ( python313-pipper ))"
+        spec_content = (
+            "Name: oterm\n"
+            "Version: 1.0\n"
+            "BuildRequires: %{python_module pipper}\n"
+            "BuildRequires: %{python_module pip}\n"
+            "%description\nTerminal pager.\n"
+        )
+        skills = self.sm.get_skills_for(
+            "oterm.spec",
+            content=build_log + "\n\n--- spec ---\n" + spec_content,
+        )
+        names = {s.__name__ for s in skills}
+        self.assertIn("lang_python_skill", names)
+
+
 if __name__ == "__main__":
     unittest.main()

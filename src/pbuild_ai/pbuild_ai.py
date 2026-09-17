@@ -1762,13 +1762,29 @@ if __name__ == "__main__":
         import hashlib as _hashlib
         _initial_spec_hash = _hashlib.md5(manager.read_file_safe(spec).encode()).hexdigest()
         _spec_version_hashes = [(0, _initial_spec_hash)]
+        # Shared anti-oscillation state, passed to every call_with_tools invocation
+        # so version history and block state survive across fix attempts. Without
+        # this, the model could re-write the ORIGINAL broken spec state on a later
+        # attempt (e.g. resurrecting a removed BuildRequires) and never be stopped.
+        _file_versions = {spec.name: [_initial_spec_hash]}
+        _blocked_files = set()
         _build_skill_files = set()
 
         def _merge_build_skills(prompt, build_out):
             """Re-evaluate skills against build output and inject AI_ERROR_PROMPT from newly-matched skills."""
             if not build_out:
                 return prompt
-            _new_skills = skill_manager.get_skills_for(spec.name, build_out, prompt=MODIFY_PROMPT)
+            # Also match CONTENT_PATTERN skills against the current spec content so
+            # e.g. the python skill's AI_ERROR_PROMPT is re-injected on later fix
+            # attempts even when the build log alone does not match.
+            _skill_content = build_out
+            try:
+                _spec_content = manager.read_file_safe(spec)
+                if _spec_content:
+                    _skill_content = build_out + "\n\n--- spec ---\n" + _spec_content
+            except Exception:
+                pass
+            _new_skills = skill_manager.get_skills_for(spec.name, _skill_content, prompt=MODIFY_PROMPT)
             for _s in _new_skills:
                 _sf = getattr(_s, '__file__', None) or _s.__name__
                 if _sf not in _build_skill_files:
@@ -2058,7 +2074,7 @@ Here is the new error context:
                             if len(content) > 200:
                                 kept[i]["content"] = content[:100] + f"\n... (truncated, {len(content)} bytes) ...\n" + content[-50:]
                     messages = kept
-            tool_results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds, task="Analyzing build failure")
+            tool_results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds, task="Analyzing build failure", file_versions=_file_versions, blocked_files=_blocked_files)
             if isinstance(tool_results, str):
                 print(f"[FIX ERROR] {tool_results}")
             elif tool_results:
@@ -2207,6 +2223,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         ai.print_stats(manager, ctx.program_start, skill_manager)
                         sys.exit(1)
                 _spec_version_hashes.append((fix_attempt, _spec_hash))
+                # Keep the shared tool-loop version history in sync so the in-loop
+                # anti-oscillation pre-filter also sees this attempt's state.
+                _file_versions.setdefault(spec.name, []).append(_spec_hash)
             if not changed and not tool_results:
                 if messages:
                     _ctx_file.write_text(json.dumps({"version": 1, "mode": "fix", "spec_path": str(spec.relative_to(WORKSPACE_DIR)), "package_name": package_name, "messages": messages, "spec_content": spec_content, "error_context": current_build_out, "error_analysis": _latest_analysis, "timestamp": time.time()}, indent=2))

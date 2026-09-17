@@ -178,6 +178,109 @@ class TestAntiOscillation(unittest.TestCase):
         self.assertTrue(any("File unchanged" in r for r in results))
         self.assertNotIn("OK: Wrote", " ".join(results))
 
+    # -- degenerate .spec write guard --
+
+    def test_write_file_degenerate_spec_skipped(self):
+        """write_file with truncated/nonsense .spec content (no Name: tag) is skipped."""
+        responses = [
+            [_make_tool_call("write_file", {"path": self.spec_name, "content": "..."})],
+        ]
+        results, n_calls = self._run_call_with_tools(responses)
+
+        self.assertTrue(any("SKIP" in r and "invalid .spec" in r for r in results))
+        # File on disk must be untouched
+        self.assertEqual(self.spec_path.read_text(), self.initial_content)
+
+    def test_write_file_spec_missing_name_tag_skipped(self):
+        """A .spec write without a Name: tag is skipped even if it has sections."""
+        content = "%description\nBroken.\n\n%files\n%{_bindir}/x\n"
+        responses = [
+            [_make_tool_call("write_file", {"path": self.spec_name, "content": content})],
+        ]
+        results, n_calls = self._run_call_with_tools(responses)
+
+        self.assertTrue(any("SKIP" in r and "invalid .spec" in r for r in results))
+        self.assertEqual(self.spec_path.read_text(), self.initial_content)
+
+    def test_write_file_valid_spec_not_skipped(self):
+        """A valid .spec write (has Name: tag) still proceeds normally."""
+        content = "Name: testpkg\nVersion: 9.0\n\n%description\nNew.\n"
+        responses = [
+            [_make_tool_call("write_file", {"path": self.spec_name, "content": content})],
+        ]
+        results, n_calls = self._run_call_with_tools(responses)
+
+        self.assertFalse(any("invalid .spec" in r for r in results))
+        self.assertTrue(any("OK: Wrote" in r for r in results))
+        self.assertEqual(self.spec_path.read_text(), content)
+
+    # -- state shared across fix attempts --
+
+    def _attempt_with_shared_state(self, responses, shared_versions, shared_blocked):
+        """Run one call_with_tools invocation with the given shared state,
+        falling back to a terminal 'Done.' response once the list is exhausted."""
+        def mock_request(url, payload):
+            if not responses:
+                return _make_response(content="Done.")
+            return _make_response(tool_calls=responses.pop(0))
+        with patch.object(self.ai, '_request', side_effect=mock_request):
+            return self.ai.call_with_tools(
+                self.messages, self.tools, self.manager,
+                workspace_dir=self.tmpdir, max_rounds=3,
+                file_versions=shared_versions, blocked_files=shared_blocked,
+            )
+
+    def test_write_file_revert_to_initial_across_attempts_blocked(self):
+        """When version state is shared across call_with_tools invocations (one
+        call per fix attempt), re-writing the ORIGINAL content on a later attempt
+        is blocked just like an in-loop revert."""
+        import hashlib
+        shared_versions = {self.spec_name: [hashlib.md5(self.initial_content.encode()).hexdigest()]}
+        shared_blocked = set()
+        content_b = "Name: testpkg\nVersion: 2.0\n\n%description\nV2.\n"
+
+        # Attempt 1: write content_b (fresh call, shared state seeded with the
+        # original hash — exactly what run_fix_loop does across attempts)
+        res1 = self._attempt_with_shared_state(
+            [[_make_tool_call("write_file", {"path": self.spec_name, "content": content_b})]],
+            shared_versions, shared_blocked,
+        )
+        self.assertTrue(any("OK: Wrote" in r for r in res1))
+
+        # Attempt 2 (separate call, shared state): write back the original content
+        res2 = self._attempt_with_shared_state(
+            [[_make_tool_call("write_file", {"path": self.spec_name, "content": self.initial_content})]],
+            shared_versions, shared_blocked,
+        )
+        # The original-content write must be blocked as a revert across attempts
+        self.assertTrue(any("SKIP" in r and "reverts" in r for r in res2))
+        self.assertEqual(self.spec_path.read_text(), content_b)
+
+    def test_edit_file_revert_to_initial_across_attempts_blocked(self):
+        """edit_file reverting to original content is blocked when the state is
+        shared across call_with_tools invocations."""
+        import hashlib
+        shared_versions = {self.spec_name: [hashlib.md5(self.initial_content.encode()).hexdigest()]}
+        shared_blocked = set()
+
+        # Attempt 1: bump Version 1.0 -> 2.0
+        res1 = self._attempt_with_shared_state(
+            [[_make_tool_call("edit_file", {
+                "path": self.spec_name, "old_string": "Version: 1.0", "new_string": "Version: 2.0",
+            })]],
+            shared_versions, shared_blocked,
+        )
+        self.assertTrue(any("OK: Edited" in r for r in res1))
+
+        # Attempt 2: revert Version 2.0 -> 1.0 (original) — must be blocked
+        res2 = self._attempt_with_shared_state(
+            [[_make_tool_call("edit_file", {
+                "path": self.spec_name, "old_string": "Version: 2.0", "new_string": "Version: 1.0",
+            })]],
+            shared_versions, shared_blocked,
+        )
+        self.assertTrue(any("SKIP" in r and "reverts" in r for r in res2))
+
     # -- edit_file revert detection --
 
     def test_edit_file_revert_blocked(self):
@@ -311,10 +414,11 @@ class TestAntiOscillation(unittest.TestCase):
         self.assertTrue(any("OK: Wrote" in r and "other.spec" in r for r in results))
         self.assertEqual(path_b.read_text(), content_b_v2)
 
-    # -- edit_file with non-matching old_string passes through --
+    # -- edit_file with non-matching old_string is skipped --
 
-    def test_edit_file_non_matching_old_string_passes_through(self):
-        """edit_file where old_string doesn't match should pass through to execute_tool_calls."""
+    def test_edit_file_non_matching_old_string_skipped(self):
+        """edit_file where old_string doesn't match is skipped before execution,
+        with the missing match reported back to the model."""
         responses = [
             [_make_tool_call("edit_file", {
                 "path": self.spec_name,
@@ -324,9 +428,28 @@ class TestAntiOscillation(unittest.TestCase):
         ]
         results, n_calls = self._run_call_with_tools(responses)
 
-        # Should get an error from execute_tool_calls, not a SKIP
-        self.assertTrue(any("old_string not found" in r for r in results))
-        self.assertFalse(any("SKIP" in r for r in results))
+        self.assertTrue(any("SKIP" in r and "old_string not found" in r for r in results))
+        # The edit must NOT have been applied to the file
+        self.assertNotIn("Something", self.spec_path.read_text())
+
+    # -- edit_file with ambiguous old_string is skipped --
+
+    def test_edit_file_ambiguous_old_string_skipped(self):
+        """edit_file where old_string matches multiple locations is skipped so the
+        first occurrence is not silently replaced."""
+        responses = [
+            [_make_tool_call("edit_file", {
+                "path": self.spec_name,
+                "old_string": "testpkg",
+                "new_string": "wibble",
+            })],
+        ]
+        results, n_calls = self._run_call_with_tools(responses)
+
+        self.assertTrue(any("SKIP" in r and "found " in r and "times" in r for r in results))
+        # Ambiguous edit must not be applied (Name: and %files lines untouched)
+        self.assertIn("Name: testpkg", self.spec_path.read_text())
+        self.assertNotIn("wibble", self.spec_path.read_text())
 
     # -- edit_file with missing old_string passes through --
 

@@ -1045,7 +1045,7 @@ class LlmAnalyzer:
             return text
         return filtered
 
-    def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False, task=""):
+    def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False, task="", file_versions=None, blocked_files=None):
         # Human-readable task label shown in the [AI] spinner while a round runs.
         self._task = task or ""
         _base_task = task or ""
@@ -1083,21 +1083,29 @@ class LlmAnalyzer:
             sys.exit(2)
         _nudged = False
         all_results = []
-        _file_versions = {}
-        _blocked_files = set()
+        # Reuse caller-provided version/block state so anti-oscillation detection
+        # survives across fix attempts (each attempt calls call_with_tools again).
+        # Without this, a model could freely re-write the ORIGINAL broken spec state
+        # on a later attempt, because its hash was only recorded in the first call.
+        _file_versions = file_versions if file_versions is not None else {}
+        _blocked_files = blocked_files if blocked_files is not None else set()
         _WRITE_TOOLS = {"write_file", "edit_file"}
         _READ_TOOLS = {"read_file", "read_file_from_archive"}
         self._changed_files = set()
         _read_tracker = ReadCoverageTracker()
 
-        # Record initial versions of all spec files so reverts to original are caught
+        # Record initial versions of all spec files so reverts to original are caught.
+        # Only seed when the caller did not already provide version history for this
+        # file (e.g. a shared accumulator passed across fix attempts), so earlier
+        # versions seen on previous attempts are never forgotten.
         if workspace_dir:
             try:
                 for _sf in Path(workspace_dir).glob("*.spec"):
                     try:
                         _init = manager.read_file_safe(_sf)
                         _init_hash = hashlib.md5(_init.encode()).hexdigest()
-                        _file_versions[_sf.name] = [_init_hash]
+                        if _sf.name not in _file_versions:
+                            _file_versions[_sf.name] = [_init_hash]
                     except Exception:
                         pass
             except Exception:
@@ -1293,6 +1301,14 @@ class LlmAnalyzer:
                         _skipped_indices.append(_ci)
                         print(f"[FIX] {_msg}", flush=True)
                         continue
+                    if _resolved and _resolved.name.endswith('.spec'):
+                        _has_name_tag = bool(re.search(r'(?m)^Name:\s*\S', _new_content))
+                        if not _has_name_tag:
+                            _msg = f"SKIP: write_file to {_path} would produce an invalid .spec file (missing Name: tag). write_file writes the ENTIRE file — rejected content will not be saved. Re-read {_path} and write the COMPLETE valid spec."
+                            _skipped_results.append(_msg)
+                            _skipped_indices.append(_ci)
+                            print(f"[FIX] {_msg}", flush=True)
+                            continue
                     _filtered_calls.append((name, tool_input))
                     _filtered_indices.append(_ci)
                     _all_skipped = False
@@ -1316,10 +1332,18 @@ class LlmAnalyzer:
                         _filtered_indices.append(_ci)
                         _all_skipped = False
                         continue
-                    if _current.count(_old_string) != 1:
-                        _filtered_calls.append((name, tool_input))
-                        _filtered_indices.append(_ci)
-                        _all_skipped = False
+                    _old_count = _current.count(_old_string)
+                    if _old_count == 0:
+                        _msg = f"SKIP: edit_file to {_path}: old_string not found in the current file."
+                        _skipped_results.append(_msg)
+                        _skipped_indices.append(_ci)
+                        print(f"[FIX] {_msg}", flush=True)
+                        continue
+                    if _old_count > 1:
+                        _msg = f"SKIP: edit_file to {_path}: old_string found {_old_count} times — provide more surrounding context so old_string matches exactly one location."
+                        _skipped_results.append(_msg)
+                        _skipped_indices.append(_ci)
+                        print(f"[FIX] {_msg}", flush=True)
                         continue
                     _new_content = _current.replace(_old_string, _new_string, 1)
                     _new_hash = hashlib.md5(_new_content.encode()).hexdigest()

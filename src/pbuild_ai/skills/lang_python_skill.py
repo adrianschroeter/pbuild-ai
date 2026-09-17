@@ -22,7 +22,7 @@ Check the following Spec-file. Pay special attention to:
 1. Do NOT use  %py3_build, %py3_install, %pyproject_buildrequires, %pyproject_files, or %pyproject_save_files macros — avoid them entirely.
 2. Use %pyproject_wheel and %pyproject_install instead when the source uses a pyproject.toml.
 3. Generate new spec files by using "py2pack generate MODULE VERSION" command
-4. Use the BuildRequires macros %{python_module MODLE_NAME}
+4. Write every Python BuildRequires as `BuildRequires: %{python_module MODULE_NAME}`. The %{python_module } macro is provided by python-rpm-macros, a default build-time requirement in openSUSE builds, and expands to the correct interpreter-specific package. Never write a literal python3x-... package name and never remove the %{python_module } wrapper.
 5. Are there any obvious missing BuildRequires like for devel or for pip? or python-rpm-macros?
 Summarize your analysis in a maximum of 3 sentences.
 """
@@ -79,6 +79,23 @@ If the backend is hatchling, flit, or poetry-core, the package name differs:
   - flit_core  → BuildRequires: %{python_module flit-core}
   - poetry_core → BuildRequires: %{python_module poetry-core}
 
+### 7. Unresolvable Python BuildRequires ("nothing provides pythonXX-MODULE")
+
+If the build log shows `nothing provides python3XX-NAME` (an unresolvable
+BuildRequires), the %{python_module } macro has correctly expanded to the
+per-flavor package — the macro itself works. The MODULE NAME is wrong: it is
+misspelled or does not exist. Fix it with a minimal rename that keeps the
+macro, for example:
+
+    BuildRequires: %{python_module pipper}  ->  BuildRequires: %{python_module pip}
+
+Do NOT delete the BuildRequires line, do NOT replace %{python_module NAME}
+with a literal python3x-NAME package name, and do NOT remove a whole
+dependency block because one entry is wrong — the neighbouring
+%{python_module ...} deps may resolve fine.
+
+Only unwrap or remove a macro when the MACRO ITSELF is unresolvable, which is
+detectable by the literal unexpanded macro name appearing in the error.
 """
 
 def fix_content(content: str) -> str:

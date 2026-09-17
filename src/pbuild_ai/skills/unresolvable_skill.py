@@ -36,6 +36,10 @@ If the build log says "nothing provides PACKAGE", then the package truly does
 not exist in the repo. Check the package lookup results below for alternative
 package names or matching packages.
 
+In project mode, prefer to fix a missing dependency by adding a further
+package to the project that provides the missing dependency, rather than
+dropping the BuildRequires line.
+
 ### 4. Conditional BuildRequires
 If a BuildRequires is only needed on certain architectures or distro versions,
 wrap it in a conditional:
