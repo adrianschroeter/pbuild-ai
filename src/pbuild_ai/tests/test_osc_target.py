@@ -87,16 +87,56 @@ class TestTargetArgs(unittest.TestCase):
             self.assertEqual(mgr._target_args(None, None, "tumbleweed", True),
                              ["--dist", "tumbleweed"])
 
-    def test_osc_target_overrides_all(self):
+    def test_osc_target_when_no_explicit_target(self):
         with tempfile.TemporaryDirectory() as td:
             _make_osc(td, "system:ha:unstable\n", "standard x86_64\n",
                       "https://custom.api\n")
             mgr = RpmSourceManager(td)
             expected = ["--obs", "https://custom.api", "--dist",
                         "obs://system:ha:unstable/standard"]
-            # osc wins even when preset/dist are supplied
-            self.assertEqual(mgr._target_args("leap", "somepreset", "tumbleweed", True), expected)
-            self.assertEqual(mgr._target_args(None, None, "tumbleweed", False), expected)
+            # osc checkout is the fallback when no explicit target is supplied
+            self.assertEqual(mgr._target_args(None, None, "tumbleweed", True), expected)
+
+    def test_explicit_dist_overrides_osc(self):
+        with tempfile.TemporaryDirectory() as td:
+            _make_osc(td, "system:ha:unstable\n", "standard x86_64\n",
+                      "https://custom.api\n")
+            mgr = RpmSourceManager(td)
+            self.assertEqual(mgr._target_args("factory", None, "tumbleweed", True),
+                             ["--dist", "factory"])
+            self.assertEqual(mgr._target_args("factory", None, "tumbleweed", False),
+                             ["--dist", "factory"])
+
+    def test_explicit_preset_overrides_osc(self):
+        with tempfile.TemporaryDirectory() as td:
+            _make_osc(td, "system:ha:unstable\n", "standard x86_64\n",
+                      "https://custom.api\n")
+            mgr = RpmSourceManager(td)
+            self.assertEqual(mgr._target_args(None, "mypreset", "tumbleweed", True),
+                             ["--preset", "mypreset"])
+
+    def test_explicit_obs_url_overrides_osc(self):
+        with tempfile.TemporaryDirectory() as td:
+            _make_osc(td, "system:ha:unstable\n", "standard x86_64\n",
+                      "https://custom.api\n")
+            mgr = RpmSourceManager(td, obs_url="https://other.api")
+            self.assertEqual(mgr._target_args("factory", None, "tumbleweed", True),
+                             ["--obs", "https://other.api", "--dist", "factory"])
+            self.assertEqual(mgr._target_args(None, None, "tumbleweed", True),
+                             ["--obs", "https://other.api", "--dist",
+                              "obs://system:ha:unstable/standard"])
+            self.assertEqual(mgr._target_args(None, "mypreset", "tumbleweed", True),
+                             ["--obs", "https://other.api", "--preset", "mypreset"])
+
+    def test_obs_url_without_osc_checkout(self):
+        with tempfile.TemporaryDirectory() as td:
+            mgr = RpmSourceManager(td, obs_url="https://other.api")
+            self.assertEqual(mgr._target_args("factory", None, "tumbleweed", True),
+                             ["--obs", "https://other.api", "--dist", "factory"])
+            self.assertEqual(mgr._target_args(None, None, "tumbleweed", True),
+                             ["--obs", "https://other.api", "--dist", "tumbleweed"])
+            self.assertEqual(mgr._target_args(None, None, "tumbleweed", False),
+                             ["--obs", "https://other.api"])
 
 
 if __name__ == "__main__":

@@ -1313,6 +1313,7 @@ if __name__ == "__main__":
     parser.add_argument("--update-version", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--preset", default=None, help="Preset name to pass to pbuild (e.g. tumbleweed)")
     parser.add_argument("--dist", default=None, help="Distribution to build for (passed as --dist to pbuild, alternative to --preset)")
+    parser.add_argument("--obs", default=None, help="Obs API URL to build against (passed as --obs to pbuild, overrides the .osc checkout URL)")
     parser.add_argument("--allow-tool-scripts", action="store_true", help="Allow execution of scripts from <workspace>/tool-scripts/")
     parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from AI")
     parser.add_argument("--max-fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, 0 = unlimited)")
@@ -1379,6 +1380,7 @@ if __name__ == "__main__":
         vm_memory=args.vm_memory,
         preset=args.preset,
         dist=args.dist,
+        obs_url=args.obs,
         allow_tool_scripts=args.allow_tool_scripts,
         debug=args.debug,
         deep_analyze=args.deep_analyze,
@@ -1411,6 +1413,7 @@ if __name__ == "__main__":
     SHOW_BUILDLOG = ctx.show_buildlog
     PRESET = ctx.preset
     DIST = ctx.dist
+    OBS_URL = ctx.obs_url
     if PRESET and DIST:
         print(f"[INFO] Both --preset={PRESET} and --dist={DIST} given. Using --preset.")
         DIST = None
@@ -1445,7 +1448,7 @@ if __name__ == "__main__":
         context_file_path.unlink()
         print("[INFO] Discarded saved .pai.context (--fresh).")
 
-    manager = RpmSourceManager(WORKSPACE_DIR, do_clean=DO_CLEAN, vm_type=ctx.vm_type, vm_memory=ctx.vm_memory, shell_after_build=ctx.shell_after_build, preset=PRESET, root_dir=ROOT_DIR, build_log_path=ctx.build_log)
+    manager = RpmSourceManager(WORKSPACE_DIR, do_clean=DO_CLEAN, vm_type=ctx.vm_type, vm_memory=ctx.vm_memory, shell_after_build=ctx.shell_after_build, preset=PRESET, root_dir=ROOT_DIR, build_log_path=ctx.build_log, obs_url=ctx.obs_url)
     skill_manager = SkillManager(SKILLS_DIR, extra_dirs=skills_extra_dirs)
     ctx.manager = manager
     ctx.skill_manager = skill_manager

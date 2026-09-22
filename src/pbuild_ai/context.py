@@ -33,6 +33,7 @@ class PbuildContext:
     vm_memory: Optional[str] = None
     preset: Optional[str] = None
     dist: Optional[str] = None
+    obs_url: Optional[str] = None
     allow_tool_scripts: bool = False
     deep_analyze: bool = False
     fix_attempts: int = 25

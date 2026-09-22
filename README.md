@@ -92,6 +92,16 @@ exit. No build or research is performed. Conflicts with `--fix` and `--analyze`.
 Controls the build target distribution (e.g., `tumbleweed`, `leap-16.1`).
 The value is passed through to pbuild and determines which repository
 set is used for dependency resolution. Defaults to `tumbleweed` if unset.
+An explicit `--dist` (or `--preset`) overrides the project/repository
+detected from an osc checkout's `.osc/` directory.
+
+### `--obs OBS_API_URL`
+
+Build against a specific OBS API URL, e.g. `https://api.opensuse.org`.
+Passed through as `--obs` to pbuild and overrides the API URL read from
+an osc checkout's `.osc/_apiurl`. Without a `--dist`/`--preset`,
+`--obs` uses the osc checkout's project/repository (or `tumbleweed` as
+fallback) to complete the `--dist obs://project/repo` argument.
 
 ## Package set (project mode)
 

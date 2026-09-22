@@ -133,6 +133,16 @@ VM memory for pbuild (e.g., \fB4096\fR).
 .B \-\-preset PRESET
 Preset name to pass to pbuild.
 .TP
+.B \-\-dist DIST
+Distribution to build for (passed as \fB\-\-dist\fR to pbuild,
+alternative to \fB\-\-preset\fR). Overrides the project/repository
+detected from an osc checkout's \fI.osc/\fR directory.
+.TP
+.B \-\-obs URL
+OBS API URL to build against (passed as \fB\-\-obs\fR to pbuild,
+e.g. \fBhttps://api.opensuse.org\fR). Overrides the API URL read from
+an osc checkout's \fI.osc/_apiurl\fR.
+.TP
 .B \-\-allow\-tool\-scripts
 Allow execution of scripts from \fItool-scripts/\fR in the workspace.
 .TP

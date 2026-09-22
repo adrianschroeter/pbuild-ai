@@ -75,7 +75,7 @@ from pbuild_ai.diff_utils import show_diff
 
 
 class RpmSourceManager:
-    def __init__(self, base_dir, do_clean=False, vm_type=None, vm_memory=None, shell_after_build=False, preset=None, root_dir=None, build_log_path=None):
+    def __init__(self, base_dir, do_clean=False, vm_type=None, vm_memory=None, shell_after_build=False, preset=None, root_dir=None, build_log_path=None, obs_url=None):
         self.base_dir = Path(base_dir).resolve()
         if not self.base_dir.is_dir():
             raise ValueError(f"Base directory {self.base_dir} does not exist.")
@@ -83,6 +83,7 @@ class RpmSourceManager:
         self.osc_project = None
         self.osc_repository = None
         self.osc_apiurl = "https://api.opensuse.org"
+        self.obs_url = obs_url
         osc_dir = self.base_dir / ".osc"
         if osc_dir.is_dir():
             project_file = osc_dir / "_project"
@@ -102,6 +103,8 @@ class RpmSourceManager:
                     self.osc_repository = repository
                     self.osc_mode = True
                     print(f"[OSC] Building against {self.osc_apiurl} project '{project}' repo '{repository}'")
+        if self.obs_url:
+            print(f"[INFO] Using --obs {self.obs_url} for pbuild (overrides osc checkout URL).")
         self.root_dir = root_dir
 
         self.allowed_commands = {
@@ -217,12 +220,24 @@ class RpmSourceManager:
             return False, err
 
     def _target_args(self, dist=None, preset=None, default_dist="tumbleweed", fallback=True):
+        obs = self.obs_url
+        if preset and not obs:
+            return ["--preset", preset]
+        if obs:
+            args = ["--obs", obs]
+            if dist:
+                args.extend(["--dist", dist])
+            elif preset:
+                args.extend(["--preset", preset])
+            elif self.osc_project and self.osc_repository:
+                args.extend(["--dist", f"obs://{self.osc_project}/{self.osc_repository}"])
+            elif fallback:
+                args.extend(["--dist", default_dist])
+            return args
+        if dist:
+            return ["--dist", dist]
         if self.osc_mode and self.osc_project and self.osc_repository:
             return ["--obs", self.osc_apiurl, "--dist", f"obs://{self.osc_project}/{self.osc_repository}"]
-        elif preset:
-            return ["--preset", preset]
-        elif dist:
-            return ["--dist", dist]
         elif fallback:
             return ["--dist", default_dist]
         else:
