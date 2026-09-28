@@ -204,8 +204,15 @@ the fix towards your preferred solution.
 
 ### `--prompt HINT`
 
-Used alongside `--fix` or `--modify`. Provides a general hint that is
-preferred over AI's generic analysis when making source changes.
+Used alongside `--fix` or `--modify` (and `--update`). Provides a general
+hint that is preferred over AI's generic analysis when making source changes.
+With `--update`, the hint is also sent to the AI during version research
+(e.g. `--prompt "avoid beta or rc versions"`).
+
+Version updates avoid alpha/beta/rc/preview/dev/milestone releases by
+default: the automatic version-API pre-checks (skill APIs, GitHub, GitLab)
+and the AI research step select the latest stable release. Use
+`--update=VERSION` to force a specific version, including a prerelease.
 
 ### `--ai-server URL`
 
@@ -241,6 +248,19 @@ pbuild-ai --fix bc --ai-option num_predict=2048
 Values are automatically coerced: strings containing `.` become floats,
 integer-like strings become ints, and `true`/`false`/`yes`/`no` become
 booleans. Everything else is passed as a string.
+
+`think`/`thinking` is sent as Ollama's top-level `think` field (it is
+enabled by default for tool-calling rounds). If the model does not support
+thinking, pbuild-ai retries without it.
+
+`force_tools` (default `true`) makes tool-calling rounds require a tool
+call instead of relying on a nudge. The AI gets an additional `finish` tool
+to end a task (done, nothing-to-do, already-at-version or abort).
+OpenAI-compatible servers are sent `tool_choice=required`. If a model still
+answers with text, pbuild-ai asks once more with the output
+grammar-constrained to a tool call (Ollama `format` / OpenAI
+`response_format` JSON schema). `--ai-option force_tools=false` restores the
+plain text nudge.
 
 ### `--generate PROMPT`
 

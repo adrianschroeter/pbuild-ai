@@ -27,7 +27,7 @@ from pathlib import Path
 from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.skills.changelog_skill import would_duplicate_changelog_entry
 from pbuild_ai.utils import resolve_path, ReadCoverageTracker
-from pbuild_ai.tools import execute_tool_calls, format_tool_display
+from pbuild_ai.tools import execute_tool_calls, format_tool_display, FINISH_TOOL, FINISH_TOOL_NAME
 
 
 def _extract_text_from_json(obj, min_length=20):
@@ -121,6 +121,60 @@ def _format_round_task(base, n, total, activity=""):
     return label
 
 
+def _finish_text(args):
+    """Map finish(status, summary) onto the text markers callers already check
+    (``[ABORT: reason]``, ``nothing-to-do``, ``already-at-version``)."""
+    args = args if isinstance(args, dict) else {}
+    status = str(args.get("status") or "done").strip().lower()
+    summary = " ".join(str(args.get("summary") or "").split())
+    if status == "abort":
+        reason = summary.replace("[", "(").replace("]", ")") or "aborted by AI"
+        return f"[ABORT: {reason}]"
+    if status in ("nothing-to-do", "already-at-version"):
+        return status
+    return summary or "done"
+
+
+def _tool_call_schema(tools):
+    """JSON schema accepting exactly one call of one of *tools* as
+    ``{"name": ..., "arguments": {...}}``. Used as a grammar constraint
+    (Ollama ``format`` / OpenAI ``response_format``) when a model replied
+    with text instead of a tool call."""
+    variants = []
+    for tool in tools or []:
+        func = tool.get("function", {}) if isinstance(tool, dict) else {}
+        name = func.get("name")
+        if not name:
+            continue
+        variants.append({
+            "type": "object",
+            "properties": {
+                "name": {"const": name},
+                "arguments": func.get("parameters") or {"type": "object"},
+            },
+            "required": ["name", "arguments"],
+        })
+    return {"type": "object", "anyOf": variants}
+
+
+def _tool_signatures(tools):
+    """Compact ``name(arg, arg?)`` list of *tools* for prompts that are sent
+    without the tool definitions themselves."""
+    sigs = []
+    for tool in tools or []:
+        func = tool.get("function", {}) if isinstance(tool, dict) else {}
+        params = func.get("parameters") or {}
+        required = set(params.get("required") or [])
+        args = ", ".join(a if a in required else f"{a}?" for a in (params.get("properties") or {}))
+        sigs.append(f"- {func.get('name')}({args})")
+    return "\n".join(sigs)
+
+
+# Constrained tool-call retries per call_with_tools() when the model answers
+# with text instead of a tool call.
+_MAX_FORCED_RETRIES = 2
+
+
 class LlmAnalyzer:
     def __init__(self, host=None, model="default", debug=False, timeout=None, options=None):
         self.host = (host or os.environ.get("AI_HOST") or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
@@ -134,6 +188,14 @@ class LlmAnalyzer:
         # guard can be re-enabled on the strict path with trust_tools=false.
         # Popped here so it is never forwarded to the model.
         self._trust_tools = bool(self.options.pop("trust_tools", True))
+        # Force tool calls in tool-calling rounds: tool_choice=required on
+        # OpenAI-compatible servers, and a JSON-schema constrained retry instead
+        # of a free-text nudge when a model still answers with text.
+        # force_tools=false restores the plain nudge. Popped like trust_tools.
+        self._force_tools = bool(self.options.pop("force_tools", True))
+        # Cleared when the server rejects tool_choice / the model rejects 'think'.
+        self._tool_choice_supported = True
+        self._think_unsupported = False
         # Current human-readable label shown in the [AI] spinner while a
         # request runs (e.g. "Analyzing build failure"). Set by the callers.
         self._task = ""
@@ -508,12 +570,20 @@ class LlmAnalyzer:
         _tool_budget = 16384
         opts.setdefault("num_predict", (_tool_budget if tool_calling else self.max_tokens))
         # Thinking-capable models (e.g. qwen3.6) drift into prose replies and
-        # skip tool calls when 'thinking' is not explicitly enabled on Ollama,
+        # skip tool calls when thinking is not explicitly enabled on Ollama,
         # so default it on for tool-calling rounds. An explicit user value
-        # (thinking or think) always wins.
-        if tool_calling and self._model_thinking_capable:
-            if "thinking" not in opts and "think" not in opts:
-                opts["thinking"] = True
+        # (think or thinking) always wins. Ollama reads 'think' as a top-level
+        # request field and ignores it inside 'options'.
+        think = None
+        for _k in ("think", "thinking"):
+            if _k in opts:
+                _v = opts.pop(_k)
+                if think is None:
+                    think = _v
+        if think is None and tool_calling and self._model_thinking_capable:
+            think = True
+        if think is not None and not (think and self._think_unsupported):
+            payload["think"] = think
         if opts:
             payload["options"] = opts
         return payload
@@ -691,6 +761,7 @@ class LlmAnalyzer:
 
     def _request(self, url, payload):
         if self._openai_mode:
+            _passthrough = {k: payload[k] for k in ("tool_choice", "response_format") if k in payload}
             # Transform AI payload to OpenAI format
             if payload.get("messages") and payload.get("tools"):
                 # Chat completion with tools
@@ -716,6 +787,7 @@ class LlmAnalyzer:
             elif payload.get("prompt") or payload.get("system"):
                 # Generate -> chat completions
                 payload = self._generate_to_openai_payload(payload)
+            payload.update(_passthrough)
             # Remove AI-specific fields
             payload.pop("context", None)
             payload.pop("format", None)
@@ -1045,6 +1117,69 @@ class LlmAnalyzer:
             return text
         return filtered
 
+    def _request_tool_round(self, payload):
+        """_request() for tool-calling rounds. Drops optional fields the server
+        rejects with HTTP 4xx and retries: 'think' for models without thinking
+        support (trust_tools marks every model thinking-capable) and
+        'tool_choice' for OpenAI-compatible servers that do not implement it."""
+        while True:
+            try:
+                return self._request(self.chat_api_url, payload)
+            except RuntimeError as e:
+                _msg = str(e)
+                if not _msg.startswith("HTTP Error 4"):
+                    raise
+                if payload.get("think") and "think" in _msg.lower():
+                    print(f"[AI] {self.model} rejected thinking — retrying without 'think'.", flush=True)
+                    self._think_unsupported = True
+                    payload.pop("think")
+                    continue
+                if "tool_choice" in payload:
+                    print("[AI] Server rejected tool_choice=required — retrying without it.", flush=True)
+                    self._tool_choice_supported = False
+                    payload.pop("tool_choice")
+                    continue
+                raise
+
+    def _forced_tool_call(self, messages, tools):
+        """Ask again for a tool call with the output grammar-constrained to
+        ``{"name", "arguments"}`` of one of *tools*, so the model cannot answer
+        with prose. Returns the extracted tool calls, or None when the request
+        itself failed (e.g. the server does not support the constraint)."""
+        payload = {"model": self.model, "messages": messages, "stream": False}
+        schema = _tool_call_schema(tools)
+        if self._openai_mode:
+            payload["response_format"] = {"type": "json_schema",
+                                          "json_schema": {"name": "tool_call", "schema": schema}}
+        else:
+            self._apply_options_and_format(payload, tool_calling=True)
+            payload["format"] = schema
+            # The reasoning already happened in the text reply; thinking output
+            # is not grammar-constrained and would only delay the call.
+            if payload.get("think"):
+                payload["think"] = False
+        try:
+            result = self._request(self.chat_api_url, payload)
+        except Exception as e:
+            print(f"[AI] Constrained tool-call request failed: {e}", flush=True)
+            return None
+        message = result.get("message", {}) or {}
+        text = (message.get("content") or message.get("thinking") or "").strip()
+        tool_calls = message.get("tool_calls") or []
+        if not tool_calls and text:
+            tool_calls = self._extract_tool_calls_from_content(text)
+        return tool_calls
+
+    def _finish_tool_loop(self, messages, args, all_results):
+        """Handle a finish() call: record its outcome as the assistant's text
+        reply (so [ABORT: ...] / nothing-to-do checks keep working) and end
+        the loop like a text-only answer would."""
+        text = _finish_text(args)
+        self.last_text_response = text
+        messages.append({"role": "assistant", "content": text})
+        print(f"[AI] finish: {text[:200]}", flush=True)
+        return all_results
+
     def call_with_tools(self, messages, tools, manager, workspace_dir=None, allow_tool_scripts=False, max_rounds=15, interactive=False, task="", file_versions=None, blocked_files=None):
         # Human-readable task label shown in the [AI] spinner while a round runs.
         self._task = task or ""
@@ -1082,6 +1217,13 @@ class LlmAnalyzer:
                   f"Select a tool-capable model with --model.{_hint}", flush=True)
             sys.exit(2)
         _nudged = False
+        _forced_retries = 0
+        _forced_failed = False
+        # Offer the finish tool so the model can end the loop with a tool call;
+        # only then is it safe to require a tool call in every reply.
+        _force = self._force_tools and bool(tools)
+        if _force and not any(t.get("function", {}).get("name") == FINISH_TOOL_NAME for t in tools):
+            tools = list(tools) + [FINISH_TOOL]
         all_results = []
         # Reuse caller-provided version/block state so anti-oscillation detection
         # survives across fix attempts (each attempt calls call_with_tools again).
@@ -1122,10 +1264,12 @@ class LlmAnalyzer:
                 "stream": False,
             }
             self._apply_options_and_format(payload, tool_calling=True)
+            if _force and self._openai_mode and self._tool_choice_supported:
+                payload["tool_choice"] = "required"
             if self._chat_context is not None:
                 payload["context"] = self._chat_context
             try:
-                result = self._request(self.chat_api_url, payload)
+                result = self._request_tool_round(payload)
                 self._chat_context = result.get("context")
             except RuntimeError as e:
                 if "HTTP Error 405" in str(e):
@@ -1168,13 +1312,36 @@ class LlmAnalyzer:
                         preview = text[:500].replace('\n', ' | ')
                         if self.debug:
                             print(f"[AI] No tool calls. Text response: {preview}", flush=True)
-                    # One nudge: a text-only round-1 (not a legitimate terminal
-                    # reply such as nothing-to-do / already-at-version / [ABORT:])
-                    # is asked once more to emit a real tool call.
+                    # A legitimate terminal reply (nothing-to-do /
+                    # already-at-version / [ABORT:]) ends the loop as is; any
+                    # other text reply is asked once more for a real tool call.
                     terminal = ("[abort:" in text.lower() or text.strip().lower()
                                 in ("nothing-to-do", "already-at-version"))
-                    if text and tools and not _nudged and not terminal:
-                        print("[AI] No tool calls in first round — nudging to use tools.", flush=True)
+                    # Instead of a free-text nudge, re-ask with the output
+                    # constrained to a tool call (finish included, so "done"
+                    # stays expressible).
+                    if _force and not terminal and not _forced_failed and _forced_retries < _MAX_FORCED_RETRIES:
+                        _forced_retries += 1
+                        print("[AI] No tool call in reply — requesting a constrained tool call.", flush=True)
+                        if text:
+                            messages.append({"role": "assistant", "content": text})
+                        messages.append({"role": "user", "content":
+                            "Your previous reply contained no tool call. Reply now with exactly one "
+                            "tool call as a JSON object {\"name\": ..., \"arguments\": {...}}. "
+                            "Continue the task with one of the tools below; if the task is complete, "
+                            "nothing had to change, or it cannot be done, call finish.\n"
+                            + _tool_signatures(tools)})
+                        _forced = self._forced_tool_call(messages, tools)
+                        _forced_failed = _forced is None
+                        if _forced:
+                            tool_calls = _forced
+                            message = {"role": "assistant", "content": "", "tool_calls": tool_calls}
+                if not tool_calls:
+                    # Plain nudge only when constrained retries are off or the
+                    # server could not serve one.
+                    if (text and tools and not _nudged and not terminal
+                            and (not _force or _forced_failed)):
+                        print("[AI] No tool calls in reply — nudging to use tools.", flush=True)
                         _nudged = True
                         messages.append({"role": "user", "content":
                             "Your previous answer contained no tool call. You MUST now respond "
@@ -1207,6 +1374,15 @@ class LlmAnalyzer:
                 if not isinstance(tool_input, dict):
                     tool_input = {}
                 round_calls.append((tool_name, tool_input))
+
+            # finish() ends the loop after the round's other calls ran. It gets
+            # no tool result, so keep it out of the round-tripped assistant turn.
+            _finish_args = next((inp for name, inp in round_calls if name == FINISH_TOOL_NAME), None)
+            if _finish_args is not None:
+                round_calls = [c for c in round_calls if c[0] != FINISH_TOOL_NAME]
+                message['tool_calls'] = [tc for tc in tool_calls if tc['function']['name'] != FINISH_TOOL_NAME]
+                if not round_calls:
+                    return self._finish_tool_loop(messages, _finish_args, all_results)
 
             # Interactive mode: let user select which tool calls to execute (only for modification ops)
             MODIFICATION_TOOLS = {"write_file", "edit_file", "remove_file", "rename_file", "run_tool_script"}
@@ -1372,6 +1548,8 @@ class LlmAnalyzer:
                     _skip_msg = _skipped_results[_si]
                     all_results.append(f"{name}: {_skip_msg}")
                 print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
+                if _finish_args is not None:
+                    return self._finish_tool_loop(messages, _finish_args, all_results)
                 break
 
             round_results = execute_tool_calls(_filtered_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive, debug=self.debug)
@@ -1460,6 +1638,8 @@ class LlmAnalyzer:
             # Prune old messages to keep context manageable — keep system
             # prompt (index 0) and the last 2 assistant rounds.
             messages[:] = prune_messages(messages, keep_rounds=2)
+            if _finish_args is not None:
+                return self._finish_tool_loop(messages, _finish_args, all_results)
 
         print(f"[AI] Reached max rounds ({max_rounds}).", flush=True)
         return all_results
@@ -1493,6 +1673,10 @@ def chat_completion(ai, messages, tools, debug=False, track_stats=False):
             _opts["num_ctx"] = ai.max_tokens
         if "num_predict" not in _opts:
             _opts["num_predict"] = ai.max_tokens
+        # Ollama reads 'think' as a top-level field, not a model option.
+        for _k in ("think", "thinking"):
+            if _k in _opts:
+                payload.setdefault("think", _opts.pop(_k))
         if _opts:
             payload["options"] = _opts
     _payload_str = None

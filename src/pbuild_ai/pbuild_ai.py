@@ -454,6 +454,20 @@ def _parse_version(v: str):
     return tuple(parts)
 
 
+_PRERELEASE_RE = re.compile(r'(?i)(?:^|[0-9-_.~])(alpha|beta|rc|pre|preview|dev|snapshot|milestone)(?:[0-9]*)(?:$|[0-9-_.~])')
+
+
+def _is_prerelease(v) -> bool:
+    """True when the version string carries a prerelease marker (alpha/beta/rc/pre/...).
+
+    Used to avoid picking alpha/beta/rc versions as the default update target.
+    Bare-letter suffixes (e.g. OpenSSL ``1.1.1b``) are stable and NOT flagged.
+    """
+    if not v:
+        return False
+    return bool(_PRERELEASE_RE.search(str(v)))
+
+
 def _version_satisfies(version: str, op: str | None, constraint_ver: str | None) -> bool:
     """Check if version satisfies operator + constraint_version. No constraint = satisfied."""
     if not op or not constraint_ver:
@@ -473,6 +487,45 @@ def _version_satisfies(version: str, op: str | None, constraint_ver: str | None)
     return True
 
 
+def _version_from_research_data(data):
+    """Extract a version string from JSON fetched during AI version research.
+
+    Understands GitHub/GitLab release objects and lists, PyPI (``info.version``)
+    and crates.io (``crate.max_stable_version``). Prereleases and drafts are
+    skipped where a stable alternative exists; the result may still be a
+    prerelease (callers check with ``_is_prerelease``) or None.
+    """
+    v = None
+    if isinstance(data, dict):
+        if data.get('prerelease') or data.get('draft'):
+            return None
+        for key in ("tag_name", "version"):
+            val = data.get(key)
+            if val and isinstance(val, str):
+                v = val
+                break
+        if not v or _is_prerelease(v):
+            info = data.get("info")
+            if isinstance(info, dict) and isinstance(info.get("version"), str) \
+                    and not _is_prerelease(info["version"]):
+                v = info["version"]
+        if not v or _is_prerelease(v):
+            crate = data.get("crate")
+            if isinstance(crate, dict) and isinstance(crate.get("max_stable_version"), str):
+                v = crate["max_stable_version"]
+    elif isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            if item.get('prerelease') or item.get('draft'):
+                continue
+            for key in ("name", "tag_name"):
+                val = item.get(key)
+                if val and isinstance(val, str) and not _is_prerelease(val):
+                    return val
+    return v
+
+
 def _notes_from_releases(releases, current_version, body_key):
     """Build ``## <version>``-labelled release-note sections for a version bump.
 
@@ -483,15 +536,20 @@ def _notes_from_releases(releases, current_version, body_key):
     the changelog can cover formerly-shipped intermediate releases.
 
     Returns ``(latest_version, notes)`` where ``latest_version`` is the newest
-    tag in the list and ``notes`` is ``## <version>``-labelled blocks (or '').
+    stable tag (prereleases and drafts are skipped) in the list and ``notes``
+    is ``## <version>``-labelled blocks (or '').
     """
     latest = ''
     parts = []
     for rel in releases or []:
         if not isinstance(rel, dict):
             continue
+        if rel.get('draft'):
+            continue
         tag = (rel.get('tag_name') or '').lstrip('v')
         if not tag:
+            continue
+        if _is_prerelease(tag):
             continue
         if not latest:
             latest = tag
@@ -1327,7 +1385,7 @@ if __name__ == "__main__":
     parser.add_argument("--ai-server", default=None, help="AI server URL, OpenAI-compatible (overrides AI_HOST env var; legacy OLLAMA_HOST is also honored, default http://localhost:11434)")
     parser.add_argument("--model", "--ai-model", default=None, help="AI model name (overrides AI_MODEL env var; legacy OLLAMA_MODEL is also honored, default gemma4)")
     parser.add_argument("--ai-timeout", type=int, default=None, help="Timeout in seconds for AI API requests (default: 900, overrides AI_TIMEOUT env var; legacy OLLAMA_TIMEOUT is also honored)")
-    parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). Thinking-capable models (e.g. qwen3.6) auto-default to thinking=true for tool-calling rounds so they emit tool calls; an explicit value here overrides that default. By default trust_tools=true is set so Ollama models that advertise only 'completion' (e.g. qwen3.8:27b-q4) can still receive tool-calling rounds; --ai-option trust_tools=false restores the strict advertised-capability gate.")
+    parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). Thinking-capable models (e.g. qwen3.6) auto-default to thinking=true for tool-calling rounds so they emit tool calls; an explicit value here overrides that default. By default trust_tools=true is set so Ollama models that advertise only 'completion' (e.g. qwen3.8:27b-q4) can still receive tool-calling rounds; --ai-option trust_tools=false restores the strict advertised-capability gate. force_tools=true (default) requires a tool call in tool-calling rounds (finish tool, tool_choice=required, schema-constrained retry); force_tools=false falls back to a text nudge.")
     parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries. Falls back to EMAIL env var.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     parser.add_argument("--skills-dir", action="append", default=[], help="Extra directory to load skill .py files from (repeatable). Combined with the built-in skills dir and ~/.config/pbuild-ai/skills/ if it exists.")
@@ -2558,6 +2616,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
                                     _skip_spec = True
                                     break
+                                if _is_prerelease(_latest):
+                                    print(f"[UPDATE] Version API returned prerelease {_latest} ({_v_url}) — skipping.")
+                                    _latest = None
+                            if _latest:
                                 print(f"[UPDATE] Found latest version {_latest} via API for {spec.name}.")
                                 target_version = _latest
                                 break
@@ -2650,6 +2712,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             release_notes=_release_notes,
                         )},
                     ]
+                    if PROMPT_HINT:
+                        research_messages.append({"role": "user", "content": f"--- User Hint ---\n{PROMPT_HINT}"})
                     _changes_file = spec.parent / (spec.stem + '.changes')
                     _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
                     results = ai.call_with_tools(research_messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds, task="Researching latest version")
@@ -2673,27 +2737,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     _data = json.loads(_content)
                                 except (json.JSONDecodeError, TypeError):
                                     continue
-                                _v = None
-                                if isinstance(_data, dict):
-                                    for _key in ("tag_name", "version"):
-                                        _val = _data.get(_key)
-                                        if _val and isinstance(_val, str):
-                                            _v = _val
-                                            break
-                                    if not _v:
-                                        _info = _data.get("info")
-                                        if isinstance(_info, dict) and isinstance(_info.get("version"), str):
-                                            _v = _info["version"]
-                                    if not _v:
-                                        _crate = _data.get("crate")
-                                        if isinstance(_crate, dict) and isinstance(_crate.get("max_stable_version"), str):
-                                            _v = _crate["max_stable_version"]
-                                elif isinstance(_data, list) and _data and isinstance(_data[0], dict):
-                                    for _key in ("name", "tag_name"):
-                                        _val = _data[0].get(_key)
-                                        if _val and isinstance(_val, str):
-                                            _v = _val
-                                            break
+                                _v = _version_from_research_data(_data)
+                                if _v and _is_prerelease(_v):
+                                    print(f"[UPDATE] Skipping prerelease {_v} from AI research data.")
+                                    continue
                                 if _v:
                                     _v = str(_v).lstrip('v')
                                     if _current_version and _v == _current_version:
@@ -2745,6 +2792,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 cur_version=_current_version or '',
                             )},
                         ]
+                        if PROMPT_HINT:
+                            messages.append({"role": "user", "content": f"--- User Hint ---\n{PROMPT_HINT}"})
                         _changes_file = spec.parent / (spec.stem + '.changes')
                         _changes_before = manager.read_file_safe(_changes_file) if _changes_file.exists() else None
                         results = ai.call_with_tools(messages, TOOLS, manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, max_rounds=ctx.max_rounds, task=f"Updating spec to {target_version}")

@@ -528,7 +528,9 @@ class TestAntiOscillation(unittest.TestCase):
         return self._run_call_with_tools(response_sequence, max_rounds=max_rounds)
 
     def test_text_only_round1_nudged_then_tool_call(self):
-        """A text-only round 1 gets one corrective nudge, then tool calls proceed."""
+        """With force_tools=false a text-only round 1 gets one corrective
+        nudge, then tool calls proceed."""
+        self.ai._force_tools = False
         nudge_before = len(self.messages)
         responses = [
             _make_response(content="I'll fix that for you."),
@@ -579,6 +581,7 @@ class TestAntiOscillation(unittest.TestCase):
 
     def test_two_text_rounds_stop_without_infinite_nudge(self):
         """Only one nudge is sent; a second text reply returns without retry."""
+        self.ai._force_tools = False
         nudge_before = len(self.messages)
         responses = [
             _make_response(content="Round one prose."),

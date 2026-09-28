@@ -231,39 +231,55 @@ class TestThinkingDefaultOption(unittest.TestCase):
     def test_thinking_defaulted_on_for_tool_calling(self):
         payload = self._payload()
         self.ai._apply_options_and_format(payload, tool_calling=True)
-        self.assertTrue(payload["options"]["thinking"])
+        self.assertIs(payload["think"], True)
+        self.assertNotIn("thinking", payload["options"])
+        self.assertNotIn("think", payload["options"])
 
     def test_no_default_when_not_thinking_capable(self):
         self.ai._model_thinking_capable = False
         payload = self._payload()
         self.ai._apply_options_and_format(payload, tool_calling=True)
-        self.assertNotIn("thinking", payload["options"])
+        self.assertNotIn("think", payload)
 
     def test_no_default_for_non_tool_calling(self):
         self.ai._model_thinking_capable = True
         payload = self._payload()
         self.ai._apply_options_and_format(payload, tool_calling=False)
-        self.assertNotIn("thinking", payload["options"])
+        self.assertNotIn("think", payload)
         self.assertEqual(payload["format"], "json")
 
     def test_explicit_thinking_false_wins(self):
         self.ai.options = {"thinking": False}
         payload = self._payload()
         self.ai._apply_options_and_format(payload, tool_calling=True)
-        self.assertIs(payload["options"]["thinking"], False)
+        self.assertIs(payload["think"], False)
+        self.assertNotIn("thinking", payload["options"])
 
     def test_explicit_think_false_wins(self):
         self.ai.options = {"think": False}
         payload = self._payload()
         self.ai._apply_options_and_format(payload, tool_calling=True)
-        self.assertIs(payload["options"]["think"], False)
-        self.assertNotIn("thinking", payload["options"])
+        self.assertIs(payload["think"], False)
+        self.assertNotIn("think", payload["options"])
 
     def test_openai_mode_never_injected(self):
         self.ai._openai_mode = True
         payload = self._payload()
         self.ai._apply_options_and_format(payload, tool_calling=True)
         self.assertNotIn("options", payload)
+        self.assertNotIn("think", payload)
+
+    def test_explicit_think_level_passed_through(self):
+        self.ai.options = {"think": "high"}
+        payload = self._payload()
+        self.ai._apply_options_and_format(payload, tool_calling=True)
+        self.assertEqual(payload["think"], "high")
+
+    def test_no_default_after_model_rejected_thinking(self):
+        self.ai._think_unsupported = True
+        payload = self._payload()
+        self.ai._apply_options_and_format(payload, tool_calling=True)
+        self.assertNotIn("think", payload)
 
 
 if __name__ == '__main__':

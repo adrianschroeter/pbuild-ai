@@ -21,7 +21,14 @@ SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from pbuild_ai.pbuild_ai import _ai_requested_abort, _check_update_hints, _notes_from_releases, _prefetch_summary
+from pbuild_ai.pbuild_ai import (
+    _ai_requested_abort,
+    _check_update_hints,
+    _is_prerelease,
+    _notes_from_releases,
+    _prefetch_summary,
+    _version_from_research_data,
+)
 from pbuild_ai.skills.version_research_skill import (
     VERSION_RESEARCH_SYSTEM_PROMPT,
     VERSION_RESEARCH_TASK_PROMPT,
@@ -271,6 +278,84 @@ class TestNotesFromReleases(unittest.TestCase):
         self.assertEqual(latest, "0.34.0")
         self.assertIn("## 0.34.0", notes)
         self.assertIn("GL notes", notes)
+
+
+class TestPrereleaseFiltering(unittest.TestCase):
+    def test_parse_flags_prereleases(self):
+        for v in ("0.34.4-rc0", "1.2.3-beta", "1.2.3alpha", "0.9pre1",
+                  "2.0.0.dev1", "1.0~rc1", "3.2.0-milestone2", "0.5.0-beta2",
+                  "1.2.3beta"):
+            self.assertTrue(_is_prerelease(v), f"{v} should be prerelease")
+
+    def test_parse_accepts_stable(self):
+        for v in ("0.34.4", "1.2.3", "0.33.0", "v1.2.3", "10.11.12",
+                  "1.1.1a", "1.1.1b", "1.1.1m", "2.4.1c"):
+            self.assertFalse(_is_prerelease(v), f"{v} should be stable")
+        self.assertFalse(_is_prerelease(None))
+
+    def test_latest_skips_prerelease(self):
+        releases = [
+            {"tag_name": "0.34.4-rc0", "body": "release candidate"},
+            {"tag_name": "v0.34.2", "body": "stable fix"},
+            {"tag_name": "0.34.0", "body": "current"},
+        ]
+        latest, notes = _notes_from_releases(releases, "0.34.0", "body")
+        self.assertEqual(latest, "0.34.2")
+        self.assertIn("## 0.34.2", notes)
+        self.assertNotIn("rc0", notes)
+
+    def test_latest_skips_draft(self):
+        releases = [
+            {"tag_name": "0.35.0", "body": "draft", "draft": True},
+            {"tag_name": "0.34.1", "body": "stable"},
+        ]
+        latest, notes = _notes_from_releases(releases, "0.34.0", "body")
+        self.assertEqual(latest, "0.34.1")
+        self.assertNotIn("draft", notes)
+
+    def test_only_prereleases_available_yields_nothing(self):
+        releases = [{"tag_name": "0.35.0-rc1", "body": "candidate"}]
+        latest, notes = _notes_from_releases(releases, "0.34.0", "body")
+        self.assertEqual(latest, "")
+        self.assertEqual(notes, "")
+
+
+class TestVersionFromResearchData(unittest.TestCase):
+    def test_crates_io_uses_max_stable_version(self):
+        data = {"crate": {"max_stable_version": "1.4.2", "max_version": "1.5.0-rc1"}}
+        self.assertEqual(_version_from_research_data(data), "1.4.2")
+
+    def test_pypi_info_version(self):
+        self.assertEqual(_version_from_research_data({"info": {"version": "2.1.0"}}), "2.1.0")
+
+    def test_github_latest_release(self):
+        self.assertEqual(_version_from_research_data({"tag_name": "v3.0.1"}), "v3.0.1")
+
+    def test_prerelease_flagged_release_skipped(self):
+        self.assertIsNone(_version_from_research_data({"tag_name": "v3.1.0", "prerelease": True}))
+
+    def test_prerelease_tag_falls_back_to_stable_field(self):
+        data = {"version": "2.0.0-rc1", "crate": {"max_stable_version": "1.9.0"}}
+        self.assertEqual(_version_from_research_data(data), "1.9.0")
+
+    def test_prerelease_tag_without_alternative_returned_as_is(self):
+        v = _version_from_research_data({"tag_name": "2.0.0-beta1"})
+        self.assertEqual(v, "2.0.0-beta1")
+        self.assertTrue(_is_prerelease(v))
+
+    def test_list_skips_prereleases_and_drafts(self):
+        data = [
+            {"tag_name": "0.35.0", "draft": True},
+            {"tag_name": "0.34.4-rc0"},
+            {"tag_name": "0.34.3", "prerelease": True},
+            {"tag_name": "0.34.2"},
+        ]
+        self.assertEqual(_version_from_research_data(data), "0.34.2")
+
+    def test_unrecognized_data(self):
+        self.assertIsNone(_version_from_research_data({"foo": "bar"}))
+        self.assertIsNone(_version_from_research_data([]))
+        self.assertIsNone(_version_from_research_data("1.0"))
 
 
 if __name__ == "__main__":

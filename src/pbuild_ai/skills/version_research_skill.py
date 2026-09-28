@@ -15,8 +15,10 @@ MANDATORY PROJECT STEPS: The "Additional context (AGENTS.md + skill rules)" sect
 
 Steps (do them in order, never skip any):
 1. Examine the Source URLs in the spec to identify the upstream project. Also check the `URL:` tag (upstream homepage) — it may point to the current project home even if the Source URL is stale.
- 2. Use web_fetch to find the latest stable version:
-    - For GitHub projects, try the API first (https://api.github.com/repos/OWNER/REPO/releases/latest) — it returns JSON with the 'tag_name' field
+ 2. Use web_fetch to find the latest stable version (only stable releases — **avoid
+    alpha/beta/rc/preview/dev/milestone versions by default** unless the user hint
+    explicitly asks for them):
+    - For GitHub projects, try the API first (https://api.github.com/repos/OWNER/REPO/releases/latest) — it returns JSON with the 'tag_name' field and only points to the latest non-prerelease release
     - For GitLab, try https://gitlab.com/api/v4/projects/OWNER%2FREPO/releases/permalink/latest
     - For PyPI, try https://pypi.org/pypi/PACKAGE/json
     - For GNU projects: use https://ftp.gnu.org/pub/gnu/PACKAGE/ instead of www.gnu.org — the main site is often under DoS attack. Fetch https://ftp.gnu.org/pub/gnu/PACKAGE/ and check for the highest version number.

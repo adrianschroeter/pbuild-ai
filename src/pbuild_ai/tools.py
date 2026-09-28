@@ -524,6 +524,35 @@ def build_tools_list(interactive=False):
     return tools
 
 
+# Terminal tool, added by LlmAnalyzer.call_with_tools (not by build_tools_list):
+# it lets the model end a tool loop with a tool call instead of a text reply,
+# so servers can be told that every reply MUST be a tool call.
+FINISH_TOOL_NAME = "finish"
+FINISH_STATUSES = ("done", "nothing-to-do", "already-at-version", "abort")
+FINISH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": FINISH_TOOL_NAME,
+        "description": "End the task. Call this instead of replying with text once no further tool calls are needed: status=done when the work is complete, nothing-to-do when nothing had to be changed, already-at-version when the spec already has the target version, abort when a required step cannot be performed (put the reason in summary).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": list(FINISH_STATUSES),
+                    "description": "Outcome of the task"
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Short summary of what was done, or the reason for abort"
+                }
+            },
+            "required": ["status"]
+        }
+    }
+}
+
+
 def _extract_header(content):
     """Extract leading comment block (lines starting with '# ') and the rest of the content.
     Lines starting with '#!' (shebangs) are NOT treated as copyright header lines."""
