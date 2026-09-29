@@ -126,9 +126,10 @@ class SkillManager:
             name_regex = api.get("name_regex")
             if not url_template or not version_key:
                 continue
-            api_name = spec_name
+            # The registries know the package name, not the spec file name.
+            api_name = re.sub(r"\.spec$", "", spec_name)
             if name_regex:
-                api_name = re.sub(name_regex, "", spec_name)
+                api_name = re.sub(name_regex, "", api_name)
             url = url_template.replace("{name}", urllib.parse.quote(api_name, safe=''))
             checks.append((url, version_key))
         return checks

@@ -277,5 +277,30 @@ class TestPythonMacroGuidance(unittest.TestCase):
         self.assertIn("lang_python_skill", names)
 
 
+class TestVersionApiChecks(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.sm = SkillManager(SKILLS_DIR)
+
+    def _urls(self, skill_name, spec_name):
+        skill = self.sm.get_skill_by_name(skill_name)
+        self.assertIsNotNone(skill)
+        return [u for u, _ in self.sm.get_version_api_checks([skill], spec_name)]
+
+    def test_spec_file_name_is_not_part_of_the_url(self):
+        self.assertEqual(self._urls("lang_python", "aioesphomeapi.spec"),
+                         ["https://pypi.org/pypi/aioesphomeapi/json"])
+
+    def test_prefix_and_extension_stripped(self):
+        self.assertEqual(self._urls("lang_python", "python-aioesphomeapi.spec"),
+                         ["https://pypi.org/pypi/aioesphomeapi/json"])
+        self.assertEqual(self._urls("lang_perl", "perl-Moose.spec"),
+                         ["https://fastapi.metacpan.org/v1/release/Moose"])
+
+    def test_stem_works_too(self):
+        self.assertEqual(self._urls("lang_rust", "ripgrep"),
+                         ["https://crates.io/api/v1/crates/ripgrep"])
+
+
 if __name__ == "__main__":
     unittest.main()

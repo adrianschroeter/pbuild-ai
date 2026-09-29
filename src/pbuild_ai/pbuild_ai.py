@@ -2653,7 +2653,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         return _cur
 
                     # Step 1: Try skill VERSION_APIs (ecosystem-specific)
-                    _version_checks = skill_manager.get_version_api_checks(skills, spec.name)
+                    _version_checks = skill_manager.get_version_api_checks(skills, spec.stem)
                     for _v_url, _v_key in _version_checks:
                         try:
                             _req = urllib.request.Request(_v_url, headers={"User-Agent": "pbuild-ai/1.0"})
