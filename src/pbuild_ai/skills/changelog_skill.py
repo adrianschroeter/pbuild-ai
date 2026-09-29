@@ -26,8 +26,8 @@ Tue Nov  8 10:21:12 UTC 2022 - Previous Author <email>
 
 ### Rules:
 - Always prepend new entries at the top. Never modify or remove older entries.
-- Replace `<email@suse.de>` with the actual email from the spec. Do NOT leave
-  `<EMAIL>` as a literal placeholder — substitute it with a real address.
+- Replace `pbuild-ai <email@suse.de>` with the author you are given. Do NOT
+  leave `<EMAIL>` as a literal placeholder — substitute a real address.
 - Entry body uses `- ` bullet lines.
 - Keep every line of an entry at most 70 characters wide (the format is
   column-based and diffs stay readable). Wrap long bullets onto continuation
@@ -266,8 +266,15 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
     now = datetime.datetime.now(datetime.timezone.utc)
     mon = now.strftime('%b')
     day = now.strftime('%a')
-    email_match = re.search(r'<([^>]+)>', email_author)
-    changelog_author = f"pbuild-ai <{email_match.group(1)}>" if email_match else f"pbuild-ai <{email_author}>"
+    # 'Name <email>' is used as given; a bare address keeps the historic
+    # 'pbuild-ai <email>' form.
+    author_match = re.match(r'^\s*(.*?)\s*<([^<>]+)>\s*$', email_author or '')
+    if author_match and author_match.group(1):
+        changelog_author = f"{author_match.group(1)} <{author_match.group(2)}>"
+    elif author_match:
+        changelog_author = f"pbuild-ai <{author_match.group(2)}>"
+    else:
+        changelog_author = f"pbuild-ai <{email_author}>"
     _existing = ''
     if changes_path.exists():
         _existing = changes_path.read_text(encoding='utf-8', errors='replace')

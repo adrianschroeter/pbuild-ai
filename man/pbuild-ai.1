@@ -69,6 +69,14 @@ Prepend a changelog entry for the current version in the \fI.changes\fR file,
 then exit. No build or research is performed.
 Conflicts with \fB\-\-fix\fR and \fB\-\-analyze\fR.
 .TP
+.BI \-\-email " AUTHOR"
+Author of new \fI.changes\fR entries, as \(aqName <email>\(aq or just the
+email (combined with the stored name). Defaults to the \fIname\fR and
+\fIemail\fR in the \fB[changelog]\fR section of
+\fI~/.config/pbuild\-ai/config\fR. When unset, interactive runs ask once,
+proposing values from the osc config, git config and \fB$EMAIL\fR, and
+store the answer.
+.TP
 .B \-\-update, \-u
 Update to the latest upstream version. Also enables \fB\-\-fix\fR.
 Use \fB\-\-update=VERSION\fR to specify a concrete version.

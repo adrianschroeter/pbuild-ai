@@ -87,6 +87,25 @@ flags). No build is performed. Conflicts with `--fix`, `--update`, `--generate`,
 Prepend a changelog entry for the current version in the `.changes` file, then
 exit. No build or research is performed. Conflicts with `--fix` and `--analyze`.
 
+### `--email AUTHOR` and the changelog author
+
+New `.changes` entries are written as `Name <email>`. The author is taken from
+`--email` (`'Name <email>'`, or just the email combined with the stored name),
+otherwise from `~/.config/pbuild-ai/config` (`$XDG_CONFIG_HOME` is honored):
+
+```ini
+[changelog]
+name = Jane Doe
+email = jane@example.org
+```
+
+When it is not set, interactive runs ask once and store the answer. The
+proposed values come from the osc config (`realname`/`email` of the default
+API server), `git config --global user.name`/`user.email`, `$EMAIL`
+/ `$DEBEMAIL` / `$DEBFULLNAME`, and the passwd entry. Non-interactive runs use
+that proposal without storing it; only when nothing is known is the author of
+the previous `.changes` entry reused.
+
 ### `--dist DISTRIBUTION_CONFIG`
 
 Controls the build target distribution (e.g., `tumbleweed`, `leap-16.1`).

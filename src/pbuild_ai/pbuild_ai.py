@@ -66,6 +66,7 @@ from pbuild_ai.llm_client import LlmAnalyzer
 from pbuild_ai.workspace import RpmSourceManager
 from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions, fix_remote_asset_formatting
 from pbuild_ai.context import PbuildContext
+from pbuild_ai.identity import resolve_changelog_author
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
     collapse_repeated_separators,
@@ -1148,6 +1149,14 @@ def _mandated_script_failed(results, post_scripts, messages=None):
     return None
 
 
+def _changelog_prompt_for(author):
+    """CHANGELOG_PROMPT plus the author line new entries must use."""
+    if not author:
+        return CHANGELOG_PROMPT
+    return (CHANGELOG_PROMPT
+            + f"- The header line of the new entry must name exactly this author: {author}\n")
+
+
 def _extract_changelog_author(changes_text):
     """Return the author of the newest .changes entry (e.g. 'Name <email>')
     or None when the file has (no top entry yet or is) unparseable."""
@@ -1223,7 +1232,7 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
         "belongs to the older entry. Never produce two consecutive '---' lines.\n"
         "NEVER alter, reorder, or remove any existing entry below the new one. "
         "Do NOT call write_file — editing the whole file is forbidden.\n\n"
-        + CHANGELOG_PROMPT
+        + _changelog_prompt_for(email_author)
     )
     _release_notes_ctx = _notes if _notes else "(none)"
     _user = (
@@ -1425,7 +1434,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", "--ai-model", default=None, help="AI model name (overrides AI_MODEL env var; legacy OLLAMA_MODEL is also honored, default gemma4)")
     parser.add_argument("--ai-timeout", type=int, default=None, help="Timeout in seconds for AI API requests (default: 900, overrides AI_TIMEOUT env var; legacy OLLAMA_TIMEOUT is also honored)")
     parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). Thinking-capable models (e.g. qwen3.6) auto-default to thinking=true for tool-calling rounds so they emit tool calls; an explicit value here overrides that default. By default trust_tools=true is set so Ollama models that advertise only 'completion' (e.g. qwen3.8:27b-q4) can still receive tool-calling rounds; --ai-option trust_tools=false restores the strict advertised-capability gate. force_tools=true (default) requires a tool call in tool-calling rounds (finish tool, tool_choice=required, schema-constrained retry); force_tools=false falls back to a text nudge.")
-    parser.add_argument("--email", default=None, help="Email address for PACKAGE.changes entries. Falls back to EMAIL env var.")
+    parser.add_argument("--email", default=None, help="Author for PACKAGE.changes entries ('Name <email>' or just the email). Defaults to the name/email stored in ~/.config/pbuild-ai/config; when unset, interactive runs ask (proposing values from osc, git and $EMAIL) and store the answer.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     parser.add_argument("--skills-dir", action="append", default=[], help="Extra directory to load skill .py files from (repeatable). Combined with the built-in skills dir and ~/.config/pbuild-ai/skills/ if it exists.")
     clean_group = parser.add_mutually_exclusive_group()
@@ -1495,7 +1504,7 @@ if __name__ == "__main__":
         ai_options=ai_options,
         shell_after_build=args.shell_after_build,
         interactive=_resolve_interactive(args),
-        email=args.email or os.environ.get("EMAIL", ""),
+        email=args.email or "",
         analyze_mode=args.analyze,
         max_rounds=args.max_ai_rounds,
         build_log=args.build_log,
@@ -2531,7 +2540,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 
         # --changelog mode: standalone changelog entry for current version
         if args.changelog:
-            _email = EMAIL if EMAIL else "<Your Name> <your@email>"
+            _email = resolve_changelog_author(EMAIL, INTERACTIVE) or "<Your Name> <your@email>"
             for _spec in spec_files:
                 _v_match = re.search(r'^Version:\s*(\S+)', manager.read_file_safe(_spec), re.M)
                 if not _v_match:
@@ -2569,7 +2578,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         updated_packages = set()
         if UPDATE_VERSION is not None:
             base_full_context = full_context
-            email_author = EMAIL if EMAIL else "<Your Name> <your@email>"
+            # Configured/confirmed author wins; only when nothing is known
+            # is the author of the previous .changes entry reused.
+            _configured_author = resolve_changelog_author(EMAIL, INTERACTIVE)
+            email_author = _configured_author or "<Your Name> <your@email>"
             spec_originals = {spec: manager.read_file_safe(spec) for spec in spec_files}
             for spec in spec_files:
                 ai.reset_context()
@@ -2752,7 +2764,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     skill_manager.note_skill_used("changelog")
                     research_system_content = VERSION_RESEARCH_SYSTEM_PROMPT.format(
                         full_context=full_context,
-                        changelog_prompt=CHANGELOG_PROMPT,
+                        changelog_prompt=_changelog_prompt_for(email_author),
                     )
                     research_messages = [
                         {"role": "system", "content": research_system_content},
@@ -3201,7 +3213,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                             else (manager.read_file_safe(_changes_file)
                                                   if _changes_file.exists() else ''))
                     _author_from_changes = _extract_changelog_author(_changes_before_text)
-                    if _author_from_changes:
+                    if _author_from_changes and not _configured_author:
                         email_author = _author_from_changes
                         print(f"[UPDATE] Reusing changelog author: {email_author}")
                     _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
