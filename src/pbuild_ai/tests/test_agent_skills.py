@@ -139,6 +139,25 @@ class TestMandatedScriptFailed(unittest.TestCase):
         self.assertEqual(_mandated_script_failed([], self.POST, messages=msgs),
                          "update_references.sh")
 
+    def test_blocked_script_detected_from_messages(self):
+        msgs = [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"function": {"name": "run_tool_script",
+                                          "arguments": {"script_name": ".agents/skills/update_references.sh"}}}]},
+            {"role": "tool", "name": "run_tool_script",
+             "content": "BLOCKED: execution of '/pkg/.agents/skills/update_references.sh' is not "
+                        "permitted because tool-script execution is disabled"},
+            {"role": "assistant", "content": "nothing-to-do"},
+        ]
+        self.assertEqual(_mandated_script_failed([], self.POST, messages=msgs),
+                         "update_references.sh")
+
+    def test_blocked_script_detected_from_results(self):
+        results = ["run_tool_script: BLOCKED: execution of "
+                   "'/pkg/.agents/skills/update_references.sh' is not permitted"]
+        self.assertEqual(_mandated_script_failed(results, self.POST),
+                         "update_references.sh")
+
     def test_unrelated_errors_ignored(self):
         results = ["edit_file: Error: old_string not found",
                    "run_tool_script: Error: some other script failed"]

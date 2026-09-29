@@ -187,6 +187,31 @@ class RpmSourceManager:
         with open(file_path, 'r', encoding='utf-8') as f:
             return f.read()
 
+    def read_committed_file(self, file_path):
+        """Return the last committed content of *file_path*, or None.
+
+        Looks at git HEAD first, then the pristine copy of an osc checkout
+        (``.osc/sources/`` for store v2, ``.osc/`` for the old layout). Used to
+        detect an update that was started but not committed yet."""
+        path = Path(file_path)
+        if not self._is_safe_path(path):
+            raise PermissionError("Access denied: Path is outside the sandbox.")
+        try:
+            res = subprocess.run(["git", "show", f"HEAD:./{path.name}"], cwd=path.parent,
+                                 capture_output=True, text=True, timeout=10)
+            if res.returncode == 0:
+                return res.stdout
+        except (OSError, subprocess.SubprocessError):
+            pass
+        for pristine in (path.parent / ".osc" / "sources" / path.name,
+                         path.parent / ".osc" / path.name):
+            if pristine.is_file():
+                try:
+                    return pristine.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    return None
+        return None
+
     def fix_file_content(self, file_path, fix_function):
         if not self._is_safe_path(file_path):
             raise PermissionError("Access denied: Path is outside the sandbox.")

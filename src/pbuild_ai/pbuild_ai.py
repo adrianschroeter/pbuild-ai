@@ -1030,6 +1030,25 @@ def _agent_skill_blocks(agent_skills):
     )
 
 
+def _pending_update(spec_text, committed_text, requested_version):
+    """Detect a version update that was started but not committed yet.
+
+    Returns ``(old_version, new_version)`` when the working-tree spec already
+    carries a different Version than the committed spec and no other target
+    version was requested, so a re-run can finish the remaining steps
+    (changelog check, post-update scripts) instead of reporting "already at
+    latest version". Returns None otherwise."""
+    if not spec_text or not committed_text:
+        return None
+    new = re.search(r'^Version:\s*(\S+)', spec_text, re.M)
+    old = re.search(r'^Version:\s*(\S+)', committed_text, re.M)
+    if not new or not old or new.group(1) == old.group(1):
+        return None
+    if requested_version and requested_version != new.group(1):
+        return None
+    return old.group(1), new.group(1)
+
+
 def _unique_script_refs(refs):
     """De-duplicate post-update script references by basename, preferring the
     explicit workspace-relative form (e.g. .agents/skills/foo.sh) over a bare
@@ -1047,6 +1066,7 @@ def _unique_script_refs(refs):
 
 
 _TOOL_SCRIPT_FAILURE_MARKERS = (
+    "BLOCKED:",
     "Error: Script failed",
     "Error executing script",
     "requires a script_name",
@@ -1106,7 +1126,7 @@ def _mandated_script_failed(results, post_scripts, messages=None):
     else:
         for _r in results or []:
             _r = str(_r)
-            if _r.startswith("run_tool_script:") and "Error:" in _r:
+            if _r.startswith("run_tool_script:") and ("Error:" in _r or "BLOCKED:" in _r):
                 for _base in mandated:
                     if _base in _r:
                         return _base
@@ -2572,6 +2592,18 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 else:
                     target_version = UPDATE_VERSION
                     _changes_before = None
+                    _committed_spec = manager.read_committed_file(spec)
+                    _pending = _pending_update(spec_before_update, _committed_spec, UPDATE_VERSION)
+                    if _pending:
+                        # Continue from the committed state: the version bump is
+                        # kept, the remaining steps (changelog check, post-update
+                        # scripts) run against the committed old version.
+                        print(f"[UPDATE] {spec.name}: unfinished update {_pending[0]} -> {_pending[1]} "
+                              f"found (not committed yet). Continuing with the remaining steps.")
+                        spec_before_update = _committed_spec
+                        target_version = _pending[1]
+                        _changes_file = spec.parent / (spec.stem + '.changes')
+                        _changes_before = manager.read_committed_file(_changes_file)
                 _release_notes = ""
                 _prefetched_context = ""
                 # Pre-check: try version APIs before involving AI
