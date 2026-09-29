@@ -40,11 +40,12 @@ Tue Nov  8 10:21:12 UTC 2022 - Previous Author <email>
 - When the .changes file does not exist, create it.
 - When the version jump spans former upstream releases — i.e. the current
   package source is older than some releases that upstream shipped in between —
-  cover those former releases in the entry as well: name the skipped
-  intermediate versions and their notable highlights, because the package
-  previously did not ship them. For each version an own entry, e.g.
-  `- Updated to version 1.3 with sub-bullets noting highlights.
-   - Updated to version 1.2 with sub-bullets noting highlights.`
+  cover those former releases in the entry as well, because the package
+  previously did not ship them. Give every release its own
+  `- Updated to version X` line with its highlights as `  * ` sub-bullets
+  below it, newest release first (see the example above). Do NOT repeat the
+  version inside the sub-bullets (no `  * 1.2.3: ...` lines) and do NOT list
+  the skipped releases in a parenthesis on the first line.
 """
 
 
@@ -77,60 +78,86 @@ def split_release_notes(notes):
     return sections
 
 
+def _sanitize_notes_text(text, limit, max_chars_per_line=120):
+    """Turn one block of upstream release notes into at most *limit* plain
+    lines: HTML/markdown markup, links, headings and boilerplate are
+    stripped."""
+    if not text:
+        return []
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', text)
+    text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
+    text = re.sub(r'`([^`]*)`', r'\1', text)
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'(?<!\*)\*([^*\n]+)\*(?!\*)', r'\1', text)
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.M)
+    text = re.sub(r'^\s*>\s*', '', text, flags=re.M)
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r'^\s*[-*+]\s*', '', line).strip()
+        if len(line) < 2:
+            continue
+        low = line.lower()
+        if low.startswith(('http://', 'https://', '#')):
+            continue
+        if low.startswith(("what's changed", "what's new", "release notes", "changelog", "highlight")):
+            continue
+        lines.append(line[:max_chars_per_line].rstrip())
+        if len(lines) >= limit:
+            break
+    return lines
+
+
 def sanitize_release_notes(notes, max_bullets=4, max_chars_per_line=120):
     """Convert upstream release notes into a few compact .changes bullet lines.
 
-    When ``notes`` contains ``## <version>`` headings, each version section is
-    converted into ``  * <version>: ...`` sub-bullets (capped at max two per
-    version, and ``max_bullets`` overall).  Plain notes keep the existing
-    behaviour of returning ``  * ...`` sub-bullets.
-
     Deterministic transformer (no AI): strips HTML/markdown markup and turns
-    the leading meaningful lines into sub-bullets suitable for a .changes
-    entry body.
+    the leading meaningful lines into ``  * ...`` sub-bullets suitable for a
+    .changes entry body.  ``## <version>`` headings are dropped; use
+    :func:`release_notes_changelog_body` to get one group per version.
     """
-
-    def _sanitize_section(text, limit):
-        if not text:
-            return []
-        text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
-        text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', text)
-        text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
-        text = re.sub(r'`([^`]*)`', r'\1', text)
-        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-        text = re.sub(r'(?<!\*)\*([^*\n]+)\*(?!\*)', r'\1', text)
-        text = re.sub(r'^#{1,6}\s*', '', text, flags=re.M)
-        text = re.sub(r'^\s*>\s*', '', text, flags=re.M)
-        bullets = []
-        for line in text.splitlines():
-            line = re.sub(r'^\s*[-*+]\s*', '', line).strip()
-            if len(line) < 2:
-                continue
-            low = line.lower()
-            if low.startswith(('http://', 'https://', '#')):
-                continue
-            if low.startswith(("what's changed", "what's new", "release notes", "changelog", "highlight")):
-                continue
-            line = line[:max_chars_per_line].rstrip()
-            bullets.append(line)
-            if len(bullets) >= limit:
-                break
-        return bullets
-
-    sections = split_release_notes(notes)
-    if not sections:
-        return []
-    if len(sections) == 1 and sections[0][0] is None:
-        return [f'  * {b}' for b in _sanitize_section(sections[0][1], max_bullets)]
     bullets = []
-    for version, text in sections:
-        for b in _sanitize_section(text, 2):
-            label = f'{version}: ' if version else ''
-            bullets.append(f'  * {label}{b}')
-            if len(bullets) >= max_bullets:
-                return bullets
+    for _version, text in split_release_notes(notes):
+        for b in _sanitize_notes_text(text, max_bullets - len(bullets), max_chars_per_line):
+            bullets.append(f'  * {b}')
+        if len(bullets) >= max_bullets:
+            break
     return bullets
+
+
+def release_notes_changelog_body(new_version, old_version, notes,
+                                 existing_content='', max_bullets=4,
+                                 max_bullets_per_release=2):
+    """Build the ``- Updated to version X`` groups of a .changes entry body.
+
+    The first group is always *new_version*.  When *notes* carry
+    ``## <version>`` sections for releases upstream shipped between
+    *old_version* and *new_version*, each of those gets its own group below,
+    newest first, so the entry records the whole jump.  Releases already
+    recorded in *existing_content* (an earlier, unfinished update) and
+    *old_version* itself are skipped.
+    """
+    sections = split_release_notes(notes)
+    new_clean = _clean_version(new_version)
+    old_clean = _clean_version(old_version) if old_version else ''
+    recorded = set(changelog_versions(existing_content))
+    intermediate = []
+    new_texts = []
+    for version, text in sections:
+        clean = _clean_version(version) if version else None
+        if clean is None or clean == new_clean:
+            new_texts.append(text)
+        elif clean != old_clean and clean not in recorded:
+            intermediate.append((version, text))
+    per_release = max_bullets if not intermediate else max_bullets_per_release
+    body = [f'- Updated to version {new_version}']
+    body.extend(f'  * {b}' for b in
+                _sanitize_notes_text('\n'.join(new_texts), per_release))
+    for version, text in reversed(intermediate):
+        body.append(f'- Updated to version {_clean_version(version)}')
+        body.extend(f'  * {b}' for b in _sanitize_notes_text(text, per_release))
+    return body
 
 
 def versioned_release_versions(notes):
@@ -231,8 +258,8 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
     """Prepend a deterministic changelog entry to a .changes file.
     When release_notes is provided, its leading content is added as sub-bullets
     under the version line.  Multi-version notes (with ``## <version>``
-    headings) are rendered as ``  * <version>: ...`` sub-bullets and the
-    previously-shipped intermediate versions are named on the version line.
+    headings) get one ``- Updated to version X`` group per release, newest
+    first (see release_notes_changelog_body).
     Returns True if the entry was written, False if the file already had a
     changelog entry for this version (skipped to avoid duplicates).
     """
@@ -241,22 +268,11 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
     day = now.strftime('%a')
     email_match = re.search(r'<([^>]+)>', email_author)
     changelog_author = f"pbuild-ai <{email_match.group(1)}>" if email_match else f"pbuild-ai <{email_author}>"
-    body = [f'- Updated to version {new_version}']
-    # When the jump spans formerly-shipped intermediate releases whose release
-    # notes we collected, name them so the entry records the whole jump.
-    _versions = versioned_release_versions(release_notes)
-    _intermediate = [
-        v for v in _versions
-        if v != new_version and _clean_version(v) != _clean_version(old_version)
-    ]
-    if _intermediate:
-        if len(_intermediate) == 1:
-            _covered = _intermediate[0]
-        else:
-            _covered = ", ".join(_intermediate[:-1]) + f" and {_intermediate[-1]}"
-        body = [f'- Updated to version {new_version} (also covers intermediate '
-                f'releases {_covered})']
-    body.extend(sanitize_release_notes(release_notes))
+    _existing = ''
+    if changes_path.exists():
+        _existing = changes_path.read_text(encoding='utf-8', errors='replace')
+    body = release_notes_changelog_body(new_version, old_version, release_notes,
+                                        existing_content=_existing)
     body.append('- Update generated using pbuild-ai')
     entry = (
         '-------------------------------------------------------------------\n'
@@ -266,11 +282,10 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
         + '\n\n'
     )
     if changes_path.exists():
-        content = changes_path.read_text(encoding='utf-8', errors='replace')
         # Skip if an entry for this version already exists (in any style)
-        if has_changelog_version(content, new_version):
+        if has_changelog_version(_existing, new_version):
             return False
-        new_content = entry + content
+        new_content = entry + _existing
     else:
         new_content = entry
     changes_path.write_text(new_content)

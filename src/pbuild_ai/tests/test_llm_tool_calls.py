@@ -19,8 +19,18 @@ class TestQwenToolCallExtraction(unittest.TestCase):
         self.assertIn("path", args)
         self.assertIn("old_string", args)
         self.assertIn("new_string", args)
-        # Newlines are escaped to \\n in the extracted JSON
-        self.assertIn("\\nRelease:", args["old_string"])
+        # Literal newlines inside JSON strings survive as real newlines
+        self.assertEqual(args["old_string"], "Version:        0.33.1\nRelease:        0\nSummary:")
+
+    def test_escaped_quotes_and_backslashes(self):
+        """Escapes inside strings must not confuse string/brace tracking."""
+        content = ('{"name": "edit_file", "arguments": {"path": "a", '
+                   '"old_string": "say \\"}\\" C:\\\\", "new_string": "y\nz"}}')
+        calls = self.ai._extract_tool_calls_from_content(content)
+        self.assertEqual(len(calls), 1)
+        args = json.loads(calls[0]["function"]["arguments"])
+        self.assertEqual(args["old_string"], 'say "}" C:\\')
+        self.assertEqual(args["new_string"], "y\nz")
 
     def test_qwen_arguments_format_with_newlines(self):
         """Test qwen3.6 arguments format with literal newlines."""

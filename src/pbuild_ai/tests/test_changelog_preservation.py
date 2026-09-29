@@ -18,6 +18,7 @@ if SRC_DIR not in sys.path:
 from pbuild_ai.skills.changelog_skill import (
     collapse_repeated_separators, has_changelog_version, sanitize_release_notes,
     split_release_notes, versioned_release_versions,
+    release_notes_changelog_body,
     would_duplicate_changelog_entry, write_changelog_entry,
 )
 from pbuild_ai.pbuild_ai import _changelog_ai_round, _extract_changelog_author, _norm_ws
@@ -506,30 +507,63 @@ class TestSplitReleaseNotes(unittest.TestCase):
 
 
 class TestSanitizeMultiVersionNotes(unittest.TestCase):
-    def test_version_tagged_subbullets(self):
+    def test_no_version_prefixes(self):
         bullets = sanitize_release_notes(MULTI_VERSION_NOTES, max_bullets=6)
-        self.assertEqual(bullets[0], "  * 0.33.2: Added gguf memory mapping")
-        self.assertEqual(bullets[1], "  * 0.33.2: Faster LLM loading")
-        self.assertEqual(bullets[2], "  * 0.33.3: Improved Windows GPU support")
-        self.assertEqual(bullets[3], "  * 0.34.0: Use Ollama models directly in ChatGPT Desktop")
-        self.assertEqual(bullets[4], "  * 0.34.0: Improved structured output performance")
-
-    def test_caps_total_and_per_version(self):
-        notes = ("## 0.33.2\n- one\n- two\n- three\n"
-                 "## 0.33.3\n- four\n- five\n- six\n"
-                 "## 0.34.0\n- seven\n- eight\n- nine\n")
-        bullets = sanitize_release_notes(notes, max_bullets=6)
-        self.assertLessEqual(len(bullets), 6)
-        # max two per version, so 0.33.2 contributes one and 0.33.3, not 'three'
-        self.assertNotIn("three", bullets)
+        self.assertEqual(bullets[0], "  * Added gguf memory mapping")
+        self.assertFalse(any(": " in b and b.split(":")[0].strip("* ").startswith("0.")
+                             for b in bullets))
 
     def test_plain_notes_unchanged(self):
         bullets = sanitize_release_notes("- Some highlight\n")
         self.assertEqual(bullets, ["  * Some highlight"])
 
 
+class TestReleaseNotesChangelogBody(unittest.TestCase):
+    def test_one_group_per_release_newest_first(self):
+        body = release_notes_changelog_body("0.34.0", "0.33.0", MULTI_VERSION_NOTES)
+        self.assertEqual(body, [
+            "- Updated to version 0.34.0",
+            "  * Use Ollama models directly in ChatGPT Desktop",
+            "  * Improved structured output performance",
+            "- Updated to version 0.33.3",
+            "  * Improved Windows GPU support",
+            "- Updated to version 0.33.2",
+            "  * Added gguf memory mapping",
+            "  * Faster LLM loading",
+        ])
+
+    def test_caps_bullets_per_release(self):
+        notes = ("## 0.33.3\n- one\n- two\n- three\n"
+                 "## 0.34.0\n- four\n- five\n- six\n")
+        body = release_notes_changelog_body("0.34.0", "0.33.1", notes)
+        self.assertNotIn("  * three", body)
+        self.assertNotIn("  * six", body)
+        self.assertIn("- Updated to version 0.33.3", body)
+
+    def test_single_release_gets_more_bullets(self):
+        notes = "## 0.34.0\n- one\n- two\n- three\n"
+        body = release_notes_changelog_body("0.34.0", "0.33.1", notes)
+        self.assertEqual(body, ["- Updated to version 0.34.0",
+                                "  * one", "  * two", "  * three"])
+
+    def test_skips_old_and_already_recorded_versions(self):
+        existing = "- Updated to version 0.33.3\n"
+        body = release_notes_changelog_body("0.34.0", "0.33.2", MULTI_VERSION_NOTES,
+                                            existing_content=existing)
+        headers = [l for l in body if l.startswith("- ")]
+        self.assertEqual(headers, ["- Updated to version 0.34.0"])
+
+    def test_plain_notes_go_under_new_version(self):
+        body = release_notes_changelog_body("0.34.0", "0.33.1", "- Single fix\n")
+        self.assertEqual(body, ["- Updated to version 0.34.0", "  * Single fix"])
+
+    def test_no_notes(self):
+        self.assertEqual(release_notes_changelog_body("0.34.0", "0.33.1", None),
+                         ["- Updated to version 0.34.0"])
+
+
 class TestWriteChangelogEntryIntermediate(unittest.TestCase):
-    def test_intermediate_releases_named_and_tagged(self):
+    def test_intermediate_releases_get_own_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ollama.changes"
             if OLDER_ENTRIES:
@@ -539,30 +573,18 @@ class TestWriteChangelogEntryIntermediate(unittest.TestCase):
                                        release_notes=MULTI_VERSION_NOTES)
             self.assertTrue(ok)
             text = path.read_text(encoding="utf-8")
-            self.assertIn(
-                "- Updated to version 0.34.0 (also covers intermediate "
-                "releases 0.33.2 and 0.33.3)", text)
-            self.assertIn("  * 0.33.2: Added gguf memory mapping", text)
-            self.assertIn("  * 0.34.0: Use Ollama models directly", text)
+            self.assertIn("- Updated to version 0.34.0\n"
+                          "  * Use Ollama models directly", text)
+            self.assertIn("- Updated to version 0.33.3\n"
+                          "  * Improved Windows GPU support\n"
+                          "- Updated to version 0.33.2\n", text)
+            self.assertNotIn("also covers intermediate", text)
+            self.assertNotIn("* 0.3", text)
+            self.assertFalse(would_duplicate_changelog_entry(text))
             # history intact
             self.assertTrue(text.rstrip().endswith("- Older change"))
 
-    def test_single_intermediate_wording(self):
-        notes = ("## 0.33.3\n- Intermediate fix\n"
-                 "## 0.34.0\n- The real thing\n")
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "ollama.changes"
-            path.write_text(OLDER_ENTRIES, encoding="utf-8")
-            ok = write_changelog_entry(path, "0.33.1", "0.34.0",
-                                       "Maintainer <maint@opensuse.org>",
-                                       release_notes=notes)
-            self.assertTrue(ok)
-            text = path.read_text(encoding="utf-8")
-            self.assertIn(
-                "- Updated to version 0.34.0 (also covers intermediate "
-                "releases 0.33.3)", text)
-
-    def test_plain_notes_no_parenthetical(self):
+    def test_plain_notes_single_group(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ollama.changes"
             path.write_text(OLDER_ENTRIES, encoding="utf-8")
@@ -571,8 +593,7 @@ class TestWriteChangelogEntryIntermediate(unittest.TestCase):
                                        release_notes="- Single release notes")
             self.assertTrue(ok)
             text = path.read_text(encoding="utf-8")
-            self.assertIn("- Updated to version 0.34.0", text)
-            self.assertNotIn("also covers intermediate", text)
+            self.assertIn("- Updated to version 0.34.0\n  * Single release notes", text)
 
 
 class TestNormWs(unittest.TestCase):

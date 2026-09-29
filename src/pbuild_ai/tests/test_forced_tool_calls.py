@@ -154,6 +154,18 @@ class TestFinishTool(_ToolLoopCase):
         self.assertEqual(self.messages[-1], {"role": "assistant", "content": "nothing-to-do"})
 
 
+class TestArgumentsRoundTrip(_ToolLoopCase):
+
+    def test_text_extracted_call_round_trips_arguments_as_object(self):
+        """Calls extracted from text carry JSON-string arguments; the next
+        request must send them as an object or Ollama rejects it with HTTP 400."""
+        content = json.dumps({"name": "edit_file", "arguments": _BUMP})
+        self._run([_reply(content), _reply(tool_calls=[_call("finish", {"status": "done"})])])
+        calls = [tc for m in self.payloads[1]["messages"] for tc in m.get("tool_calls") or []]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["arguments"], _BUMP)
+
+
 class TestConstrainedRetry(_ToolLoopCase):
 
     def test_text_reply_gets_constrained_retry(self):

@@ -380,7 +380,7 @@ class LlmAnalyzer:
                     result.append(c)
                     i += 1
                     continue
-                if c == '\\\\':
+                if c == '\\':
                     escape = True
                     result.append(c)
                     i += 1
@@ -391,7 +391,7 @@ class LlmAnalyzer:
                     i += 1
                     continue
                 if in_string and c == '\n':
-                    result.append('\\\\n')
+                    result.append('\\n')
                     i += 1
                     continue
                 result.append(c)
@@ -413,7 +413,7 @@ class LlmAnalyzer:
                     if escape:
                         escape = False
                         continue
-                    if c == '\\\\':
+                    if c == '\\':
                         escape = True
                         continue
                     if c == '\"' and not escape:
@@ -1373,6 +1373,11 @@ class LlmAnalyzer:
                         tool_input = {}
                 if not isinstance(tool_input, dict):
                     tool_input = {}
+                # Round-trip arguments as an object: calls extracted from text
+                # carry a JSON string, which Ollama rejects in the next request
+                # ("Value looks like object, but can't find closing '}' symbol").
+                # The OpenAI conversion re-serializes dicts itself.
+                tc['function']['arguments'] = tool_input
                 round_calls.append((tool_name, tool_input))
 
             # finish() ends the loop after the round's other calls ran. It gets
