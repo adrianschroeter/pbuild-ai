@@ -1030,6 +1030,21 @@ def _agent_skill_blocks(agent_skills):
     )
 
 
+def _resolve_interactive(args, isatty=None):
+    """--interactive / --non-interactive win; otherwise interactive when both
+    stdin and stdout are a terminal (so piped or scheduled runs never block)."""
+    if getattr(args, "non_interactive", False):
+        return False
+    if getattr(args, "interactive", None):
+        return True
+    if isatty is None:
+        isatty = lambda: sys.stdin.isatty() and sys.stdout.isatty()
+    try:
+        return bool(isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
 def _pending_update(spec_text, committed_text, requested_version):
     """Detect a version update that was started but not committed yet.
 
@@ -1401,7 +1416,9 @@ if __name__ == "__main__":
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
     parser.add_argument("--prompt", "-p", default=None, help="Additional hint to include in all analysis prompts sent to AI")
     parser.add_argument("--fresh", action="store_true", help="Discard saved .pai.context and start fresh")
-    parser.add_argument("-i", "--interactive", action="store_true", help="Ask the user to select which changes to apply when AI proposes multiple tool calls")
+    _interactive_group = parser.add_mutually_exclusive_group()
+    _interactive_group.add_argument("-i", "--interactive", action="store_true", default=None, help="Ask the user to select which changes to apply when AI proposes multiple tool calls, and for permission to run tool scripts (default when stdin and stdout are a terminal)")
+    _interactive_group.add_argument("--non-interactive", action="store_true", help="Never ask the user anything, even when running in a terminal")
     parser.add_argument("--ai-server", default=None, help="AI server URL, OpenAI-compatible (overrides AI_HOST env var; legacy OLLAMA_HOST is also honored, default http://localhost:11434)")
     parser.add_argument("--model", "--ai-model", default=None, help="AI model name (overrides AI_MODEL env var; legacy OLLAMA_MODEL is also honored, default gemma4)")
     parser.add_argument("--ai-timeout", type=int, default=None, help="Timeout in seconds for AI API requests (default: 900, overrides AI_TIMEOUT env var; legacy OLLAMA_TIMEOUT is also honored)")
@@ -1475,7 +1492,7 @@ if __name__ == "__main__":
         ai_timeout=args.ai_timeout or int(os.environ.get("AI_TIMEOUT", os.environ.get("OLLAMA_TIMEOUT", "900"))),
         ai_options=ai_options,
         shell_after_build=args.shell_after_build,
-        interactive=args.interactive,
+        interactive=_resolve_interactive(args),
         email=args.email or os.environ.get("EMAIL", ""),
         analyze_mode=args.analyze,
         max_rounds=args.max_ai_rounds,

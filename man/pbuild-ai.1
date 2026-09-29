@@ -162,7 +162,11 @@ Do not clean build artifacts (default).
 .TP
 .B \-\-interactive, \-i
 Ask the user to select which changes to apply when AI proposes
-multiple tool calls.
+multiple tool calls, and for permission to run tool scripts.
+This is the default when stdin and stdout are a terminal.
+.TP
+.B \-\-non\-interactive
+Never ask the user anything, even when running in a terminal.
 .TP
 .B \-\-debug, \-D
 Print raw JSON responses from AI for debugging, along with

@@ -214,6 +214,16 @@ default: the automatic version-API pre-checks (skill APIs, GitHub, GitLab)
 and the AI research step select the latest stable release. Use
 `--update=VERSION` to force a specific version, including a prerelease.
 
+### `--interactive` / `--non-interactive`
+
+Interactive mode is the default when stdin and stdout are a terminal. In
+interactive mode pbuild-ai asks which changes to apply when the AI proposes
+several modifications at once, asks for permission before running a tool
+script (unless `--allow-tool-scripts` is given), and lets the AI ask you
+questions. `-i`/`--interactive` forces it on; `--non-interactive` turns it
+off, e.g. for scripted runs from a terminal. Piped or scheduled runs (no
+terminal) are never interactive.
+
 ### `--ai-server URL`
 
 Sets the AI server URL. Overrides the `AI_HOST` environment
