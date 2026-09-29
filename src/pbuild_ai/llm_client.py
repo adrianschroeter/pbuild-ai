@@ -27,7 +27,8 @@ from pathlib import Path
 from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.skills.changelog_skill import would_duplicate_changelog_entry
 from pbuild_ai.utils import resolve_path, ReadCoverageTracker
-from pbuild_ai.tools import execute_tool_calls, format_tool_display, FINISH_TOOL, FINISH_TOOL_NAME
+from pbuild_ai.tools import (execute_tool_calls, format_tool_display, FINISH_TOOL, FINISH_TOOL_NAME,
+                             MODIFICATION_TOOLS, ask_tool_selection, instruction_messages)
 
 
 def _extract_text_from_json(obj, min_length=20):
@@ -173,6 +174,14 @@ def _tool_signatures(tools):
 # Constrained tool-call retries per call_with_tools() when the model answers
 # with text instead of a tool call.
 _MAX_FORCED_RETRIES = 2
+
+# Ollama aborts generations that loop: "prediction aborted, token repeat
+# limit reached" (HTTP 500).
+_REPEAT_LIMIT_RETRIES = 2
+
+
+def _is_repeat_limit_error(error):
+    return "repeat limit" in str(error)
 
 
 class LlmAnalyzer:
@@ -760,8 +769,41 @@ class LlmAnalyzer:
         return payload
 
     def _request(self, url, payload):
+        """Send one request. Ollama aborts a generation that keeps repeating
+        the same tokens ("token repeat limit reached"); such a request is
+        retried with a higher repeat penalty and temperature (and thinking
+        off on the last try) instead of failing the whole run."""
+        for attempt in range(_REPEAT_LIMIT_RETRIES + 1):
+            try:
+                return self._request_once(url, payload)
+            except RuntimeError as e:
+                if not _is_repeat_limit_error(e) or attempt == _REPEAT_LIMIT_RETRIES:
+                    raise
+                payload = self._less_repetitive(payload, attempt)
+                print(f"[AI] Model got stuck repeating itself; retrying "
+                      f"({attempt + 1}/{_REPEAT_LIMIT_RETRIES}) with repeat_penalty="
+                      f"{payload.get('options', {}).get('repeat_penalty', payload.get('frequency_penalty'))}"
+                      f"{', thinking off' if payload.get('think') is False else ''}...", flush=True)
+
+    def _less_repetitive(self, payload, attempt):
+        payload = dict(payload)
+        opts = dict(payload.get("options") or self.options or {})
+        for _k in ("format", "think", "thinking"):
+            opts.pop(_k, None)
+        opts["repeat_penalty"] = round(max(float(opts.get("repeat_penalty") or 1.0), 1.1) + 0.1, 2)
+        opts["temperature"] = round(min(1.0, float(opts.get("temperature") or 0.7) + 0.2), 2)
+        payload["options"] = opts
         if self._openai_mode:
-            _passthrough = {k: payload[k] for k in ("tool_choice", "response_format") if k in payload}
+            payload["frequency_penalty"] = round(0.3 * (attempt + 1), 2)
+            payload["temperature"] = opts["temperature"]
+        if attempt >= 1:
+            payload["think"] = False
+        return payload
+
+    def _request_once(self, url, payload):
+        if self._openai_mode:
+            _passthrough = {k: payload[k] for k in ("tool_choice", "response_format",
+                                                    "frequency_penalty", "temperature") if k in payload}
             # Transform AI payload to OpenAI format
             if payload.get("messages") and payload.get("tools"):
                 # Chat completion with tools
@@ -884,6 +926,14 @@ class LlmAnalyzer:
         self._context = None
         try:
             result = self._request(self.api_url, payload)
+            if (not self._openai_mode and not (result.get('response') or '').strip()
+                    and not (result.get('thinking') or '').strip()
+                    and payload.get('think') is not False):
+                # Thinking models sometimes stop right away with neither an
+                # answer nor thoughts; one retry without thinking usually works.
+                print("[AI] Empty response; retrying once with thinking off...", flush=True)
+                payload = dict(payload, think=False)
+                result = self._request(self.api_url, payload)
             self._context = result.get("context")
             if self._openai_mode:
                 # OpenAI responses keep the answer in message.content (and
@@ -922,6 +972,8 @@ class LlmAnalyzer:
             return response_text
         except Exception as e:
             print(f"[AI ERROR] {e}")
+            if _is_repeat_limit_error(e):
+                return "(model returned empty response)"
             sys.exit(2)
 
     def _write_analysis_file(self, response_text):
@@ -1272,6 +1324,10 @@ class LlmAnalyzer:
                 result = self._request_tool_round(payload)
                 self._chat_context = result.get("context")
             except RuntimeError as e:
+                if _is_repeat_limit_error(e):
+                    print(f"[AI ERROR] {e}", flush=True)
+                    print("[AI] Model kept repeating itself; ending this tool loop.", flush=True)
+                    return all_results
                 if "HTTP Error 405" in str(e):
                     print(f"[AI ERROR] Chat API not supported at {self.chat_api_url}; "
                           "tool calling cannot proceed without /api/chat.", flush=True)
@@ -1390,31 +1446,17 @@ class LlmAnalyzer:
                     return self._finish_tool_loop(messages, _finish_args, all_results)
 
             # Interactive mode: let user select which tool calls to execute (only for modification ops)
-            MODIFICATION_TOOLS = {"write_file", "edit_file", "remove_file", "rename_file", "run_tool_script"}
             mod_count = sum(1 for name, _ in round_calls if name in MODIFICATION_TOOLS)
             if interactive and mod_count > 1:
-                print(f"\n--- AI proposes {len(round_calls)} tool calls ---")
-                for idx, (name, inp) in enumerate(round_calls, 1):
-                    args_preview = json.dumps(inp)[:300]
-                    print(f"  [{idx}] {name}({args_preview})")
-                print(f"  [a] Execute all")
-                print(f"  [n] Execute none")
-                selection = input("Select tool calls to execute (e.g. '1,3' or 'a'): ").strip().lower()
-                if selection == 'n':
-                    print("Skipping all tool calls.")
+                round_calls, _instruction = ask_tool_selection(round_calls)
+                if _instruction:
+                    print("[INTERACTIVE] Passing your instruction to the AI.")
+                    messages.extend(instruction_messages(
+                        message, [tc['function']['name'] for tc in message['tool_calls']], _instruction))
                     continue
-                if selection != 'a':
-                    selected = set()
-                    for part in selection.split(','):
-                        part = part.strip()
-                        if part.isdigit():
-                            idx = int(part)
-                            if 1 <= idx <= len(round_calls):
-                                selected.add(idx - 1)
-                    round_calls = [c for i, c in enumerate(round_calls) if i in selected]
-                    if not round_calls:
-                        print("No tool calls selected.")
-                        continue
+                if not round_calls:
+                    print("No tool calls selected.")
+                    continue
 
             for name, tool_input in round_calls:
                 args_preview = json.dumps(tool_input)[:300]
@@ -1555,7 +1597,7 @@ class LlmAnalyzer:
                 print(f"[AI] All tool calls skipped (reverts/no-ops). Stopping tool loop.", flush=True)
                 if _finish_args is not None:
                     return self._finish_tool_loop(messages, _finish_args, all_results)
-                break
+                return all_results
 
             round_results = execute_tool_calls(_filtered_calls, manager, workspace_dir or str(Path.cwd()), allow_tool_scripts, interactive=interactive, debug=self.debug)
             # Merge executed and skipped results in original round_calls order by index

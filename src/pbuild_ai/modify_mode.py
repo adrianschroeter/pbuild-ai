@@ -26,7 +26,8 @@ from pathlib import Path
 from pbuild_ai.network import is_safe_url
 from pbuild_ai.llm_client import chat_completion, prune_messages
 from pbuild_ai.spinner import Spinner, AI_COLOR
-from pbuild_ai.tools import execute_tool_calls, format_tool_display, resolve_path
+from pbuild_ai.tools import (execute_tool_calls, format_tool_display, resolve_path,
+                             MODIFICATION_TOOLS, ask_tool_selection, instruction_messages)
 from pbuild_ai.utils import ReadCoverageTracker
 
 
@@ -215,29 +216,15 @@ Skill instructions (follow these):
                             tool_input['path'] = correct
                     round_calls.append((tool_name, tool_input))
 
-                if ctx.interactive and sum(1 for name, _ in round_calls if name in ("write_file", "edit_file", "remove_file", "rename_file", "run_tool_script")) > 1:
-                    print(f"\n--- AI proposes {len(round_calls)} tool calls ---")
-                    for idx, (name, inp) in enumerate(round_calls, 1):
-                        args_preview = json.dumps(inp)[:300]
-                        print(f"  [{idx}] {name}({args_preview})")
-                    print(f"  [a] Execute all")
-                    print(f"  [n] Execute none")
-                    selection = input("Select tool calls to execute (e.g. '1,3' or 'a'): ").strip().lower()
-                    if selection == 'n':
-                        print("Skipping all tool calls.")
+                if ctx.interactive and sum(1 for name, _ in round_calls if name in MODIFICATION_TOOLS) > 1:
+                    round_calls, _instruction = ask_tool_selection(round_calls)
+                    if _instruction:
+                        print("[INTERACTIVE] Passing your instruction to the AI.")
+                        messages.extend(instruction_messages(message, [tc['function']['name'] for tc in message['tool_calls']], _instruction))
                         continue
-                    if selection != 'a':
-                        selected = set()
-                        for part in selection.split(','):
-                            part = part.strip()
-                            if part.isdigit():
-                                idx = int(part)
-                                if 1 <= idx <= len(round_calls):
-                                    selected.add(idx - 1)
-                        round_calls = [c for i, c in enumerate(round_calls) if i in selected]
-                        if not round_calls:
-                            print("No tool calls selected.")
-                            continue
+                    if not round_calls:
+                        print("No tool calls selected.")
+                        continue
 
                 for name, tool_input in round_calls:
                     args_preview = json.dumps(tool_input)[:300]

@@ -4,6 +4,10 @@ pbuild\-ai \- AI-powered RPM package builder and fixer for openSUSE
 .SH SYNOPSIS
 .B pbuild\-ai
 [\fI\,OPTIONS\/\fR] \fI\,workspace_dir\/\fR [\fI\,package_name\/\fR]
+.br
+.B pbuild\-ai
+\fIanalyze\fR|\fIfix\fR|\fIupdate\fR|\fIchangelog\fR|\fIgenerate\fR|\fIcreate\fR|\fImodify\fR
+[\fI\,OPTIONS\/\fR] [\fI\,workspace_dir\/\fR]
 .SH DESCRIPTION
 pbuild\-ai is an AI helper for the \fBpbuild\fR(1) tool.
 It works on single packages or entire package sets and is designed to
@@ -171,6 +175,9 @@ Do not clean build artifacts (default).
 .B \-\-interactive, \-i
 Ask the user to select which changes to apply when AI proposes
 multiple tool calls, and for permission to run tool scripts.
+Any of these questions can also be answered with a free-text
+instruction, which is passed to the AI instead of running the
+proposed calls.
 This is the default when stdin and stdout are a terminal.
 .TP
 .B \-\-non\-interactive

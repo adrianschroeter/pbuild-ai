@@ -597,6 +597,14 @@ class TestToolScriptInteractiveConsent(unittest.TestCase):
         self.assertIn("BLOCKED", results[0])
         self.assertIn("[ABORT:", results[0])
 
+    def test_instruction_answer_is_passed_to_ai_without_running(self):
+        results, asked = self._run(answers=["skip it, the spec is already formatted"])
+        self.assertEqual(asked, 1)
+        self.assertNotIn("ran-ok", results[0])
+        self.assertNotIn("BLOCKED", results[0])
+        self.assertIn("NOT RUN", results[0])
+        self.assertIn("skip it, the spec is already formatted", results[0])
+
     def test_empty_answer_defaults_to_denied(self):
         results, _ = self._run(answers=[""])
         self.assertIn("BLOCKED", results[0])

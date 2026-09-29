@@ -71,19 +71,85 @@ def _resolve_tool_script(workspace, manager, script_name):
                   "or .agents/skills/ (a workspace-relative path is also accepted).")
 
 
-def _ask_tool_script_consent(script_path, args):
-    """Ask the user to allow execution of one specific tool script."""
+MODIFICATION_TOOLS = frozenset({"write_file", "edit_file", "remove_file", "rename_file", "run_tool_script"})
+_YES_ANSWERS = ("y", "yes")
+_NO_ANSWERS = ("", "n", "no")
+
+
+def ask_yes_no_or_instruction(prompt, input_fn=None):
+    """Ask a yes/no question that also accepts a free-text instruction.
+
+    Returns ``(True, "")`` for y/yes, ``(False, "")`` for n/no/empty/EOF and
+    ``(None, text)`` when the user typed anything else."""
+    try:
+        answer = (input_fn or input)(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False, ""
+    if answer.lower() in _YES_ANSWERS:
+        return True, ""
+    if answer.lower() in _NO_ANSWERS:
+        return False, ""
+    return None, answer
+
+
+def ask_tool_selection(round_calls, input_fn=None):
+    """Show the proposed tool calls and let the user pick some of them, or
+    type an instruction for the AI instead.
+
+    Returns ``(selected_calls, instruction)``; ``instruction`` is '' unless
+    the user typed free text, in which case no call is selected."""
+    print(f"\n--- AI proposes {len(round_calls)} tool calls ---")
+    for idx, (name, inp) in enumerate(round_calls, 1):
+        print(f"  [{idx}] {name}({json.dumps(inp)[:300]})")
+    print("  [a] Execute all")
+    print("  [n] Execute none")
+    print("  or type an instruction for the AI instead")
+    try:
+        answer = (input_fn or input)("Select tool calls to execute (e.g. '1,3' or 'a') or enter an instruction: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return [], ""
+    selection = answer.lower()
+    if selection in ("a", "all", "y", "yes"):
+        return list(round_calls), ""
+    if selection in ("n", "none", "no", ""):
+        return [], ""
+    if re.fullmatch(r"[\d,\s]+", selection):
+        picked = {int(p) - 1 for p in re.split(r"[,\s]+", selection) if p}
+        return [c for i, c in enumerate(round_calls) if i in picked], ""
+    return [], answer
+
+
+def instruction_messages(message, call_names, instruction):
+    """Chat messages telling the AI that its proposed tool calls were not run
+    because the user answered with *instruction*."""
+    asst = {"role": "assistant", "content": message.get('content', '') or '',
+            "tool_calls": message.get('tool_calls') or []}
+    thinking = (message.get('thinking') or '').strip()
+    if thinking:
+        asst['thinking'] = thinking
+    msgs = [asst]
+    for name in call_names:
+        msgs.append({"role": "tool", "name": name,
+                     "content": "Not executed: the user gave an instruction instead."})
+    msgs.append({"role": "user", "content":
+                 f"Instruction from the user (follow it, then continue the task):\n{instruction}"})
+    return msgs
+
+
+def _ask_tool_script_consent(script_path, args, input_fn=None):
+    """Ask the user to allow execution of one specific tool script.
+
+    Returns ``(allowed, instruction)``; a typed instruction means 'not run'."""
     arg_text = " ".join(str(a) for a in (args or [])) or "(none)"
     print("\n[ASK USER] Tool-script execution is disabled (--allow-tool-scripts not set),")
     print("           but the project rules appear to require this script:")
     print(f"             Script: {script_path}")
     print(f"             Args:   {arg_text}")
-    try:
-        answer = input("      Allow running this script for this session? [y/N]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return False
-    return answer in ("y", "yes")
+    allowed, instruction = ask_yes_no_or_instruction(
+        "      Allow running this script for this session? [y/N or instruction for the AI]: ", input_fn)
+    return bool(allowed), instruction
 
 
 def _blocked_tool_script_message(script_name, script_path):
@@ -1108,9 +1174,15 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     results.append(_resolve_error or f"Error: Script '{script_name}' not found.")
                 continue
             if not allow_tool_scripts and not tool_script_granted(script_name):
-                if interactive and _ask_tool_script_consent(script_path, args):
+                _allowed, _instruction = (_ask_tool_script_consent(script_path, args)
+                                          if interactive else (False, ""))
+                if _allowed:
                     grant_tool_script(script_name)
                     print(f"[GRANT] Tool-script execution enabled for this session: {script_name}")
+                elif _instruction:
+                    results.append(f"NOT RUN: the user did not run '{script_name}' and gave this "
+                                   f"instruction instead:\n{_instruction}")
+                    continue
                 else:
                     results.append(_blocked_tool_script_message(script_name, script_path))
                     continue

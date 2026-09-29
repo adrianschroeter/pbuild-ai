@@ -52,6 +52,7 @@ class PbuildContext:
     email: str = ""
     try_build_first: bool = False
     auto_deps: int = 0  # 0=disabled, >0=depth
+    auto_deps_hint: str = ""  # interactive user instructions for creating a dependency
     analyze_mode: bool = False
     max_rounds: int = 15
     build_log: Optional[str] = None

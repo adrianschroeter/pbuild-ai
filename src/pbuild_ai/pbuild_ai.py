@@ -67,6 +67,7 @@ from pbuild_ai.workspace import RpmSourceManager
 from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions, fix_remote_asset_formatting
 from pbuild_ai.context import PbuildContext
 from pbuild_ai.identity import resolve_changelog_author
+from pbuild_ai.service_file import sync_service_version
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
     collapse_repeated_separators,
@@ -696,6 +697,8 @@ def _create_dependency_package(dep_name: str, dep_dir: str, ctx) -> bool:
     ctx.workspace_dir = dep_dir
     try:
         prompt = f"Create an openSUSE RPM package for the {ecosystem} package '{dep_name}'. {prompt_extra}"
+        if ctx.auto_deps_hint:
+            prompt += f"\nInstructions from the user: {ctx.auto_deps_hint}"
         old_generate = ctx.generate_prompt
         ctx.generate_prompt = prompt
         try:
@@ -893,8 +896,13 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
                     from pbuild_ai.skills.unresolvable_skill import parse_unresolved_package_from_log
                     _missing = parse_unresolved_package_from_log(build_out)
                     if _missing:
-                        _ans = input(f"[AUTO-DEPS] Package '{_missing}' does not appear to exist. Create it? [y/N] ").strip().lower()
-                        _should_auto_dep = _ans in ('y', 'yes')
+                        from pbuild_ai.tools import ask_yes_no_or_instruction
+                        _ans, _hint = ask_yes_no_or_instruction(
+                            f"[AUTO-DEPS] Package '{_missing}' does not appear to exist. "
+                            f"Create it? [y/N or instructions for creating it] ")
+                        # Free text means "yes, and here is how".
+                        _should_auto_dep = _ans is not False
+                        ctx.auto_deps_hint = _hint
                 if _should_auto_dep:
                     _dep = _handle_auto_deps(build_out, WORKSPACE_DIR, pkg_name, ctx, remaining_depth=_depth)
                     if _dep:
@@ -917,6 +925,41 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
                 run_fix_loop_func(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
 
     return error_prompt
+
+
+_SUBCOMMANDS = {
+    "analyze": "--analyze", "fix": "--fix", "update": "--update",
+    "generate": "--generate", "create": "--create", "modify": "--modify",
+    "changelog": "--changelog",
+}
+_PROMPT_SUBCOMMANDS = ("generate", "create", "modify")
+
+
+def _apply_subcommand(argv, isdir=os.path.isdir):
+    """Translate the command form ``pbuild-ai generate --prompt "..." [DIR]``
+    into the option form ``pbuild-ai --generate "..." [DIR]``.
+
+    Only the first argument is considered, and only when no directory of that
+    name exists, so ``pbuild-ai fix`` still works for a workspace named
+    'fix'. For generate/create/modify the prompt is taken from --prompt, or
+    from the next positional argument. Returns ``(argv, command or None)``."""
+    if not argv or argv[0] not in _SUBCOMMANDS or isdir(argv[0]):
+        return argv, None
+    cmd, rest = argv[0], list(argv[1:])
+    flag = _SUBCOMMANDS[cmd]
+    if any(a == flag or a.startswith(flag + "=") for a in rest):
+        return rest, cmd
+    if cmd not in _PROMPT_SUBCOMMANDS:
+        return [flag] + rest, cmd
+    for i, a in enumerate(rest):
+        if a in ("--prompt", "-p") and i + 1 < len(rest):
+            return rest[:i] + [flag, rest[i + 1]] + rest[i + 2:], cmd
+        if a.startswith("--prompt="):
+            return rest[:i] + [flag + "=" + a.split("=", 1)[1]] + rest[i + 1:], cmd
+    if rest and not rest[0].startswith("-"):
+        return [flag, rest[0]] + rest[1:], cmd
+    # No prompt at all: argparse reports "--generate: expected one argument".
+    return [flag] + rest, cmd
 
 
 def _check_arg_conflicts(parser, args):
@@ -1281,6 +1324,23 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
 _SPEC_SECTIONS = ("%description", "%prep", "%build", "%install", "%files")
 
 
+def _normalize_spec_style(text):
+    """Spec text with purely stylistic differences removed: %{macro} vs
+    %macro, whitespace, blank lines and an empty trailing %changelog."""
+    text = re.sub(r'%\{(\w+)\}', r'%\1', text or '')
+    lines = [re.sub(r'\s+', ' ', l).strip() for l in text.splitlines()]
+    lines = [l for l in lines if l]
+    while lines and lines[-1] == '%changelog':
+        lines.pop()
+    return lines
+
+
+def _is_cosmetic_spec_change(old, new):
+    """True when *new* differs from *old* only in style — such a rewrite
+    cannot fix a build failure and must not count as a fix attempt."""
+    return old != new and _normalize_spec_style(old) == _normalize_spec_style(new)
+
+
 def _extract_rewritten_spec(text, current_spec):
     """Extract a full spec body the AI dumped as plain TEXT instead of tool calls.
 
@@ -1378,10 +1438,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
         description="RPM packager helper with AI-powered build-fix and version-update.\n"
-                    "Main commands: --analyze, --fix, --update, --generate, --create, --modify",
+                    "Main commands: --analyze, --fix, --update, --generate, --create, --modify\n"
+                    "(also as first word: pbuild-ai generate --prompt \"...\" [WORKSPACE_DIR])",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("workspace_dir", help="Path to the workspace directory")
+    parser.add_argument("workspace_dir", nargs="?", default=None, help="Path to the workspace directory (optional with the command form, default: current directory)")
     parser.add_argument("package_name", nargs="?", default=None, help="Package name to focus on (only in project mode)")
     parser.add_argument("--analyze", "-a", action="store_true", help="Main command: analyze spec files and exit (default). Conflicts with --fix, --update, --generate, --changelog, --modify.")
     parser.add_argument("--version", action="store_true", help="Show version and exit")
@@ -1440,7 +1501,17 @@ if __name__ == "__main__":
     clean_group = parser.add_mutually_exclusive_group()
     clean_group.add_argument("--clean", action="store_true", default=False, help="Clean build artifacts before building")
     clean_group.add_argument("--no-clean", action="store_true", default=True, help="Do not clean build artifacts (default)")
-    args = parser.parse_args()
+    _argv, _subcommand = _apply_subcommand(sys.argv[1:])
+    args = parser.parse_args(_argv)
+    if args.workspace_dir is None:
+        if not _subcommand and not args.version:
+            parser.error("the following arguments are required: workspace_dir")
+        args.workspace_dir = "."
+        # A new package must not be generated into e.g. the home directory.
+        if (args.generate or args.create) and any(
+                not e.startswith(".") for e in os.listdir(".")):
+            parser.error("the current directory is not empty; give a (new) directory "
+                         "for the package, e.g. pbuild-ai generate --prompt \"...\" mypkg")
 
     # --create is syntactic sugar for --generate --fix
     if args.create:
@@ -1454,6 +1525,14 @@ if __name__ == "__main__":
     print(f"[PBUILD-AI] Version {__version__}")
 
     _check_arg_conflicts(parser, args)
+
+    if not os.path.isdir(args.workspace_dir):
+        if args.generate:
+            os.makedirs(args.workspace_dir)
+            print(f"[INFO] Created workspace directory {args.workspace_dir}")
+        else:
+            parser.error(f"workspace directory '{args.workspace_dir}' does not exist "
+                         f"(to create a new package use: --generate \"PROMPT\" {args.workspace_dir})")
 
     ai_options = {}
     for opt in args.ai_option:
@@ -2244,6 +2323,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         return None
 
                     spec_fix = try_rewrite()
+                    if spec_fix and _is_cosmetic_spec_change(spec_content, spec_fix + "\n"):
+                        print("[FIX] Rewrite only changed style (macro braces, whitespace, "
+                              "empty %changelog) — that cannot fix the build. Discarded.", flush=True)
+                        spec_fix = None
                     if spec_fix:
                         show_diff(spec_content, spec_fix + "\n", spec)
                         try:
@@ -2523,6 +2606,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 deduped.append(s)
         spec_files = deduped
 
+        if not spec_files and not ctx.generate_prompt:
+            print(f"[INFO] No .spec file found in {WORKSPACE_DIR}. To create a new package use "
+                  f"--generate \"PROMPT\" (or --create \"PROMPT\" to also build it).")
+
         # Always parse AGENTS.md for build order hints (independent of --allow-tool-scripts)
         apply_build_order(spec_files)
 
@@ -2573,6 +2660,16 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
             if not FIX_MODE:
                 ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
                 sys.exit(0)  # --modify without --fix: only modifies sources, does not build
+
+        # A version bump that is not committed yet (e.g. an earlier --update
+        # that stopped half-way, or a manual edit) must also be in _service,
+        # otherwise the services fetch the old sources and the build fails.
+        if FIX_MODE or UPDATE_VERSION is not None:
+            for _spec in spec_files:
+                _pending_svc = _pending_update(manager.read_file_safe(_spec),
+                                               manager.read_committed_file(_spec), "")
+                if _pending_svc:
+                    sync_service_version(_spec, *_pending_svc)
 
         # Phase 1: Update pass — update all packages first without building
         updated_packages = set()
@@ -2915,6 +3012,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     _v_post = re.search(r'^Version:\s*(\S+)', manager.read_file_safe(spec), re.M)
                     _spec_version_moved = bool(_v_post and _v_pre
                                          and _v_post.group(1) != _v_pre.group(1))
+                    if _spec_version_moved:
+                        # Deterministic: never rely on the AI to move the
+                        # revision pin in _service.
+                        sync_service_version(spec, _v_pre.group(1), _v_post.group(1))
                     if not _spec_version_moved:
                         print("[UPDATE] Spec version did not change — "
                               "leaving source archives untouched.")
