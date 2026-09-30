@@ -16,6 +16,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from pbuild_ai.skills.changelog_skill import (
+    is_new_package_changes, sanitize_package_description, spec_description,
     collapse_repeated_separators, has_changelog_version, sanitize_release_notes,
     split_release_notes, versioned_release_versions,
     release_notes_changelog_body,
@@ -631,6 +632,58 @@ class TestExtractChangelogAuthor(unittest.TestCase):
         self.assertIsNone(_extract_changelog_author(""))
         self.assertIsNone(_extract_changelog_author("-------------------------------------------------------------------\n"))
         self.assertIsNone(_extract_changelog_author(None))
+
+
+class TestNewPackageChangelog(unittest.TestCase):
+    SPEC = ("Name: gufo\nVersion: 0.2.0\nSummary: Gufo tool\n\n"
+            "%description\nGufo is a tool\nfor owls.\n\n%prep\n%setup -q\n")
+
+    def test_first_entry_says_initial_package_with_description(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "gufo.changes"
+            ok = write_changelog_entry(path, "", "0.2.0", "Jane <jane@example.org>",
+                                       package_description="**Gufo** is a network automation "
+                                                           "framework. It talks to devices.")
+            text = path.read_text()
+        self.assertTrue(ok)
+        self.assertIn("- Initial package of gufo 0.2.0\n", text)
+        self.assertIn("  Gufo is a network automation framework.", text)
+        self.assertNotIn("Update", text)
+        self.assertNotIn("**", text)
+
+    def test_existing_changes_still_get_update_wording(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "gufo.changes"
+            path.write_text("-" * 67 + "\nMon Jan  1 00:00:00 UTC 2026 - a <a@b.c>\n\n"
+                            "- Initial package of gufo 0.1.0\n\n")
+            write_changelog_entry(path, "", "0.2.0", "a <a@b.c>")
+            text = path.read_text()
+        self.assertIn("- Updated to version 0.2.0", text)
+        self.assertEqual(text.count("Initial package"), 1)
+
+    def test_is_new_package_changes(self):
+        self.assertTrue(is_new_package_changes(""))
+        self.assertTrue(is_new_package_changes("\n"))
+        self.assertFalse(is_new_package_changes("-" * 67 + "\nMon ...\n"))
+
+    def test_spec_description_fallback(self):
+        self.assertEqual(spec_description(self.SPEC), "Gufo is a tool\nfor owls.")
+        self.assertEqual(spec_description("Summary: Only summary\n"), "Only summary")
+
+    def test_sanitize_description(self):
+        self.assertEqual(sanitize_package_description("(model returned empty response)"), [])
+        lines = sanitize_package_description("- Initial package\n" + "Word " * 200)
+        self.assertTrue(all(l.startswith("  ") and len(l) <= 67 for l in lines))
+        self.assertLessEqual(len(" ".join(lines)), 420)
+        self.assertNotIn("Initial", " ".join(lines))
+
+    def test_ai_description_and_fallback(self):
+        from pbuild_ai.pbuild_ai import _new_package_description
+        ai = MagicMock()
+        ai.analyze.return_value = "Gufo automates networks."
+        self.assertEqual(_new_package_description(ai, self.SPEC), "Gufo automates networks.")
+        ai.analyze.return_value = "(model returned empty response)"
+        self.assertEqual(_new_package_description(ai, self.SPEC), "Gufo is a tool\nfor owls.")
 
 
 if __name__ == "__main__":

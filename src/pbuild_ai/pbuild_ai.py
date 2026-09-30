@@ -70,7 +70,8 @@ from pbuild_ai.identity import resolve_changelog_author
 from pbuild_ai.service_file import sync_service_version
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
-    collapse_repeated_separators,
+    collapse_repeated_separators, NEW_PACKAGE_DESCRIPTION_PROMPT,
+    is_new_package_changes, sanitize_package_description, spec_description,
 )
 from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_RESEARCH_TASK_PROMPT, VERSION_UPDATE_SYSTEM_PROMPT, VERSION_UPDATE_TASK_PROMPT, POST_UPDATE_CHECK_PROMPT
 from pbuild_ai.generate_mode import run_generate_mode
@@ -1190,6 +1191,17 @@ def _mandated_script_failed(results, post_scripts, messages=None):
                     if _base in _r:
                         return _base
     return None
+
+
+def _new_package_description(ai, spec_text, context=None):
+    """Short description of a new package for its first .changes entry,
+    written by the AI; the spec %description when the AI gives nothing."""
+    answer = ai.analyze(NEW_PACKAGE_DESCRIPTION_PROMPT, spec_text[:12000], context,
+                        task="Describing new package")
+    if sanitize_package_description(answer or ""):
+        return answer
+    print("[CHANGELOG] AI gave no description; using the spec %description.")
+    return spec_description(spec_text)
 
 
 def _changelog_prompt_for(author):
@@ -2629,13 +2641,19 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
         if args.changelog:
             _email = resolve_changelog_author(EMAIL, INTERACTIVE) or "<Your Name> <your@email>"
             for _spec in spec_files:
-                _v_match = re.search(r'^Version:\s*(\S+)', manager.read_file_safe(_spec), re.M)
+                _spec_text = manager.read_file_safe(_spec)
+                _v_match = re.search(r'^Version:\s*(\S+)', _spec_text, re.M)
                 if not _v_match:
                     print(f"[CHANGELOG] Could not determine version from {_spec.name}, skipping.")
                     continue
                 _changes_path = _spec.parent / (_spec.stem + '.changes')
-                if write_changelog_entry(_changes_path, "", _v_match.group(1), _email):
-                    print(f"[CHANGELOG] Added entry for {_spec.stem} ({_v_match.group(1)}).")
+                _description = None
+                if is_new_package_changes(manager.read_file_safe(_changes_path) if _changes_path.exists() else ""):
+                    _description = _new_package_description(ai, _spec_text, full_context)
+                if write_changelog_entry(_changes_path, "", _v_match.group(1), _email,
+                                         package_description=_description):
+                    _kind = "initial entry" if _description is not None else "entry"
+                    print(f"[CHANGELOG] Added {_kind} for {_spec.stem} ({_v_match.group(1)}).")
                 else:
                     print(f"[CHANGELOG] Entry for {_spec.stem} ({_v_match.group(1)}) already exists, skipped.")
             sys.exit(0)

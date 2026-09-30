@@ -1,5 +1,6 @@
 import datetime
 import re
+import textwrap
 
 CHANGELOG_PROMPT = """
 ## .changes file format (openSUSE policy)
@@ -254,12 +255,60 @@ def would_duplicate_changelog_entry(content):
     return any(v in existing_versions for v in first_versions)
 
 
-def write_changelog_entry(changes_path, old_version, new_version, email_author, release_notes=None):
+NEW_PACKAGE_DESCRIPTION_PROMPT = """
+You write the first entry of the openSUSE .changes file of a new package.
+Describe in 1-3 plain sentences (at most 300 characters) what the packaged
+software is and what it is used for, based on the spec file and your
+knowledge of the upstream project. Write for a distribution user.
+Output only the sentences: no heading, no bullet, no version, no
+"Initial package" line, no markdown, no links.
+"""
+
+
+def is_new_package_changes(content):
+    """True when the .changes content has no entry yet."""
+    return not _CHANGELOG_ENTRY_SEPARATOR_RE.search(content or '')
+
+
+def spec_description(spec_text):
+    """Summary and %description of the main package, as plain text."""
+    summary = re.search(r'^Summary:\s*(.+)$', spec_text or '', re.M)
+    m = re.search(r'^%description\s*$\n(.*?)(?=^%\w|\Z)', spec_text or '', re.M | re.S)
+    desc = m.group(1).strip() if m else ''
+    if desc:
+        return desc
+    return summary.group(1).strip() if summary else ''
+
+
+def sanitize_package_description(text, max_chars=400, width=67):
+    """Turn a free-form package description into indented .changes lines."""
+    lines = _sanitize_notes_text(text, 12, max_chars_per_line=1000)
+    lines = [l for l in lines if not re.match(r'(?i)initial (package|release)', l)]
+    paragraph = ' '.join(lines).strip()
+    if not paragraph or paragraph.startswith('(model returned'):
+        return []
+    if len(paragraph) > max_chars:
+        cut = paragraph[:max_chars]
+        end = max(cut.rfind('. '), cut.rfind('! '), cut.rfind('? '))
+        paragraph = cut[:end + 1] if end > 0 else cut.rsplit(' ', 1)[0] + ' ...'
+    return textwrap.wrap(paragraph, width=width, initial_indent='  ',
+                         subsequent_indent='  ', break_long_words=False)
+
+
+def new_package_changelog_body(name, version, description=''):
+    """Body of the first .changes entry of a package."""
+    return [f'- Initial package of {name} {version}'] + sanitize_package_description(description)
+
+
+def write_changelog_entry(changes_path, old_version, new_version, email_author, release_notes=None,
+                          package_description=None):
     """Prepend a deterministic changelog entry to a .changes file.
     When release_notes is provided, its leading content is added as sub-bullets
     under the version line.  Multi-version notes (with ``## <version>``
     headings) get one ``- Updated to version X`` group per release, newest
     first (see release_notes_changelog_body).
+    Without *old_version* and without any existing entry the package is new:
+    the entry says 'Initial package' followed by *package_description*.
     Returns True if the entry was written, False if the file already had a
     changelog entry for this version (skipped to avoid duplicates).
     """
@@ -278,9 +327,12 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
     _existing = ''
     if changes_path.exists():
         _existing = changes_path.read_text(encoding='utf-8', errors='replace')
-    body = release_notes_changelog_body(new_version, old_version, release_notes,
-                                        existing_content=_existing)
-    body.append('- Update generated using pbuild-ai')
+    if not old_version and is_new_package_changes(_existing):
+        body = new_package_changelog_body(changes_path.stem, new_version, package_description or '')
+    else:
+        body = release_notes_changelog_body(new_version, old_version, release_notes,
+                                            existing_content=_existing)
+        body.append('- Update generated using pbuild-ai')
     entry = (
         '-------------------------------------------------------------------\n'
         f'{day} {mon} {now.day:2d} {now.hour:02d}:{now.minute:02d}:{now.second:02d} UTC {now.year} - {changelog_author}\n'
