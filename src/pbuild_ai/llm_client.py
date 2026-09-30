@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.skills.changelog_skill import would_duplicate_changelog_entry
-from pbuild_ai.utils import resolve_path, ReadCoverageTracker
+from pbuild_ai.utils import resolve_path, ReadCoverageTracker, truncate_tool_result
 from pbuild_ai.tools import (execute_tool_calls, format_tool_display, FINISH_TOOL, FINISH_TOOL_NAME,
                              MODIFICATION_TOOLS, ask_tool_selection, instruction_messages)
 
@@ -1664,11 +1664,7 @@ class LlmAnalyzer:
             messages.append(_asst_msg)
             _injected_edit_help = False
             for name, inp, content in _merged_results:
-                content = str(content)
-                if len(content) > 2000:
-                    if self.debug:
-                        print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> 2000 chars", flush=True)
-                    content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
+                content = truncate_tool_result(name, content, self.debug)
                 messages.append({"role": "tool", "content": content, "name": name})
                 if not _injected_edit_help and name == "edit_file" and ("old_string not found" in str(content) or "old_string found" in str(content)):
                     _path = inp.get("path", "")

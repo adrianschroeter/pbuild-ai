@@ -28,7 +28,7 @@ from pbuild_ai.llm_client import chat_completion, prune_messages
 from pbuild_ai.spinner import Spinner, AI_COLOR
 from pbuild_ai.tools import (execute_tool_calls, format_tool_display, resolve_path,
                              MODIFICATION_TOOLS, ask_tool_selection, instruction_messages)
-from pbuild_ai.utils import ReadCoverageTracker
+from pbuild_ai.utils import ReadCoverageTracker, truncate_tool_result
 
 
 def _expand_url_macros(url, spec_content):
@@ -117,15 +117,24 @@ def run_modify_mode(ctx):
 
         # Load saved context for the same spec
         saved_messages = None
+        _foreign_context = False  # a --fix context that must not be overwritten
         if _ctx_file.exists():
             try:
                 _saved = json.loads(_ctx_file.read_text())
-                if _saved.get("spec_path") == str(spec.relative_to(ctx.workspace_dir)):
-                    print(f"[MODIFY] Loaded saved context from {_ctx_file.name}")
-                    saved_messages = _saved.get("messages", [])
-                else:
+                if _saved.get("mode", "fix") != "modify":
+                    # A --fix session's conversation is about a build failure,
+                    # not this request; leave it for the next --fix run.
+                    print(f"[MODIFY] Ignoring saved {_saved.get('mode', 'fix')} context in {_ctx_file.name}.")
+                    _foreign_context = True
+                elif _saved.get("spec_path") != str(spec.relative_to(ctx.workspace_dir)):
                     print(f"[MODIFY] Stale context (for {_saved.get('spec_path')}), discarding.")
                     _ctx_file.unlink()
+                elif _saved.get("modify_prompt") != ctx.modify_prompt:
+                    print(f"[MODIFY] Saved context is for a different request, discarding.")
+                    _ctx_file.unlink()
+                else:
+                    print(f"[MODIFY] Loaded saved context from {_ctx_file.name}")
+                    saved_messages = _saved.get("messages", [])
             except Exception as e:
                 print(f"[MODIFY] Corrupt context file: {e}")
                 _ctx_file.unlink()
@@ -143,7 +152,7 @@ def run_modify_mode(ctx):
         hint = f"\n\n--- User Hint (prefer this over generic analysis) ---\n{ctx.prompt_hint}" if ctx.prompt_hint else ""
         system_content = f"""You are an RPM packager assistant. The user wants you to modify a spec file based on their request.
 
-The spec file content is ALREADY provided below in the user message. Do NOT call read_file — the content is right here.
+The spec file content is ALREADY provided below in the user message. Do NOT call read_file for it before your first change — the content is right here. Your own successful edits change the file; if an edit_file or apply_patch call on it fails because the text does not match, call read_file on it once to get the current content before trying again.
 
 The user's request is also in the user message below.
 
@@ -167,7 +176,7 @@ Skill instructions (follow these):
 
         # Save conversation context on SIGINT/SIGTERM (Ctrl+C)
         def _modify_interrupt_handler(signum, frame):
-            if messages and _ctx_file:
+            if messages and _ctx_file and not _foreign_context:
                 try:
                     _ctx_file.write_text(json.dumps({
                         "version": 1,
@@ -193,7 +202,7 @@ Skill instructions (follow these):
             _all_text = "\n".join(msg.get('content', '') or '' for msg in messages)
             _tok = ctx.ai.count_tokens(_all_text)
             _ctx_str = f" ({_tok//1024}k/{ctx.ai.max_tokens//1024}k tok)"
-            with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", suffix="Analyzing build failure", color=AI_COLOR):
+            with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", suffix="Applying requested changes", color=AI_COLOR):
                 result = chat_completion(ctx.ai, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
             message = result.get('message', {})
@@ -260,11 +269,7 @@ Skill instructions (follow these):
 
                 messages.append({"role": "assistant", "content": message.get('content', ''), "tool_calls": message['tool_calls']})
                 for (name, _), content in zip(round_calls, round_results):
-                    content = str(content)
-                    if len(content) > 2000:
-                        if ctx.debug:
-                            print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> 2000 chars", flush=True)
-                        content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
+                    content = truncate_tool_result(name, content, ctx.debug)
                     messages.append({"role": "tool", "content": content, "name": name})
                 prune_messages(messages, keep_rounds=2)
                 continue
@@ -297,10 +302,10 @@ Skill instructions (follow these):
         # Save context on exhaustion, delete on success
         if changes_made:
             _resolve_url_references(ctx)
-            if _ctx_file.exists():
+            if _ctx_file.exists() and not _foreign_context:
                 _ctx_file.unlink()
                 print(f"[MODIFY] Removed saved context ({_ctx_file.name}) after successful changes.")
-        elif len(messages) > 1:
+        elif len(messages) > 1 and not _foreign_context:
             save_data = {
                 "version": 1,
                 "mode": "modify",

@@ -26,7 +26,7 @@ from pbuild_ai.llm_client import chat_completion, prune_messages, _summarize_rou
 from pbuild_ai.tools import (execute_tool_calls, format_tool_display, resolve_path,
                              MODIFICATION_TOOLS, ask_tool_selection, instruction_messages)
 from pbuild_ai.spinner import Spinner, AI_COLOR
-from pbuild_ai.utils import ReadCoverageTracker
+from pbuild_ai.utils import ReadCoverageTracker, truncate_tool_result
 
 _ARCHIVE_EXTS = ('.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar', '.zip')
 _INDICATOR_FILES = (
@@ -249,11 +249,7 @@ Start researching and building — do NOT ask me what to package, I already told
             messages.append({"role": "assistant", "content": response_content, **tc_arg})
             for (name, _), content in zip(round_calls, round_results):
                 tool_name = "web_fetch" if name == "_skip" else name
-                content = str(content)
-                if len(content) > 2000:
-                    if ctx.debug:
-                        print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> 2000 chars", flush=True)
-                    content = content[:1000] + "\n... (truncated) ...\n" + content[-900:]
+                content = truncate_tool_result(name, content, ctx.debug)
                 messages.append({"role": "tool", "content": content, "name": tool_name})
             prune_messages(messages, keep_rounds=2)
             spec_files = sorted(Path(ctx.workspace_dir).glob("*.spec"))

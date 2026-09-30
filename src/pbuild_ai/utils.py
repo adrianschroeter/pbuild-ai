@@ -66,6 +66,30 @@ def resolve_path(path_str, workspace_dir, for_write=False):
         return None
 
 
+# Tool results are shortened before they go back to the model. File reads
+# get more room: an edit needs the exact current text of the lines it changes.
+TOOL_RESULT_LIMIT = 2000
+READ_RESULT_LIMIT = 16000
+_READ_TOOLS = ("read_file", "read_file_from_archive")
+_EDIT_TOOLS = ("edit_file", "apply_patch", "write_file")
+
+
+def tool_result_limit(name):
+    return READ_RESULT_LIMIT if name in _READ_TOOLS else TOOL_RESULT_LIMIT
+
+
+def truncate_tool_result(name, content, debug=False):
+    """Shorten a tool result to its head and tail for the model."""
+    content = str(content)
+    limit = tool_result_limit(name)
+    if len(content) <= limit:
+        return content
+    if debug:
+        print(f"[DEBUG] Truncating {name} result: {len(content)} chars -> {limit} chars", flush=True)
+    head = limit // 2
+    return content[:head] + "\n... (truncated) ...\n" + content[-(limit - head - 100):]
+
+
 class ReadCoverageTracker:
     """Tracks which file ranges have been read to avoid redundant read tool calls.
 
@@ -124,6 +148,16 @@ class ReadCoverageTracker:
         round_results: list of result strings (same length as round_calls)
         """
         for (name, inp), r in zip(round_calls, round_results):
+            r = str(r) if r is not None else ""
+            if name in _EDIT_TOOLS and r.startswith("Error"):
+                # The model's picture of the file is wrong; let it read again.
+                resolved = resolve_path(inp.get("path", ""), workspace_dir) if workspace_dir else None
+                if resolved:
+                    self._file_coverage.pop(str(resolved), None)
+                continue
+            if len(r) > tool_result_limit(name):
+                # Only a truncated version reached the model.
+                continue
             if name == "read_file" and r and not r.startswith(("Error", "READ SKIP", "OK:")):
                 path = inp.get("path", "")
                 resolved = resolve_path(path, workspace_dir) if workspace_dir else None
