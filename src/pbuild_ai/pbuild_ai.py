@@ -68,6 +68,7 @@ from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts
 from pbuild_ai.context import PbuildContext
 from pbuild_ai.identity import resolve_changelog_author
 from pbuild_ai.service_file import sync_service_version
+from pbuild_ai.source_fetch import fetch_missing_source
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
     collapse_repeated_separators, NEW_PACKAGE_DESCRIPTION_PROMPT,
@@ -3219,7 +3220,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 if _macros:
                                     _expanded = _source_url
                                     for _key, _val in _macros.items():
-                                        _expanded = _expanded.replace(f'%{{{_key}}}', _val)
+                                        _expanded = re.sub(r'%%\{?%s\}?(?!\w)' % _key, lambda _m, _v=_val: _v, _expanded)
                                     _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
                                     if _old_v and _old_v.group(1) != target_version:
                                         _expanded = _expanded.replace(_old_v.group(1), target_version)
@@ -3232,6 +3233,19 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 if _is_bare_name and ('#!CreateArchive' in _spec_content or '#!RemoteAsset' in _spec_content):
                                     print(f"[UPDATE] Source is a local filename with RemoteAsset — skipping download.")
                                     _source_url = None
+                            if _source_url and _is_bare_name:
+                                # 'Source: %{name}-%{version}.tar.gz' names only the
+                                # local file; derive the archive from the project URL.
+                                def _download_to(_url, _dest):
+                                    _rs = execute_tool_calls(
+                                        [("download_file", {"url": _url, "filename": os.path.relpath(_dest, WORKSPACE_DIR)})],
+                                        manager, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS, interactive=INTERACTIVE, debug=DEBUG)
+                                    _ok = bool(_rs) and _rs[0].startswith("OK")
+                                    if not _ok and _rs:
+                                        print(f"[UPDATE]   {_rs[0][:200]}")
+                                    return _ok
+                                if not fetch_missing_source(spec, Path(_source_url).name, target_version, _download_to):
+                                    _dl_failed = True
                             if _source_url and not _is_bare_name:
                                 # Use #fragment as local filename if present (OBS convention)
                                 if _parsed.fragment:
