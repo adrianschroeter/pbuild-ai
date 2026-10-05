@@ -44,6 +44,11 @@ def resolve_path(path_str, workspace_dir, for_write=False):
         workspace / Path(path_str).name,
     ]
     parts = Path(path_str).parts
+    # "pkg/file" while the workspace already is pkg/: writing it as given
+    # would create a needless pkg/ subdirectory.
+    if (for_write and len(parts) >= 2 and parts[0] == workspace.name
+            and not (workspace / parts[0]).exists()):
+        candidates.insert(0, workspace / Path(*parts[1:]))
     if len(parts) >= 2:
         cand = workspace / Path(*parts[1:])
         candidates.append(cand)

@@ -70,6 +70,22 @@ class TestResolvePath(unittest.TestCase):
         result = resolve_path("safe\x00/etc/passwd", self.ws)
         self.assertIsNone(result)
 
+    def test_write_strips_own_package_prefix(self):
+        pkg = Path(self.ws, "gufo")
+        pkg.mkdir()
+        result = resolve_path("gufo/gufo-0.7.0.tar.gz", str(pkg), for_write=True)
+        self.assertEqual(result, (pkg / "gufo-0.7.0.tar.gz").resolve())
+
+    def test_write_keeps_existing_same_named_subdir(self):
+        pkg = Path(self.ws, "gufo")
+        (pkg / "gufo").mkdir(parents=True)
+        result = resolve_path("gufo/x.txt", str(pkg), for_write=True)
+        self.assertEqual(result, (pkg / "gufo" / "x.txt").resolve())
+
+    def test_write_new_subdir_kept(self):
+        result = resolve_path("patches/fix.patch", self.ws, for_write=True)
+        self.assertEqual(result, Path(self.ws, "patches", "fix.patch").resolve())
+
 
 class TestIsSafePath(unittest.TestCase):
     """Test RpmSourceManager._is_safe_path sandbox enforcement."""
