@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pbuild_ai.source_fetch import archive_url_candidates, expand_spec_macros, fetch_missing_source
+from pbuild_ai.source_fetch import add_archive_name, archive_url_candidates, expand_spec_macros, fetch_missing_source
 
 SPEC = """Name:           gufo
 Version:        0.4.0
@@ -121,3 +121,17 @@ class TestExpandSpecMacros(unittest.TestCase):
 
     def test_unknown_macro_kept(self):
         self.assertEqual(expand_spec_macros("%{foo}-%version", self.SPEC), "%{foo}-0.4.0")
+
+
+class TestAddArchiveName(unittest.TestCase):
+    def test_tag_archive_gets_name(self):
+        self.assertEqual(
+            add_archive_name("https://github.com/gufo-org/gufo/archive/refs/tags/v%{version}.tar.gz", "gufo"),
+            "https://github.com/gufo-org/gufo/archive/refs/tags/v%{version}.tar.gz#/%{name}-%{version}.tar.gz")
+
+    def test_named_or_fragment_or_bare_untouched(self):
+        for src in ("https://github.com/o/gufo/releases/download/v%{version}/gufo-%{version}.tar.gz",
+                    "https://example.org/%{name}-%{version}.tar.xz",
+                    "https://github.com/o/gufo/archive/v%{version}.tar.gz#/gufo-%{version}.tar.gz",
+                    "%name-%{version}.tar.gz"):
+            self.assertEqual(add_archive_name(src, "gufo"), src)

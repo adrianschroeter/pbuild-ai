@@ -54,6 +54,21 @@ def expand_spec_macros(text, spec_text, **overrides):
     return text
 
 
+def add_archive_name(source, name):
+    """*source* with '#/%{name}-%{version}<ext>' when the URL basename does not
+    name the package (tag archives like .../archive/refs/tags/v%{version}.tar.gz),
+    so the archive is stored as <name>-<version><ext> instead of v1.0.tar.gz."""
+    if '://' not in source or '#' in source:
+        return source
+    base = urlparse(source).path.rsplit('/', 1)[-1]
+    if name.lower() in base.lower() or '%{name}' in base or '%name' in base:
+        return source
+    for ext in ('.tar.gz', '.tar.xz', '.tar.bz2', '.tar.zst', '.tgz', '.zip'):
+        if base.endswith(ext):
+            return f"{source}#/%{{name}}-%{{version}}{ext}"
+    return source
+
+
 def _project_urls(spec_text):
     """Project URLs of the spec, the URL: tag first."""
     urls = []

@@ -358,5 +358,18 @@ class TestVersionFromResearchData(unittest.TestCase):
         self.assertIsNone(_version_from_research_data("1.0"))
 
 
+class TestNotesBudget(unittest.TestCase):
+    def test_long_notes_keep_target_release(self):
+        releases = [{"tag_name": "v0.7.0", "body": "seven " * 2000},
+                    {"tag_name": "v0.6.0", "body": "six " * 2000},
+                    {"tag_name": "v0.5.0", "body": "five " * 2000}]
+        latest, notes = _notes_from_releases(releases, "0.4.0", "body")
+        self.assertEqual(latest, "0.7.0")
+        for v in ("0.5.0", "0.6.0", "0.7.0"):
+            self.assertIn(f"## {v}", notes)
+        self.assertIn("seven", notes)
+        self.assertLess(len(notes), 10100)
+
+
 if __name__ == "__main__":
     unittest.main()

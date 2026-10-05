@@ -68,7 +68,7 @@ from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts
 from pbuild_ai.context import PbuildContext
 from pbuild_ai.identity import resolve_changelog_author
 from pbuild_ai.service_file import sync_service_version
-from pbuild_ai.source_fetch import expand_spec_macros, fetch_missing_source
+from pbuild_ai.source_fetch import add_archive_name, expand_spec_macros, fetch_missing_source
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
     collapse_repeated_separators, NEW_PACKAGE_DESCRIPTION_PROMPT,
@@ -554,9 +554,13 @@ def _notes_from_releases(releases, current_version, body_key):
             latest = tag
         if current_version and _parse_version(tag) <= _parse_version(current_version):
             continue
-        body = (rel.get(body_key) or "").strip()
-        parts.append(f"## {tag}\n\n{body}".rstrip())
-    notes = "\n\n".join(reversed(parts))[:10000]
+        parts.append((tag, (rel.get(body_key) or "").strip()))
+    # Every release gets its share of the budget; cutting the joined text
+    # would drop the notes of the target release, which come last.
+    share = 10000 // max(len(parts), 1)
+    notes = "\n\n".join(
+        f"## {tag}\n\n{body if len(body) <= share else body[:share] + ' ...'}".rstrip()
+        for tag, body in reversed(parts))
     return latest, notes
 
 
@@ -1289,11 +1293,12 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
     _user = (
         f"Target version: {new_version} (old: {old_version})\n"
         f"Author: {email_author}\n"
-        "If upstream shipped former releases between the old version and the "
-        f"target (the package source is older than those releases), give each "
-        "of them its own '- Updated to version X' line with its highlights as "
-        "'  * ' sub-bullets, newest first, per the skill rules above. Never "
-        "prefix sub-bullets with a version ('  * 1.2.3: ...').\n\n"
+        "If the release notes below have sections for former releases between "
+        "the old version and the target, give each of them its own "
+        "'- Updated to version X' line with its highlights as '  * ' "
+        "sub-bullets, newest first, per the skill rules above. Never add a "
+        "version line without highlights from the notes, and never invent "
+        "highlights. Never prefix sub-bullets with a version ('  * 1.2.3: ...').\n\n"
         "Upstream release notes (sections are labeled with the release "
         f"version):\n\n{_release_notes_ctx}\n\n"
         f"Current {changes_path.name} (head):\n\n{_changes_head}\n"
@@ -2760,6 +2765,12 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         if _m:
                             _source_url = _m.group(1).strip()
                             break
+                    if not _source_url or '://' not in _source_url:
+                        # 'Source: %{name}-%{version}.tar.gz' has no host; the
+                        # URL: tag names the upstream project for the API checks.
+                        _url_m = re.search(r'^URL:\s*(\S+)', spec_content, re.M | re.I)
+                        if _url_m:
+                            _source_url = _url_m.group(1)
                     _prefetched_data = {}
                     _skip_spec = False
 
@@ -2998,6 +3009,18 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             print("[UPDATE] Aborting: a mandatory project step could not be completed.")
                             sys.exit(1)
 
+                    # A Source URL the AI changed to a tag archive (v1.0.tar.gz)
+                    # gets a '#/' name, otherwise the archive lands next to the
+                    # <name>-<version> copy under a second, unversioned-looking name.
+                    _spec_cur = manager.read_file_safe(spec)
+                    _src_m = re.search(r'^(Source0?:\s*)(\S+)', _spec_cur, re.M | re.I)
+                    _name_m = re.search(r'^Name:\s*(\S+)', _spec_cur, re.M)
+                    if _src_m and _name_m and _src_m.group(0) not in spec_before_update:
+                        _named = add_archive_name(_src_m.group(2), _name_m.group(1))
+                        if _named != _src_m.group(2):
+                            spec.write_text(_spec_cur[:_src_m.start(2)] + _named + _spec_cur[_src_m.end(2):])
+                            print(f"[UPDATE] Source URL does not name the archive — added '#/' name: {_named}")
+
                     # Clean up old source tarballs after update
                     def _source_fn(_spec_text, _pkg, _ver):
                         _s = None
@@ -3009,7 +3032,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         if not _s:
                             return None
                         _s = expand_spec_macros(_s, _spec_text, name=_pkg, version=_ver)
-                        _s = _s.split('/')[-1].split('#')[0].split('?')[0]
+                        # '#/name' is the local file name (OBS convention)
+                        _s = _s.split('#/')[-1] if '#/' in _s else _s.split('#')[0]
+                        _s = _s.split('/')[-1].split('?')[0]
                         return _s if _s else None
                     _old_name = None
                     for _l in spec_before_update.split('\n'):
@@ -3071,7 +3096,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             if _src_line:
                                 _dl_url = _src_line.split('::')[-1] if '::' in _src_line else (_src_line if _src_line.startswith(('http://', 'https://')) else None)
                                 if _dl_url:
-                                    _dl_url = _dl_url.replace('%{name}', _old_name).replace('%{version}', target_version)
+                                    _dl_url = expand_spec_macros(_dl_url.split('#')[0], _spec_after, version=target_version)
                                     try:
                                         print(f"[UPDATE] Downloading {_new_src}...")
                                         urllib.request.urlretrieve(_dl_url, str(_new_path))
@@ -3271,6 +3296,19 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                             if _r.startswith("OK"):
                                                 _dl_ok = True
                                                 _fname = _alt_fname
+                                        if _dl_ok:
+                                            # The spec must name the URL that worked, not the 404 one.
+                                            _src_m = re.search(r'^(Source0?:\s*)(\S+)', _spec_content, re.M | re.I)
+                                            if _src_m:
+                                                _raw_base = _src_m.group(2).split('#')[0].rsplit('/', 1)[-1]
+                                                if _raw_base.endswith('.tar.bz2'):
+                                                    _raw_base = _raw_base[:-len('.tar.bz2')] + '.tar.gz'
+                                                _new_src = (f"https://github.com/{_gh_m.group(1)}/archive/refs/tags/"
+                                                            f"v%{{version}}.tar.gz#/{_raw_base}")
+                                                _spec_content = (_spec_content[:_src_m.start(2)] + _new_src
+                                                                 + _spec_content[_src_m.end(2):])
+                                                spec.write_text(_spec_content)
+                                                print(f"[UPDATE] Source now points to the tag archive: {_new_src}")
                                 if not _dl_ok:
                                     _dl_failed = True
                                     print(f"[UPDATE] Source download failed — skipping build for {spec.name}.")

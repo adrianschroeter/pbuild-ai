@@ -1014,7 +1014,6 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             except ValueError:
                 pass
             try:
-                file_path.parent.mkdir(parents=True, exist_ok=True)
                 if file_path.exists():
                     size = file_path.stat().st_size
                     print(f"[TOOL] download_file: {filename} already exists ({size} bytes), skipping download. "
@@ -1028,6 +1027,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                         data = response.read()
                         resp_headers = response.headers
                         resp_url = response.geturl()
+                # Only now: a failed download must not leave an empty directory.
+                file_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(file_path, 'wb') as f:
                     f.write(data)
                 size = file_path.stat().st_size
