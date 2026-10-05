@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pbuild_ai.source_fetch import archive_url_candidates, fetch_missing_source
+from pbuild_ai.source_fetch import archive_url_candidates, expand_spec_macros, fetch_missing_source
 
 SPEC = """Name:           gufo
 Version:        0.4.0
@@ -105,3 +105,19 @@ class TestFetchMissingSource(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExpandSpecMacros(unittest.TestCase):
+    SPEC = "Name:           gufo\nVersion:        0.4.0\n%global tag v%{version}\n"
+
+    def test_brace_and_bare_forms(self):
+        for src in ("%{name}-%{version}.tar.gz", "%{name}-%version.tar.gz",
+                    "%name-%version.tar.gz", "%{name}-%{?version}.tar.gz"):
+            self.assertEqual(expand_spec_macros(src, self.SPEC), "gufo-0.4.0.tar.gz", src)
+
+    def test_override_and_nested(self):
+        self.assertEqual(expand_spec_macros("%{name}-%{tag}.tar.gz", self.SPEC, version="0.7.0"),
+                         "gufo-v0.7.0.tar.gz")
+
+    def test_unknown_macro_kept(self):
+        self.assertEqual(expand_spec_macros("%{foo}-%version", self.SPEC), "%{foo}-0.4.0")

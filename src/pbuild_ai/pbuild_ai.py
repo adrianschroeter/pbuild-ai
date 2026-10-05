@@ -68,7 +68,7 @@ from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts
 from pbuild_ai.context import PbuildContext
 from pbuild_ai.identity import resolve_changelog_author
 from pbuild_ai.service_file import sync_service_version
-from pbuild_ai.source_fetch import fetch_missing_source
+from pbuild_ai.source_fetch import expand_spec_macros, fetch_missing_source
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
     collapse_repeated_separators, NEW_PACKAGE_DESCRIPTION_PROMPT,
@@ -188,16 +188,11 @@ def _extract_source_tarball_hint(spec_content: str, spec_path, workspace_dir: st
     and return a hint for the LLM to use read_file_from_archive."""
     if not spec_content:
         return ""
-    _macros = {}
-    for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', spec_content, re.M):
-        _macros[_kv.group(1).lower()] = _kv.group(2)
     for line in spec_content.split('\n'):
         m = re.match(r'^Source\d*:\s*(\S+)', line, re.I)
         if m:
             url = m.group(1).strip()
-            _expanded = url
-            for _key, _val in _macros.items():
-                _expanded = _expanded.replace(f'%{{{_key}}}', _val)
+            _expanded = expand_spec_macros(url, spec_content)
             from urllib.parse import urlparse
             fname = Path(urlparse(_expanded).path).name if '://' in _expanded else Path(_expanded).name
             if not fname or fname == '.':
@@ -3013,7 +3008,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 break
                         if not _s:
                             return None
-                        _s = _s.replace('%{name}', _pkg).replace('%{version}', _ver)
+                        _s = expand_spec_macros(_s, _spec_text, name=_pkg, version=_ver)
                         _s = _s.split('/')[-1].split('#')[0].split('?')[0]
                         return _s if _s else None
                     _old_name = None
@@ -3166,12 +3161,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 _old_source_url = _om.group(1).strip()
                                 break
                         if _old_source_url:
-                            _macros = {}
-                            for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', spec_before_update, re.M):
-                                _macros[_kv.group(1).lower()] = _kv.group(2)
-                            _old_expanded = _old_source_url
-                            for _key, _val in _macros.items():
-                                _old_expanded = _old_expanded.replace(f'%{{{_key}}}', _val)
+                            _old_expanded = expand_spec_macros(_old_source_url, spec_before_update)
                             from urllib.parse import urlparse
                             _old_fname = Path(urlparse(_old_expanded).path).name or Path(_old_expanded).name
                             _old_path = spec.parent / _old_fname
@@ -3306,12 +3296,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                             _old_source_url = _om.group(1).strip()
                                             break
                                     if _old_source_url:
-                                        _macros = {}
-                                        for _kv in re.finditer(r'^(Name|Version):\s*(\S+)', spec_before_update, re.M):
-                                            _macros[_kv.group(1).lower()] = _kv.group(2)
-                                        _old_expanded = _old_source_url
-                                        for _key, _val in _macros.items():
-                                            _old_expanded = _old_expanded.replace(f'%{{{_key}}}', _val)
+                                        _old_expanded = expand_spec_macros(_old_source_url, spec_before_update)
                                         _old_parsed = urlparse(_old_expanded)
                                         _old_fname = (_old_parsed.fragment.lstrip('/') if _old_parsed.fragment
                                                        else Path(_old_parsed.path).name or Path(_old_expanded).name)

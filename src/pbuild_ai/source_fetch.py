@@ -34,6 +34,26 @@ _GITEA_HOSTS = ("codeberg.org", "gitea.com", "src.opensuse.org")
 _RECOMPRESS = {".tar.xz": "w:xz", ".txz": "w:xz", ".tar.bz2": "w:bz2", ".tbz2": "w:bz2"}
 
 
+def expand_spec_macros(text, spec_text, **overrides):
+    """Expand the simple macros of *spec_text* (Name, Version, %define, %global) in *text*.
+
+    Handles %{x}, %{?x} and %x. Keyword *overrides* (e.g. version='1.0')
+    replace the values found in the spec. Unknown macros are left alone."""
+    macros = {}
+    for m in re.finditer(r'^%(?:define|global)\s+(\w+)\s+(\S+)', spec_text or '', re.M):
+        macros.setdefault(m.group(1), m.group(2))
+    for m in re.finditer(r'^(Name|Version|Release):\s*(\S+)', spec_text or '', re.M | re.I):
+        macros.setdefault(m.group(1).lower(), m.group(2))
+    macros.update({k: v for k, v in overrides.items() if v})
+    for _ in range(5):
+        new = re.sub(r'%\{\??(\w+)\}|%(\w+)',
+                     lambda m: macros.get(m.group(1) or m.group(2), m.group(0)), text)
+        if new == text:
+            break
+        text = new
+    return text
+
+
 def _project_urls(spec_text):
     """Project URLs of the spec, the URL: tag first."""
     urls = []
