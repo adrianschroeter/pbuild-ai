@@ -64,7 +64,7 @@ from pbuild_ai.tools import execute_tool_calls, build_tools_list
 from pbuild_ai.skill_manager import SkillManager
 from pbuild_ai.llm_client import LlmAnalyzer
 from pbuild_ai.workspace import RpmSourceManager
-from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions, fix_remote_asset_formatting
+from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions, fix_remote_asset_formatting, parse_buildroot_install_failures, spec_binary_packages
 from pbuild_ai.context import PbuildContext
 from pbuild_ai.identity import resolve_changelog_author
 from pbuild_ai.service_file import sync_service_version
@@ -1945,6 +1945,61 @@ if __name__ == "__main__":
                         return False
         return False
 
+    # Workspace packages already fixed because their binaries broke another
+    # package's build root; a second failure of the same package aborts.
+    _buildroot_fixed = set()
+
+    def _buildroot_install_failure(spec, current_build_out, rebuild_func):
+        """Handle rpm install failures in the build root of *spec*.
+
+        Packages of other sources are not the fault of *spec*: in orphan mode
+        (or when the packages are not part of the workspace) report and abort,
+        in project mode fix the owning workspace packages first. Returns None
+        when not applicable, else the (success, output) of the rebuild."""
+        _names, _lines = parse_buildroot_install_failures(current_build_out)
+        if not _names:
+            # pbuild output may only summarize the failure; rpm's errors are in the log.
+            _has_log, _log = manager.get_build_log(package_name=spec.stem)
+            if _has_log:
+                _names, _lines = parse_buildroot_install_failures(_log)
+        _own = spec_binary_packages(manager.read_file_safe(spec))
+        _foreign = [n for n in _names if n not in _own]
+        if not _foreign:
+            return None
+        _owners = []
+        if PROJECT_MODE or ctx.project_mode:
+            for _s in manager.find_spec_files(project_mode=True):
+                if _s == spec or _s.stem in _buildroot_fixed:
+                    continue
+                if spec_binary_packages(manager.read_file_safe(_s)) & set(_foreign):
+                    _owners.append(_s)
+        _details = "\n".join(_lines)
+        if not _owners:
+            print(f"\n[BUILDROOT] The build environment for {spec.stem} could not be set up: "
+                  f"these packages fail to install: {', '.join(_foreign)}")
+            for _l in _lines:
+                print(f"[BUILDROOT]   {_l}")
+            if PROJECT_MODE or ctx.project_mode:
+                print(f"[BUILDROOT] This is a bug in those packages, not in {spec.name}, and they are "
+                      f"not part of this workspace (or could not be fixed). Fix them first.")
+            else:
+                print(f"[BUILDROOT] This is a bug in those packages, not in {spec.name}. Orphan mode "
+                      f"cannot change other packages — fix them first, or work in a project "
+                      f"workspace that contains them.")
+            ai.print_stats(manager, ctx.program_start, skill_manager)
+            sys.exit(1)
+        for _o in _owners:
+            _buildroot_fixed.add(_o.stem)
+            _broken_here = sorted(spec_binary_packages(manager.read_file_safe(_o)) & set(_foreign))
+            print(f"\n[BUILDROOT] {', '.join(_broken_here)} from workspace package {_o.stem} fail to "
+                  f"install into the build root of {spec.stem}. Fixing {_o.stem} first...")
+            _ctx_text = (f"The binary packages {', '.join(_broken_here)} built from {_o.name} build fine, "
+                         f"but rpm fails to install them into the build root of another package:\n"
+                         f"{_details}\n\nFix {_o.name} so that its packages install cleanly.")
+            run_fix_loop(_o, _o.stem, _ctx_text, DEFAULT_ERROR_PROMPT, rebuild_func)
+        print(f"[BUILDROOT] Rebuilding {spec.stem}...")
+        return rebuild_func(spec.stem)
+
     def run_fix_loop(spec, package_name, initial_build_out, error_prompt, rebuild_func, exit_on_no_changes=False):
         """Shared fix loop: diagnose → apply tool changes → rebuild → repeat."""
         MAX_ATTEMPTS = FIX_ATTEMPTS if FIX_ATTEMPTS > 0 else 999999
@@ -2080,6 +2135,13 @@ if __name__ == "__main__":
             fix_attempt += 1
             attempt_label = fix_attempt if not unlimited else "∞"
             print(f"\n[FIX MODE] Attempt {attempt_label}/{MAX_ATTEMPTS if not unlimited else '∞'} — Diagnosing build failure...")
+            _br = _buildroot_install_failure(spec, current_build_out, rebuild_func)
+            if _br is not None:
+                if _br[0]:
+                    print(f"\n[OK] Build for {spec.name} succeeded after fixing its build root packages.")
+                    build_success2 = True
+                    break
+                current_build_out = _br[1]
             build_out_lower = current_build_out.lower()
             if "unresolvable" in build_out_lower or "nothing provides" in build_out_lower:
                 print("[DIAG] Missing build dependencies detected.")

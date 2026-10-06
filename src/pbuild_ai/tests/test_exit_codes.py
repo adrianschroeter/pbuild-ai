@@ -215,5 +215,67 @@ class TestFixLoopExitCode(unittest.TestCase):
         self.assertIn("All 1 fix attempts exhausted.", result.stdout)
 
 
+
+class TestBuildrootInstallFailure(unittest.TestCase):
+    """Orphan mode aborts with 1 when other packages fail to install in the build root."""
+
+    def test_orphan_reports_and_aborts(self):
+        script = textwrap.dedent(f"""\
+        import sys, os, types, tempfile
+        from pathlib import Path
+        from unittest.mock import patch as _patch
+
+        _yaml = types.ModuleType('yaml')
+        _yaml.YAMLError = Exception
+        sys.modules['yaml'] = _yaml
+
+        tmpdir = tempfile.mkdtemp(prefix="pbuild_buildroot_")
+        (Path(tmpdir) / "testpkg.spec").write_text(
+            "Name: testpkg\\nVersion: 1.0\\n\\n%description\\nTest.\\n"
+        )
+
+        sys.path.insert(0, {SRC_DIR!r})
+        sys.argv = ["pbuild-ai", "--fix", "--max-fix-attempts", "3", tmpdir]
+
+        from pbuild_ai.workspace import RpmSourceManager as _RSM
+        from pbuild_ai.llm_client import LlmAnalyzer as _OA
+
+        out = ("[ 96s] error: unpacking of archive failed on file /usr/lib64/x;1: cpio: write failed\\n"
+               "[ 96s] error: librocblas5-7.2.0-9.1.x86_64: install failed\\n")
+        exit_code = 0
+        try:
+            with _patch.object(_RSM, 'run_orphan_build', return_value=(False, out)):
+                with _patch.object(_RSM, 'build_phase_reached', return_value=True):
+                    with _patch.object(_OA, 'analyze', return_value="analysis"):
+                        with _patch.object(_OA, 'call_with_tools',
+                                           side_effect=AssertionError("AI must not fix")):
+                            with _patch.object(_OA, 'print_stats'):
+                                with _patch.object(_OA, '_write_analysis_file'):
+                                    import pbuild_ai.pbuild_ai
+                                    try:
+                                        pbuild_ai.pbuild_ai.main()
+                                    except SystemExit as e:
+                                        exit_code = e.code
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            sys.exit(exit_code)
+        """)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(script)
+            tmpfile = f.name
+        try:
+            result = subprocess.run(
+                [sys.executable, tmpfile],
+                capture_output=True, text=True, timeout=30,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+        finally:
+            os.unlink(tmpfile)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("these packages fail to install: librocblas5", result.stdout)
+        self.assertIn("Orphan mode cannot change other packages", result.stdout)
+        self.assertNotIn("AI must not fix", result.stdout + result.stderr)
+
 if __name__ == "__main__":
     unittest.main()

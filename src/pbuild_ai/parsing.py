@@ -427,3 +427,39 @@ def apply_spec_insertions(spec_lines, lines_to_add):
         modified = True
         print(f"[FIX] Inserted: {line_to_add}", flush=True)
     return spec_lines, modified
+
+
+_INSTALL_FAILED_RE = re.compile(r'error:\s+(\S+?)\.(?:x86_64|aarch64|i[3-6]86|noarch|ppc64le|s390x|riscv64|armv7hl):\s+install failed')
+
+
+def parse_buildroot_install_failures(build_out):
+    """Packages rpm could not install while setting up the build root.
+
+    Returns ``(names, error_lines)``: the binary package names (version,
+    release and arch stripped) and the rpm error lines that explain why."""
+    names, lines = [], []
+    for line in (build_out or "").splitlines():
+        if "error:" not in line:
+            continue
+        m = _INSTALL_FAILED_RE.search(line)
+        if m:
+            name = m.group(1).rsplit('-', 2)[0]
+            if name not in names:
+                names.append(name)
+        if m or "unpacking of archive failed" in line:
+            lines.append(line[line.index("error:"):].strip())
+    return names, lines
+
+
+def spec_binary_packages(spec_text):
+    """Names of the binary packages a spec builds (main package and subpackages)."""
+    from pbuild_ai.source_fetch import expand_spec_macros
+    name_m = re.search(r'^Name:\s*(\S+)', spec_text or '', re.M | re.I)
+    if not name_m:
+        return set()
+    name = expand_spec_macros(name_m.group(1), spec_text)
+    result = {name}
+    for m in re.finditer(r'^%package\s+(-n\s+)?(\S+)', spec_text, re.M):
+        sub = expand_spec_macros(m.group(2), spec_text)
+        result.add(sub if m.group(1) else f"{name}-{sub}")
+    return result
