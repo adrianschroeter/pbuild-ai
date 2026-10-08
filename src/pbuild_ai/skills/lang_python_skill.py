@@ -1,5 +1,7 @@
 # lang_python_skill.py
 
+from pbuild_ai.pyproject_deps import snapshot_pyproject, update_spec_from_pyproject
+
 SKILL_NAME = "lang_python"
 
 VERSION_API = {
@@ -24,6 +26,7 @@ Check the following Spec-file. Pay special attention to:
 3. Generate new spec files by using "py2pack generate MODULE VERSION" command
 4. Write every Python BuildRequires as `BuildRequires: %{python_module MODULE_NAME}`. The %{python_module } macro is provided by python-rpm-macros, a default build-time requirement in openSUSE builds, and expands to the correct interpreter-specific package. Never write a literal python3x-... package name and never remove the %{python_module } wrapper.
 5. Are there any obvious missing BuildRequires like for devel or for pip? or python-rpm-macros?
+6. The Python BuildRequires (`%{python_module foo >= 1.2}`) and Requires (`python-foo >= 1.2`) follow the pyproject.toml of the source: dependencies upstream added are added, dropped ones removed, minimum versions taken over. Requires: of the main package lists only runtime dependencies ([project] dependencies): never build backends (setuptools, hatchling, ...), test or optional dependencies.
 Summarize your analysis in a maximum of 3 sentences.
 """
 
@@ -97,6 +100,19 @@ dependency block because one entry is wrong — the neighbouring
 Only unwrap or remove a macro when the MACRO ITSELF is unresolvable, which is
 detectable by the literal unexpanded macro name appearing in the error.
 """
+
+def snapshot(spec_path, spec_text):
+    """Before the update: the pyproject.toml of the current source archive."""
+    return snapshot_pyproject(spec_path, spec_text)
+
+
+def update_spec(spec_path, spec_text, old_version, new_version, log=print, snapshot=None):
+    """After a version update: add, remove and version the Python dependencies
+    like the pyproject.toml of the new source archive does; *snapshot* is the
+    old pyproject.toml."""
+    return update_spec_from_pyproject(spec_path, spec_text, new_version, log,
+                                      old_version=old_version, old_pyproject=snapshot)
+
 
 def fix_content(content: str) -> str:
     """

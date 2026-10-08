@@ -534,11 +534,12 @@ class TestReleaseNotesChangelogBody(unittest.TestCase):
         ])
 
     def test_caps_bullets_per_release(self):
-        notes = ("## 0.33.3\n- one\n- two\n- three\n"
-                 "## 0.34.0\n- four\n- five\n- six\n")
+        notes = ("## 0.33.3\n" + "".join(f"- a{i}\n" for i in range(7)) +
+                 "## 0.34.0\n" + "".join(f"- b{i}\n" for i in range(7)))
         body = release_notes_changelog_body("0.34.0", "0.33.1", notes)
-        self.assertNotIn("  * three", body)
-        self.assertNotIn("  * six", body)
+        self.assertIn("  * a4", body)
+        self.assertNotIn("  * a5", body)
+        self.assertNotIn("  * b5", body)
         self.assertIn("- Updated to version 0.33.3", body)
 
     def test_single_release_gets_more_bullets(self):

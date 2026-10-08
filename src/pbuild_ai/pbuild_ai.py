@@ -68,11 +68,13 @@ from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts
 from pbuild_ai.context import PbuildContext
 from pbuild_ai.identity import resolve_changelog_author
 from pbuild_ai.service_file import sync_service_version
+from pbuild_ai.release_notes import archive_release_notes
 from pbuild_ai.source_fetch import add_archive_name, expand_spec_macros, fetch_missing_source
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
     collapse_repeated_separators, NEW_PACKAGE_DESCRIPTION_PROMPT,
     is_new_package_changes, sanitize_package_description, spec_description,
+    last_changelog_version, changelog_versions, split_first_changelog_entry,
 )
 from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_RESEARCH_TASK_PROMPT, VERSION_UPDATE_SYSTEM_PROMPT, VERSION_UPDATE_TASK_PROMPT, POST_UPDATE_CHECK_PROMPT
 from pbuild_ai.generate_mode import run_generate_mode
@@ -525,7 +527,7 @@ def _version_from_research_data(data):
     return v
 
 
-def _notes_from_releases(releases, current_version, body_key):
+def _notes_from_releases(releases, current_version, body_key, max_version=None):
     """Build ``## <version>``-labelled release-note sections for a version bump.
 
     ``releases`` is a list of upstream release dicts (as returned by the
@@ -536,7 +538,8 @@ def _notes_from_releases(releases, current_version, body_key):
 
     Returns ``(latest_version, notes)`` where ``latest_version`` is the newest
     stable tag (prereleases and drafts are skipped) in the list and ``notes``
-    is ``## <version>``-labelled blocks (or '').
+    is ``## <version>``-labelled blocks (or ''). Releases newer than
+    ``max_version`` are left out of the notes.
     """
     latest = ''
     parts = []
@@ -554,6 +557,8 @@ def _notes_from_releases(releases, current_version, body_key):
             latest = tag
         if current_version and _parse_version(tag) <= _parse_version(current_version):
             continue
+        if max_version and _parse_version(tag) > _parse_version(max_version):
+            continue
         parts.append((tag, (rel.get(body_key) or "").strip()))
     # Every release gets its share of the budget; cutting the joined text
     # would drop the notes of the target release, which come last.
@@ -562,6 +567,56 @@ def _notes_from_releases(releases, current_version, body_key):
         f"## {tag}\n\n{body if len(body) <= share else body[:share] + ' ...'}".rstrip()
         for tag, body in reversed(parts))
     return latest, notes
+
+
+def _upstream_release_notes(spec_text, old_version, new_version, spec_dir=None):
+    """Release notes of every upstream release in (old_version, new_version].
+
+    The project is taken from the main Source URL or the URL: tag, whichever
+    is on GitHub or gitlab.com. Without notes there, the changelog file in
+    the new source archive next to the spec (*spec_dir*) is used. Returns ''
+    when nothing is found."""
+    notes = _api_release_notes(spec_text, old_version, new_version)
+    if not notes and spec_dir:
+        notes = archive_release_notes(spec_dir, old_version, new_version)
+    if not notes:
+        print(f"[CHANGELOG] No upstream release notes found for {old_version} -> {new_version}.")
+    return notes
+
+
+def _api_release_notes(spec_text, old_version, new_version):
+    urls = []
+    for tag in ('Source0?', 'URL'):
+        m = re.search(rf'^{tag}:\s*(\S+)', spec_text or '', re.M | re.I)
+        if m:
+            urls.append(expand_spec_macros(m.group(1), spec_text))
+    gh = gl = None
+    for url in urls:
+        gh = re.search(r'github\.com[/:]([^/]+/[^/#?]+?)(?:\.git|/|#|$)', url)
+        gl = re.search(r'gitlab\.com[/:]([^/]+/[^/#?]+?)(?:\.git|/|#|$)', url)
+        if gh or gl:
+            break
+    if gh:
+        api = f'https://api.github.com/repos/{gh.group(1)}/releases?per_page=100'
+        headers = {"User-Agent": "pbuild-ai/1.0", "Accept": "application/vnd.github.v3+json"}
+        body_key = "body"
+    elif gl:
+        api = (f'https://gitlab.com/api/v4/projects/'
+               f'{urllib.parse.quote(gl.group(1), safe="")}/releases?per_page=100')
+        headers = {"User-Agent": "pbuild-ai/1.0"}
+        body_key = "description"
+    else:
+        print("[CHANGELOG] No GitHub/GitLab project URL in the spec.")
+        return ''
+    try:
+        with urllib.request.urlopen(urllib.request.Request(api, headers=headers), timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        status = getattr(e, 'code', None) or getattr(e, 'status', None) or type(e).__name__
+        print(f"[CHANGELOG] Fetching release notes ({api}) failed: {status}.")
+        return ''
+    return _notes_from_releases(data if isinstance(data, list) else [],
+                                old_version, body_key, max_version=new_version)[1]
 
 
 def _extract_spec_version(spec_path: Path) -> str | None:
@@ -1326,7 +1381,26 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
     # prepends; a lossy whitespace-normalized containment check tolerates
     # harmless reformatting while catching whole-file overwrites).
     _older_preserved = _norm_ws(_changed).find(_before_norm) != -1
+    if results and _entry_present and not _older_preserved and _before.strip():
+        # The edit replaced the old first entry instead of prepending. Keep
+        # the new entry when it is only new versions and put the old file
+        # back below it.
+        _first = split_first_changelog_entry(_changed)[0]
+        _old_versions = set(changelog_versions(_before))
+        if (has_changelog_version(_first, new_version)
+                and not _old_versions.intersection(changelog_versions(_first))):
+            print("[CHANGELOG] AI replaced the older .changes entry — keeping its "
+                  "new entry and restoring the older ones.")
+            changes_path.write_text(_first.rstrip('\n') + '\n\n' + _before.lstrip('\n'))
+            _older_preserved = True
     if results and _entry_present and _older_preserved:
+        # The model makes up the date of the entry; use the real one.
+        _text = changes_path.read_text(encoding='utf-8', errors='replace')
+        _now = time.strftime('%a %b %e %H:%M:%S UTC %Y', time.gmtime())
+        _dated = re.sub(r'\A(-{10,}\n)\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \w+ \d{4}(?= - )',
+                        lambda m: m.group(1) + _now, _text, count=1)
+        if _dated != _text:
+            changes_path.write_text(_dated)
         for _r in results:
             _d = _r[:300] + "..." if len(_r) > 300 else _r
             print(f"[UPDATE] {_d}")
@@ -2713,8 +2787,33 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 _description = None
                 if is_new_package_changes(manager.read_file_safe(_changes_path) if _changes_path.exists() else ""):
                     _description = _new_package_description(ai, _spec_text, full_context)
-                if write_changelog_entry(_changes_path, "", _v_match.group(1), _email,
-                                         package_description=_description):
+                _version = _v_match.group(1)
+                _changes_text = manager.read_file_safe(_changes_path) if _changes_path.exists() else ""
+                _last = last_changelog_version(_changes_text) if _description is None else None
+                if _last and not has_changelog_version(_changes_text, _version) \
+                        and _parse_version(_last) < _parse_version(_version):
+                    # Cover every upstream release since the last recorded
+                    # one, as the --update-only version bump does.
+                    print(f"[CHANGELOG] {_changes_path.name} ends at {_last}, collecting "
+                          f"upstream release notes up to {_version}...")
+                    _notes = _upstream_release_notes(_spec_text, _last, _version, _spec.parent)
+                    _ok = _notes and _changelog_ai_round(
+                        ai, _changes_path, _last, _version, _notes, _email, manager,
+                        TOOLS, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS,
+                        interactive=INTERACTIVE, skill_manager=skill_manager)
+                    if _ok:
+                        _after = manager.read_file_safe(_changes_path)
+                        _norm = collapse_repeated_separators(_after)
+                        if _norm != _after:
+                            _changes_path.write_text(_norm)
+                    else:
+                        if manager.read_file_safe(_changes_path) != _changes_text:
+                            _changes_path.write_text(_changes_text)
+                        write_changelog_entry(_changes_path, _last, _version, _email,
+                                              release_notes=_notes)
+                    print(f"[CHANGELOG] Added entry for {_spec.stem} ({_last} -> {_version}).")
+                elif write_changelog_entry(_changes_path, "", _version, _email,
+                                           package_description=_description):
                     _kind = "initial entry" if _description is not None else "entry"
                     print(f"[CHANGELOG] Added {_kind} for {_spec.stem} ({_v_match.group(1)}).")
                 else:
@@ -2813,6 +2912,16 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         target_version = _pending[1]
                         _changes_file = spec.parent / (spec.stem + '.changes')
                         _changes_before = manager.read_committed_file(_changes_file)
+                # Skills record the old source state (e.g. pyproject.toml)
+                # before the update replaces the archive.
+                _skill_snapshots = {}
+                for _s in skills or []:
+                    if hasattr(_s, 'snapshot') and hasattr(_s, 'update_spec'):
+                        try:
+                            _skill_snapshots[_s] = _s.snapshot(spec, spec_before_update)
+                        except Exception as _e:
+                            print(f"[UPDATE] Skill {getattr(_s, 'SKILL_NAME', _s.__name__)} "
+                                  f"snapshot failed: {_e}")
                 _release_notes = ""
                 _prefetched_context = ""
                 # Pre-check: try version APIs before involving AI
@@ -3420,6 +3529,26 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 spec_after = manager.read_file_safe(spec)
                 _new_v = re.search(r'^Version:\s*(\S+)', spec_after, re.M)
                 _old_v = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                if _new_v and _old_v and _new_v.group(1) != _old_v.group(1) and not _dl_failed:
+                    # Skill hooks adapt the spec to the new source (e.g. the
+                    # Python dependencies of pyproject.toml).
+                    for _s in skills or []:
+                        _hook = getattr(_s, 'update_spec', None)
+                        if not _hook:
+                            continue
+                        try:
+                            if _s in _skill_snapshots:
+                                _updated = _hook(spec, spec_after, _old_v.group(1), _new_v.group(1), print,
+                                                 snapshot=_skill_snapshots[_s])
+                            else:
+                                _updated = _hook(spec, spec_after, _old_v.group(1), _new_v.group(1), print)
+                        except Exception as _e:
+                            print(f"[UPDATE] Skill {getattr(_s, 'SKILL_NAME', _s.__name__)} "
+                                  f"could not adapt {spec.name}: {_e}")
+                            continue
+                        if _updated and _updated != spec_after:
+                            spec.write_text(_updated)
+                            spec_after = _updated
                 if spec_after != spec_before_update and _new_v and _old_v and _new_v.group(1) != _old_v.group(1):
                     # Deterministic changes file update if AI didn't handle it
                     _changes_file = spec.parent / (spec.stem + '.changes')
@@ -3434,6 +3563,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     if _author_from_changes and not _configured_author:
                         email_author = _author_from_changes
                         print(f"[UPDATE] Reusing changelog author: {email_author}")
+                    if not _release_notes:
+                        # The version may have come from another API (PyPI,
+                        # ...); the release notes still live on GitHub/GitLab.
+                        _release_notes = _upstream_release_notes(
+                            spec_before_update, _old_v.group(1), _new_v.group(1), spec.parent)
                     _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
                     _changelog_restored = False
                     if (_changes_after != _changes_before_text

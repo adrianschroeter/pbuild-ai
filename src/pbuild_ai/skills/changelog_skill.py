@@ -79,9 +79,41 @@ def split_release_notes(notes):
     return sections
 
 
-def _sanitize_notes_text(text, limit, max_chars_per_line=120):
+# A version/date title line such as '0.8.0 (2026-10-05)' or 'v1.2 - 2026-01-02'.
+_VERSION_HEADING_LINE_RE = re.compile(r'^\[?v?\d+(\.\d+)+\]?(\s*[-(:]?\s*\d{4}-\d\d-\d\d\)?)?\s*$')
+
+
+_RST_UNDERLINE_RE = re.compile(r'^\s*([=\-~^*#+"])\1{2,}\s*$')
+
+
+def _notes_items(text):
+    """The lines of *text* as items: RST section titles (a line underlined
+    with ===, ---, ...) are dropped and the wrapped continuation lines of a
+    bullet are joined to it."""
+    raw = text.splitlines()
+    items = []
+    in_bullet = False
+    for i, line in enumerate(raw):
+        if _RST_UNDERLINE_RE.match(line):
+            in_bullet = False
+            continue
+        if i + 1 < len(raw) and line.strip() and _RST_UNDERLINE_RE.match(raw[i + 1]):
+            continue
+        if not line.strip():
+            in_bullet = False
+            continue
+        bullet = re.match(r'^\s*[-*+]\s+', line)
+        if in_bullet and not bullet and line[:1].isspace():
+            items[-1] += ' ' + line.strip()
+            continue
+        items.append(line)
+        in_bullet = bool(bullet)
+    return items
+
+
+def _sanitize_notes_text(text, limit, max_chars_per_line=300):
     """Turn one block of upstream release notes into at most *limit* plain
-    lines: HTML/markdown markup, links, headings and boilerplate are
+    lines: HTML/markdown/RST markup, links, headings and boilerplate are
     stripped."""
     if not text:
         return []
@@ -89,22 +121,31 @@ def _sanitize_notes_text(text, limit, max_chars_per_line=120):
     text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', text)
     text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
+    text = re.sub(r':\w+:`([^`]*)`', r'\1', text)
     text = re.sub(r'`([^`]*)`', r'\1', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'(?<!\*)\*([^*\n]+)\*(?!\*)', r'\1', text)
-    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.M)
+    # Headings are section titles ('### Features', '## 0.8.0 (2026-10-05)'),
+    # not changes.
+    text = re.sub(r'^\s*#{1,6}\s.*$', '', text, flags=re.M)
     text = re.sub(r'^\s*>\s*', '', text, flags=re.M)
     lines = []
-    for line in text.splitlines():
+    for line in _notes_items(text):
         line = re.sub(r'^\s*[-*+]\s*', '', line).strip()
+        line = re.sub(r'\s+', ' ', line)
         if len(line) < 2:
             continue
         low = line.lower()
         if low.startswith(('http://', 'https://', '#')):
             continue
-        if low.startswith(("what's changed", "what's new", "release notes", "changelog", "highlight")):
+        if low.startswith(("what's changed", "what's new", "release notes", "changelog", "highlight",
+                           "full changelog")):
             continue
-        lines.append(line[:max_chars_per_line].rstrip())
+        if _VERSION_HEADING_LINE_RE.match(line) or re.match(r'(?i)no (functional )?changes since', line):
+            continue
+        if len(line) > max_chars_per_line:
+            line = line[:max_chars_per_line].rsplit(' ', 1)[0] + ' ...'
+        lines.append(line)
         if len(lines) >= limit:
             break
     return lines
@@ -128,8 +169,8 @@ def sanitize_release_notes(notes, max_bullets=4, max_chars_per_line=120):
 
 
 def release_notes_changelog_body(new_version, old_version, notes,
-                                 existing_content='', max_bullets=4,
-                                 max_bullets_per_release=2):
+                                 existing_content='', max_bullets=8,
+                                 max_bullets_per_release=5):
     """Build the ``- Updated to version X`` groups of a .changes entry body.
 
     The first group is always *new_version*.  When *notes* carry
@@ -153,12 +194,20 @@ def release_notes_changelog_body(new_version, old_version, notes,
             intermediate.append((version, text))
     per_release = max_bullets if not intermediate else max_bullets_per_release
     body = [f'- Updated to version {new_version}']
-    body.extend(f'  * {b}' for b in
-                _sanitize_notes_text('\n'.join(new_texts), per_release))
+    body.extend(_bullet_lines(_sanitize_notes_text('\n'.join(new_texts), per_release)))
     for version, text in reversed(intermediate):
         body.append(f'- Updated to version {_clean_version(version)}')
-        body.extend(f'  * {b}' for b in _sanitize_notes_text(text, per_release))
+        body.extend(_bullet_lines(_sanitize_notes_text(text, per_release)))
     return body
+
+
+def _bullet_lines(items, width=70):
+    """'  * ' sub-bullets, wrapped to *width* columns."""
+    lines = []
+    for item in items:
+        lines += textwrap.wrap(item, width=width, initial_indent='  * ',
+                               subsequent_indent='    ', break_long_words=False)
+    return lines
 
 
 def versioned_release_versions(notes):
@@ -183,6 +232,21 @@ def _clean_version(version):
 def changelog_versions(content):
     """Return every upstream version named in the .changes content."""
     return [_clean_version(v) for v in _CHANGELOG_VERSION_RE.findall(content or '')]
+
+
+_INITIAL_VERSION_RE = re.compile(
+    r'^-\s*Initial (?:package|release|version)(?:\s+of\s+\S+)?\s+(?:version\s+)?(v?\d[\w.+-]*)',
+    re.M | re.I)
+
+
+def last_changelog_version(content):
+    """The newest upstream version the .changes content names, or None.
+
+    Entries are newest first, so this is the first '- Update(d) to X' or
+    '- Initial package of NAME X' line of the file."""
+    found = [(m.start(), m.group(1)) for r in (_CHANGELOG_VERSION_RE, _INITIAL_VERSION_RE)
+             for m in r.finditer(content or '')]
+    return _clean_version(min(found)[1]).rstrip('.,:') if found else None
 
 
 def has_changelog_version(content, version):
@@ -235,6 +299,9 @@ def _split_first_entry(content):
     if not second_sep:
         return content, ''
     return content[:second_sep.start()], content[second_sep.end():]
+
+
+split_first_changelog_entry = _split_first_entry
 
 
 def would_duplicate_changelog_entry(content):
