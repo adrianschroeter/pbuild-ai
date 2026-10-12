@@ -298,3 +298,117 @@ def update_spec_from_pyproject(spec_path, spec_text, new_version, log=print,
     log(f"[PYTHON] Syncing Python dependencies with pyproject.toml of {new_version}"
         + ("." if old_deps else " (old pyproject.toml not found, dropped dependencies are kept)."))
     return sync_spec(spec_text, deps, log, old_deps)
+
+
+# Import name of a build backend -> its package.
+_BACKENDS = {
+    'hatchling': 'hatchling', 'setuptools': 'setuptools', 'poetry': 'poetry-core',
+    'flit_core': 'flit-core', 'flit': 'flit', 'pdm': 'pdm-backend', 'mesonpy': 'meson-python',
+    'scikit_build_core': 'scikit-build-core', 'maturin': 'maturin', 'sipbuild': 'sip',
+    'whey': 'whey', 'uv_build': 'uv-build', 'enscons': 'enscons', 'jupyter_packaging': 'jupyter-packaging',
+}
+# Import name -> package name where they differ.
+_IMPORT_NAMES = {
+    'yaml': 'PyYAML', 'PIL': 'Pillow', 'dateutil': 'python-dateutil', 'attr': 'attrs',
+    'bs4': 'beautifulsoup4', 'Crypto': 'pycryptodome', 'Cryptodome': 'pycryptodomex',
+    'sklearn': 'scikit-learn', 'skimage': 'scikit-image', 'gi': 'gobject', 'jwt': 'PyJWT',
+    'serial': 'pyserial', 'magic': 'python-magic', 'OpenSSL': 'pyOpenSSL', 'dns': 'dnspython',
+    'git': 'GitPython', 'zmq': 'pyzmq', 'usb': 'pyusb', 'docx': 'python-docx', 'cv2': 'opencv',
+    'google': 'protobuf', 'distutils': 'setuptools', 'pkg_resources': 'setuptools',
+    'setuptools_scm': 'setuptools_scm', 'hatch_vcs': 'hatch-vcs', 'mpl_toolkits': 'matplotlib',
+    'Levenshtein': 'Levenshtein', 'dbus': 'dbus-python', 'cairo': 'pycairo', 'xdist': 'pytest-xdist',
+    'pytest_asyncio': 'pytest-asyncio', 'pytest_mock': 'pytest-mock', 'markdown': 'Markdown',
+    'jinja2': 'Jinja2', 'markupsafe': 'MarkupSafe', 'lxml': 'lxml', 'nacl': 'PyNaCl',
+    'socks': 'PySocks', 'Xlib': 'python-xlib', 'ruamel': 'ruamel.yaml', 'tomli_w': 'tomli-w',
+}
+_BACKEND_UNAVAILABLE_RE = re.compile(r"BackendUnavailable: Cannot import '([\w.]+)'")
+_NO_MODULE_RE = re.compile(r"(?:ModuleNotFoundError|ImportError): No module named '([\w.]+)'")
+_FAILED_SECTION_RE = re.compile(r'Bad exit status from \S+ \((%\w+)\)')
+
+
+def _spec_module_keys(spec_text):
+    return {normalize(m.group(1)) for line in spec_text.splitlines()
+            if line.startswith('BuildRequires:') for m in _PY_MODULE_RE.finditer(line)}
+
+
+def _insert_buildrequires(spec_text, values, in_tests):
+    """Insert BuildRequires lines: build requirements after the last
+    unconditional %{python_module} line, test dependencies after the last
+    %{python_module} line of the preamble (the test section)."""
+    lines = spec_text.split('\n')
+    end = _preamble_end(lines)
+    depth, at, at_any, at_br = 0, None, None, None
+    for i, line in enumerate(lines[:end]):
+        if re.match(r'^%if', line):
+            depth += 1
+        elif re.match(r'^%endif', line):
+            depth = max(depth - 1, 0)
+        elif line.startswith('BuildRequires:'):
+            at_br = i
+            if _PY_MODULE_RE.search(line):
+                at_any = i
+                if depth == 0:
+                    at = i
+    pos = at_any if in_tests else at
+    if pos is None:
+        pos = at if at is not None else at_any if at_any is not None else at_br
+    if pos is None:
+        pos = next((i for i, l in enumerate(lines) if l.startswith('Version:')), len(lines) - 1)
+    like = lines[pos] if lines[pos].startswith('BuildRequires:') else None
+    lines[pos + 1:pos + 1] = [_tag_line('BuildRequires', v, like) for v in values]
+    return '\n'.join(lines)
+
+
+def fix_missing_module(spec_path, spec_text, build_log, log=print):
+    """*spec_text* with BuildRequires for the Python modules *build_log*
+    misses (BackendUnavailable, ModuleNotFoundError), or None when there is
+    nothing to add."""
+    backend = _BACKEND_UNAVAILABLE_RE.search(build_log or '')
+    missing = _NO_MODULE_RE.findall(build_log or '')
+    if not backend and not missing:
+        return None
+    version = re.search(r'^Version:\s*(\S+)', spec_text, re.M)
+    pyproject = read_pyproject(Path(spec_path).parent, version.group(1)) if version else None
+    deps = None
+    if pyproject and tomllib is not None:
+        try:
+            deps = parse_pyproject(pyproject)
+        except Exception:
+            deps = None
+    present = _spec_module_keys(spec_text)
+    name = re.search(r'^Name:\s*(\S+)', spec_text, re.M)
+    own = normalize(re.sub(r'^python-', '', name.group(1))) if name else ''
+    wanted = []  # (package, bound, reason)
+
+    def want(pkg, bound, reason):
+        key = normalize(pkg)
+        if key not in present and key != own and all(normalize(p) != key for p, _b, _r in wanted):
+            wanted.append((pkg, bound, reason))
+
+    if backend:
+        reason = f"build backend {backend.group(1)} cannot be imported"
+        if deps and deps['build']:
+            for pkg, bound, marker in deps['build'].values():
+                if not marker:
+                    want(pkg, bound, reason)
+        else:
+            top = backend.group(1).split('.')[0]
+            want(_BACKENDS.get(top, top), '', reason)
+    section = _FAILED_SECTION_RE.findall(build_log or '')
+    in_tests = bool(section) and section[-1] == '%check'
+    known = _merged(deps)
+    for module in dict.fromkeys(missing):
+        top = module.split('.')[0]
+        key = normalize(top)
+        if key in known:
+            pkg, bound = known[key][0], known[key][1]
+        else:
+            pkg, bound = _IMPORT_NAMES.get(top, top), ''
+        want(pkg, bound, f"No module named '{module}'")
+    if not wanted:
+        return None
+    for pkg, bound, reason in wanted:
+        log(f"[PYTHON] Adding BuildRequires %{{python_module {pkg}}}: {reason}.")
+    values = [f"%{{python_module {p} {b}}}" if b else f"%{{python_module {p}}}" for p, b, _r in wanted]
+    # Backend requirements are needed for %build, never only for the tests.
+    return _insert_buildrequires(spec_text, values, in_tests and not backend)

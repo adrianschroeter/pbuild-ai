@@ -285,5 +285,84 @@ class TestUpdateFromArchive(unittest.TestCase):
         self.assertEqual(update_spec_from_pyproject(d / "python-demo.spec", SPEC, "3.0", log), SPEC)
 
 
+
+HATCH_LOG = """\
+[    6s]   File "/usr/lib/python3.14/site-packages/pip/_vendor/pyproject_hooks/_impl.py", line 402, in _call_hook
+[    6s]     raise BackendUnavailable(
+[    6s]     ...<4 lines>...
+[    6s]     )
+[    6s] pip._vendor.pyproject_hooks._impl.BackendUnavailable: Cannot import 'hatchling.build'
+[    6s] error: Bad exit status from /var/tmp/rpm-tmp.CQgIRt (%build)
+"""
+
+FIX_SPEC = """\
+Name:           python-demo
+Version:        2.0
+BuildRequires:  %{python_module pip}
+BuildRequires:  %{python_module wheel}
+BuildRequires:  fdupes
+%if %{with test}
+BuildRequires:  %{python_module pytest}
+%endif
+BuildArch:      noarch
+%python_subpackages
+
+%description
+Demo.
+"""
+
+
+class TestFixMissingModule(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.d, True)
+        self.spec = self.d / "python-demo.spec"
+        self.msgs, self.log = _log()
+
+    def fix(self, log_text, spec=FIX_SPEC):
+        from pbuild_ai.pyproject_deps import fix_missing_module
+        return fix_missing_module(self.spec, spec, log_text, self.log)
+
+    def test_backend_without_pyproject(self):
+        out = self.fix(HATCH_LOG)
+        self.assertIn("BuildRequires:  %{python_module wheel}\n"
+                      "BuildRequires:  %{python_module hatchling}\n"
+                      "BuildRequires:  fdupes", out)
+        self.assertIn("build backend hatchling.build cannot be imported", self.msgs[0])
+
+    def test_backend_from_pyproject_build_requires(self):
+        _tar(self.d / "demo-2.0.tar.gz", {"demo-2.0/pyproject.toml":
+             '[build-system]\nrequires = ["hatchling>=1.25", "hatch-vcs"]\n'})
+        out = self.fix(HATCH_LOG)
+        self.assertIn("BuildRequires:  %{python_module hatchling >= 1.25}\n"
+                      "BuildRequires:  %{python_module hatch-vcs}\n", out)
+
+    def test_already_present_is_no_fix(self):
+        spec = FIX_SPEC.replace("wheel}", "wheel}\nBuildRequires:  %{python_module hatchling}")
+        self.assertIsNone(self.fix(HATCH_LOG, spec))
+
+    def test_poetry_backend(self):
+        out = self.fix("BackendUnavailable: Cannot import 'poetry.core.masonry.api'\n")
+        self.assertIn("%{python_module poetry-core}", out)
+
+    def test_check_module_goes_into_test_section(self):
+        out = self.fix("E   ModuleNotFoundError: No module named 'yaml'\n"
+                       "error: Bad exit status from /var/tmp/rpm-tmp.x (%check)\n")
+        self.assertIn("BuildRequires:  %{python_module pytest}\n"
+                      "BuildRequires:  %{python_module PyYAML}\n%endif", out)
+
+    def test_module_name_from_pyproject(self):
+        _tar(self.d / "demo-2.0.tar.gz", {"demo-2.0/pyproject.toml":
+             '[project]\ndependencies = ["typing_extensions>=4.12"]\n'})
+        out = self.fix("ModuleNotFoundError: No module named 'typing_extensions'\n"
+                       "error: Bad exit status from /var/tmp/rpm-tmp.x (%build)\n")
+        self.assertIn("BuildRequires:  %{python_module wheel}\n"
+                      "BuildRequires:  %{python_module typing_extensions >= 4.12}\n", out)
+
+    def test_own_module_and_unrelated_logs_ignored(self):
+        self.assertIsNone(self.fix("ModuleNotFoundError: No module named 'demo.core'\n"))
+        self.assertIsNone(self.fix("error: Bad exit status from x (%build)\n"))
+
+
 if __name__ == "__main__":
     unittest.main()

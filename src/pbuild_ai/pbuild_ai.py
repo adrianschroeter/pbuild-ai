@@ -2074,6 +2074,28 @@ if __name__ == "__main__":
         print(f"[BUILDROOT] Rebuilding {spec.stem}...")
         return rebuild_func(spec.stem)
 
+    def _skill_build_error_fix(spec, current_build_out):
+        """Let skills fix a known build error deterministically (e.g. a missing
+        Python build backend). Returns True when the spec was changed."""
+        _has_log, _log = manager.get_build_log(package_name=spec.stem)
+        _text = (current_build_out or '') + ('\n' + _log if _has_log and _log else '')
+        _spec_text = manager.read_file_safe(spec)
+        for _s in skill_manager.get_skills_for(spec.name, _spec_text, prompt=_text):
+            _hook = getattr(_s, 'fix_build_error', None)
+            if not _hook:
+                continue
+            try:
+                _new = _hook(spec, _spec_text, _text, print)
+            except Exception as _e:
+                print(f"[SKILL] {getattr(_s, 'SKILL_NAME', _s.__name__)} could not check the build error: {_e}")
+                continue
+            if _new and _new != _spec_text:
+                show_diff(_spec_text, _new, spec)
+                spec.write_text(_new)
+                print(f"[FIX] {getattr(_s, 'SKILL_NAME', _s.__name__)} skill patched {spec.name}.")
+                return True
+        return False
+
     def run_fix_loop(spec, package_name, initial_build_out, error_prompt, rebuild_func, exit_on_no_changes=False):
         """Shared fix loop: diagnose → apply tool changes → rebuild → repeat."""
         MAX_ATTEMPTS = FIX_ATTEMPTS if FIX_ATTEMPTS > 0 else 999999
@@ -2216,6 +2238,13 @@ if __name__ == "__main__":
                     build_success2 = True
                     break
                 current_build_out = _br[1]
+            if _skill_build_error_fix(spec, current_build_out):
+                _ok, current_build_out = rebuild_func(spec.stem)
+                if _ok:
+                    print(f"\n[OK] Build for {spec.name} succeeded after the skill fix.")
+                    build_success2 = True
+                    break
+                continue
             build_out_lower = current_build_out.lower()
             if "unresolvable" in build_out_lower or "nothing provides" in build_out_lower:
                 print("[DIAG] Missing build dependencies detected.")

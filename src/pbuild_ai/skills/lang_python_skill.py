@@ -1,6 +1,6 @@
 # lang_python_skill.py
 
-from pbuild_ai.pyproject_deps import snapshot_pyproject, update_spec_from_pyproject
+from pbuild_ai.pyproject_deps import fix_missing_module, snapshot_pyproject, update_spec_from_pyproject
 
 SKILL_NAME = "lang_python"
 
@@ -77,6 +77,9 @@ This means the Python build backend (setuptools) is not installed in the build e
 Add:
     BuildRequires: %{python_module setuptools}
 
+The module named in "Cannot import '...'" tells the backend, e.g.
+"Cannot import 'hatchling.build'" needs BuildRequires: %{python_module hatchling}.
+The [build-system] requires list of pyproject.toml names all of them.
 If the backend is hatchling, flit, or poetry-core, the package name differs:
   - hatchling → BuildRequires: %{python_module hatchling}
   - flit_core  → BuildRequires: %{python_module flit-core}
@@ -112,6 +115,13 @@ def update_spec(spec_path, spec_text, old_version, new_version, log=print, snaps
     old pyproject.toml."""
     return update_spec_from_pyproject(spec_path, spec_text, new_version, log,
                                       old_version=old_version, old_pyproject=snapshot)
+
+
+def fix_build_error(spec_path, spec_text, build_log, log=print):
+    """Before the AI looks at a failed build: add BuildRequires for Python
+    modules the build could not import (BackendUnavailable: Cannot import
+    'hatchling.build', ModuleNotFoundError). Returns the new spec text or None."""
+    return fix_missing_module(spec_path, spec_text, build_log, log)
 
 
 def fix_content(content: str) -> str:
