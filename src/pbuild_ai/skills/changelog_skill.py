@@ -367,6 +367,73 @@ def new_package_changelog_body(name, version, description=''):
     return [f'- Initial package of {name} {version}'] + sanitize_package_description(description)
 
 
+def changelog_entry_header(email_author, now=None):
+    """Separator and header line ('Day Mon DD HH:MM:SS UTC YYYY - author')
+    of a new .changes entry, dated *now* (default: the current UTC time).
+
+    'Name <email>' is used as given; a bare address keeps the historic
+    'pbuild-ai <email>' form."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    author_match = re.match(r'^\s*(.*?)\s*<([^<>]+)>\s*$', email_author or '')
+    if author_match and author_match.group(1):
+        changelog_author = f"{author_match.group(1)} <{author_match.group(2)}>"
+    elif author_match:
+        changelog_author = f"pbuild-ai <{author_match.group(2)}>"
+    else:
+        changelog_author = f"pbuild-ai <{email_author}>"
+    return ('-------------------------------------------------------------------\n'
+            f'{now.strftime("%a")} {now.strftime("%b")} {now.day:2d} '
+            f'{now.hour:02d}:{now.minute:02d}:{now.second:02d} UTC {now.year} - {changelog_author}\n')
+
+
+CHANGELOG_BODY_PROMPT = """
+This turn has exactly one task: write the text of the new .changes entry for
+an upstream version bump. pbuild-ai adds the `---` separator line, the date
+and author header line and the closing `- Update generated using pbuild-ai`
+line itself and prepends the entry to the file.
+
+Output ONLY the body lines of the new entry: `- ` bullet lines, each
+followed by its `  * ` sub-bullets. No separator line, no header line, no
+older entries, no explanations, no markdown code fences.
+"""
+
+
+def _wrap_body_line(line, width=70):
+    """*line* wrapped to *width* columns; continuation lines are indented to
+    the text after the leading '- ' or '  * ' marker."""
+    if len(line) <= width:
+        return [line]
+    lead = re.match(r'^\s*(?:[-*+]\s+)?', line).group(0)
+    return textwrap.wrap(line[len(lead):], width=width, initial_indent=lead,
+                         subsequent_indent=' ' * len(lead),
+                         break_long_words=False) or [line]
+
+
+def changelog_body_from_answer(text):
+    """The body lines of a .changes entry the AI wrote as plain text.
+
+    Keeps '- ' bullet lines and the indented lines below them, wrapped to 70
+    columns.  Prose around the entry and markdown code fences are dropped;
+    the body ends at the first separator line, so a repeated older entry
+    never gets in.  The '- Update generated using pbuild-ai' line is dropped
+    too, the caller appends it."""
+    body = []
+    in_bullet = False
+    for line in (text or '').splitlines():
+        line = line.rstrip()
+        if body and _SEPARATOR_LINE_RE.match(line):
+            break
+        if line.startswith('- '):
+            in_bullet = line != '- Update generated using pbuild-ai'
+            if in_bullet:
+                body.extend(_wrap_body_line(line))
+        elif in_bullet and line[:1].isspace() and line.strip():
+            body.extend(_wrap_body_line(line))
+        else:
+            in_bullet = False
+    return body
+
+
 def write_changelog_entry(changes_path, old_version, new_version, email_author, release_notes=None,
                           package_description=None):
     """Prepend a deterministic changelog entry to a .changes file.
@@ -379,18 +446,6 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
     Returns True if the entry was written, False if the file already had a
     changelog entry for this version (skipped to avoid duplicates).
     """
-    now = datetime.datetime.now(datetime.timezone.utc)
-    mon = now.strftime('%b')
-    day = now.strftime('%a')
-    # 'Name <email>' is used as given; a bare address keeps the historic
-    # 'pbuild-ai <email>' form.
-    author_match = re.match(r'^\s*(.*?)\s*<([^<>]+)>\s*$', email_author or '')
-    if author_match and author_match.group(1):
-        changelog_author = f"{author_match.group(1)} <{author_match.group(2)}>"
-    elif author_match:
-        changelog_author = f"pbuild-ai <{author_match.group(2)}>"
-    else:
-        changelog_author = f"pbuild-ai <{email_author}>"
     _existing = ''
     if changes_path.exists():
         _existing = changes_path.read_text(encoding='utf-8', errors='replace')
@@ -401,9 +456,8 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
                                             existing_content=_existing)
         body.append('- Update generated using pbuild-ai')
     entry = (
-        '-------------------------------------------------------------------\n'
-        f'{day} {mon} {now.day:2d} {now.hour:02d}:{now.minute:02d}:{now.second:02d} UTC {now.year} - {changelog_author}\n'
-        '\n'
+        changelog_entry_header(email_author)
+        + '\n'
         + '\n'.join(body)
         + '\n\n'
     )

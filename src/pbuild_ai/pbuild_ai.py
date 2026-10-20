@@ -72,9 +72,10 @@ from pbuild_ai.release_notes import archive_release_notes
 from pbuild_ai.source_fetch import add_archive_name, expand_spec_macros, fetch_missing_source
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
-    collapse_repeated_separators, NEW_PACKAGE_DESCRIPTION_PROMPT,
+    NEW_PACKAGE_DESCRIPTION_PROMPT,
     is_new_package_changes, sanitize_package_description, spec_description,
-    last_changelog_version, changelog_versions, split_first_changelog_entry,
+    last_changelog_version, changelog_versions, CHANGELOG_BODY_PROMPT,
+    changelog_body_from_answer, changelog_entry_header,
 )
 from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_RESEARCH_TASK_PROMPT, VERSION_UPDATE_SYSTEM_PROMPT, VERSION_UPDATE_TASK_PROMPT, POST_UPDATE_CHECK_PROMPT
 from pbuild_ai.generate_mode import run_generate_mode
@@ -1086,9 +1087,6 @@ def _check_update_hints(results, messages, spec_files, spec_originals, updated_p
     return False
 
 
-_CHANGELOG_TOOLS = {"edit_file", "read_file"}
-
-
 def _norm_ws(text):
     """Collapse whitespace for a lossy containment comparison."""
     return re.sub(r'\s+', ' ', text or '').strip()
@@ -1285,69 +1283,43 @@ def _extract_changelog_author(changes_text):
 
 
 def _changelog_ai_round(ai, changes_path, old_version, new_version,
-                        release_notes, email_author, manager, tools,
-                        workspace_dir, allow_tool_scripts, max_rounds=3,
-                        interactive=False, skill_manager=None):
-    """Give the AI one short, focused turn to prepend a .changes entry.
+                        release_notes, email_author, manager, skill_manager=None):
+    """Let the AI write the text of the .changes entry for a version bump.
 
-    The prompt is deliberately tiny (release notes + the current .changes head)
-    and single-purpose — short prompts reliably produce real tool_calls even on
-    models that collapse on the big multi-mandate update prompt.
+    The AI gets a short, single-purpose prompt (release notes + the current
+    .changes head for style) and answers with the entry body only.
+    pbuild-ai adds the separator, the real date and the author line and
+    prepends the entry, so the AI can never alter or drop older entries in
+    this step.  (Older entries can still be fixed with edit_file in the
+    other modes.)  A non-existent .changes file skips the AI entirely — the
+    deterministic path creates it.
 
-    Safety: only 'edit_file' (not 'write_file') is offered so the AI can never
-    overwrite the whole file. When the file already exists, the prior content is
-    captured before the round and must still be present afterwards; otherwise
-    the round is treated as failed and the caller uses the deterministic
-    prepend (which never touches older entries). A non-existent .changes file
-    skips the AI entirely — the deterministic path creates it.
-
-    Returns True when the file received the entry AND kept all older entries;
-    False otherwise.  Never raises — on any failure the caller falls back to
-    the deterministic enriched entry.
+    Returns True when the entry was added; False when the AI gave no usable
+    body.  Never raises — on any failure the caller falls back to the
+    deterministic enriched entry.
     """
     if not changes_path or not manager:
         return False
-    # Deterministic write_changelog_entry creates a missing file with only the
-    # new entry; there is nothing to preserve, so skip the AI round.
     if not changes_path.exists():
         return False
     _before = manager.read_file_safe(changes_path) or ""
-    _before_norm = _norm_ws(_before)
-    _rel = str(changes_path)
-    try:
-        _rel = str(changes_path.relative_to(Path(workspace_dir)))
-    except ValueError:
-        try:
-            _rel = str(Path(workspace_dir) / changes_path.name)
-        except Exception:
-            pass
+    if has_changelog_version(_before, new_version):
+        return False
     _notes = (release_notes or "").strip() or "(no upstream release notes available)"
     if len(_notes) > 8000:
         _notes = _notes[:8000] + "\n... (truncated) ..."
-    _changes_head = _before[:2500]
     # The .changes skill from skills/changelog_skill.py is authoritative for
     # the entry format and rules; always include it so the round follows the
     # same policy as the big update prompt.
     _system = (
-        "You are pbuild-ai, an openSUSE package updater. This turn has exactly "
-        "one task: record a .changes entry for the upstream version bump.\n"
-        "Only tool calls are accepted — never paste file contents as text.\n"
-        "Call edit_file EXACTLY ONCE to prepend a new entry at the top of "
-        f"{changes_path.name} for version {new_version} (old version: {old_version}).\n"
-        "Use the existing first entry as the anchor: set old_string to the very "
-        "first lines of the file (including the leading '---' separator) and "
-        "new_string to your new entry followed by exactly those same lines.\n"
-        "Your new entry must NOT itself end with a '---' separator line — the "
-        "anchor lines you repeat below it already begin with the separator that "
-        "belongs to the older entry. Never produce two consecutive '---' lines.\n"
-        "NEVER alter, reorder, or remove any existing entry below the new one. "
-        "Do NOT call write_file — editing the whole file is forbidden.\n\n"
-        + _changelog_prompt_for(email_author)
+        "You are pbuild-ai, an openSUSE package updater.\n"
+        + CHANGELOG_BODY_PROMPT
+        + f"\nThe entry is for version {new_version} (old version: {old_version}); "
+        f"its first line must be '- Updated to version {new_version}'.\n"
+        + CHANGELOG_PROMPT
     )
-    _release_notes_ctx = _notes if _notes else "(none)"
-    _user = (
+    _context = (
         f"Target version: {new_version} (old: {old_version})\n"
-        f"Author: {email_author}\n"
         "If the release notes below have sections for former releases between "
         "the old version and the target, give each of them its own "
         "'- Updated to version X' line with its highlights as '  * ' "
@@ -1355,57 +1327,29 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
         "version line without highlights from the notes, and never invent "
         "highlights. Never prefix sub-bullets with a version ('  * 1.2.3: ...').\n\n"
         "Upstream release notes (sections are labeled with the release "
-        f"version):\n\n{_release_notes_ctx}\n\n"
-        f"Current {changes_path.name} (head):\n\n{_changes_head}\n"
+        f"version):\n\n{_notes}\n\n"
+        f"Current {changes_path.name} (head, for style only — do not repeat "
+        f"it):\n\n{_before[:2500]}\n"
     )
-    _messages = [{"role": "system", "content": _system}, {"role": "user", "content": _user}]
-    _tools = [t for t in (tools or [])
-              if (t.get("function", {}) or {}).get("name") in _CHANGELOG_TOOLS]
-    if not _tools:
-        _tools = tools
+    if skill_manager is not None:
+        skill_manager.note_skill_used("changelog")
     try:
-        if skill_manager is not None:
-            skill_manager.note_skill_used("changelog")
-        results = ai.call_with_tools(
-            _messages, _tools, manager, workspace_dir,
-            allow_tool_scripts, interactive=interactive,
-            max_rounds=max_rounds, task="Adding changelog entry")
+        _answer = ai.analyze(_system, _context, task="Writing changelog entry")
     except SystemExit:
-        # This round is best-effort; a tool-loop abort must not kill the run.
-        results = []
-    _changed = manager.read_file_safe(changes_path) if changes_path.exists() else ""
-    # Accept any native entry style the AI may have produced (- Updated to
-    # version X, - Update to X, ...), not just the canonical literal.
-    _entry_present = has_changelog_version(_changed, new_version)
-    # The old content must still be reachable in the new file (edit_file
-    # prepends; a lossy whitespace-normalized containment check tolerates
-    # harmless reformatting while catching whole-file overwrites).
-    _older_preserved = _norm_ws(_changed).find(_before_norm) != -1
-    if results and _entry_present and not _older_preserved and _before.strip():
-        # The edit replaced the old first entry instead of prepending. Keep
-        # the new entry when it is only new versions and put the old file
-        # back below it.
-        _first = split_first_changelog_entry(_changed)[0]
-        _old_versions = set(changelog_versions(_before))
-        if (has_changelog_version(_first, new_version)
-                and not _old_versions.intersection(changelog_versions(_first))):
-            print("[CHANGELOG] AI replaced the older .changes entry — keeping its "
-                  "new entry and restoring the older ones.")
-            changes_path.write_text(_first.rstrip('\n') + '\n\n' + _before.lstrip('\n'))
-            _older_preserved = True
-    if results and _entry_present and _older_preserved:
-        # The model makes up the date of the entry; use the real one.
-        _text = changes_path.read_text(encoding='utf-8', errors='replace')
-        _now = time.strftime('%a %b %e %H:%M:%S UTC %Y', time.gmtime())
-        _dated = re.sub(r'\A(-{10,}\n)\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \w+ \d{4}(?= - )',
-                        lambda m: m.group(1) + _now, _text, count=1)
-        if _dated != _text:
-            changes_path.write_text(_dated)
-        for _r in results:
-            _d = _r[:300] + "..." if len(_r) > 300 else _r
-            print(f"[UPDATE] {_d}")
-        return True
-    return False
+        # This round is best-effort; an AI failure must not kill the run.
+        _answer = ""
+    _body = changelog_body_from_answer(_answer)
+    if not has_changelog_version("\n".join(_body), new_version):
+        print(f"[CHANGELOG] AI gave no usable entry for {new_version}.")
+        return False
+    if set(changelog_versions("\n".join(_body))) & set(changelog_versions(_before)):
+        print("[CHANGELOG] AI entry repeats versions of older entries; not used.")
+        return False
+    _body.append("- Update generated using pbuild-ai")
+    _entry = changelog_entry_header(email_author) + "\n" + "\n".join(_body) + "\n\n"
+    show_diff(_before, _entry + _before, changes_path, prefix="[CHANGELOG]")
+    changes_path.write_text(_entry + _before)
+    return True
 
 
 _SPEC_SECTIONS = ("%description", "%prep", "%build", "%install", "%files")
@@ -2828,16 +2772,8 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     _notes = _upstream_release_notes(_spec_text, _last, _version, _spec.parent)
                     _ok = _notes and _changelog_ai_round(
                         ai, _changes_path, _last, _version, _notes, _email, manager,
-                        TOOLS, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS,
-                        interactive=INTERACTIVE, skill_manager=skill_manager)
-                    if _ok:
-                        _after = manager.read_file_safe(_changes_path)
-                        _norm = collapse_repeated_separators(_after)
-                        if _norm != _after:
-                            _changes_path.write_text(_norm)
-                    else:
-                        if manager.read_file_safe(_changes_path) != _changes_text:
-                            _changes_path.write_text(_changes_text)
+                        skill_manager=skill_manager)
+                    if not _ok:
                         write_changelog_entry(_changes_path, _last, _version, _email,
                                               release_notes=_notes)
                     print(f"[CHANGELOG] Added entry for {_spec.stem} ({_last} -> {_version}).")
@@ -2953,12 +2889,13 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                   f"snapshot failed: {_e}")
                 _release_notes = ""
                 _prefetched_context = ""
+                # Needed with and without --update-version (update prompt).
+                _current_v_match = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
+                _current_version = _current_v_match.group(1) if _current_v_match else None
                 # Pre-check: try version APIs before involving AI
                 if not target_version:
                     print(f"\n[UPDATE] Researching latest upstream version for {spec.name}...")
                     spec_content = manager.read_file_safe(spec)
-                    _current_v_match = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
-                    _current_version = _current_v_match.group(1) if _current_v_match else None
                     _source_url = None
                     for _line in spec_content.split('\n'):
                         _m = re.match(r'^Source\d*:\s*(.+)', _line, re.I)
@@ -3613,36 +3550,16 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         _changelog_restored = True
                     if _changes_after == _changes_before_text and not _changelog_restored:
                         # Untouched by AI — dedicated short AI round: a tiny,
-                        # single-purpose prompt that reliably provokes real
-                        # tool_calls even on models that collapse on the big
+                        # single-purpose prompt for just the entry text, which
+                        # works even on models that collapse on the big
                         # multi-mandate update prompt.
                         print(f"[UPDATE] Asking AI to write .changes entry "
                               f"for {spec.name}...")
                         if _changelog_ai_round(
                                 ai, _changes_file, _old_v.group(1), _new_v.group(1),
                                 _release_notes, email_author, manager,
-                                TOOLS, WORKSPACE_DIR, ALLOW_TOOL_SCRIPTS,
-                                interactive=INTERACTIVE,
                                 skill_manager=ctx.skill_manager):
-                            _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
-                            # The AI round sometimes emits the new entry with a
-                            # trailing '---' plus the older entry's own leading
-                            # '---'. Normalize runs of consecutive separators.
-                            _changes_norm = collapse_repeated_separators(_changes_after)
-                            if _changes_norm != _changes_after:
-                                _changes_file.write_text(_changes_norm)
-                                _changes_after = _changes_norm
-                        else:
-                            # The AI round failed — it may have modified the
-                            # file (e.g. extended an existing entry instead of
-                            # prepending a new one). Restore the pre-round
-                            # snapshot so the deterministic path gets a clean
-                            # file.
-                            _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
-                            if _changes_after != _changes_before_text and _changes_before_text:
-                                _changes_file.write_text(_changes_before_text)
-                                _changes_after = _changes_before_text
-                                _changelog_restored = True
+                            _changes_after = manager.read_file_safe(_changes_file)
                     if _changelog_restored or _changes_after == _changes_before_text:
                         # Deterministic fallback: enriched from release notes
                         if write_changelog_entry(

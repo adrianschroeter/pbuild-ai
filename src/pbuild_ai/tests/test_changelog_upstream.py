@@ -86,35 +86,6 @@ class TestReleasePleaseNotes(unittest.TestCase):
         self.assertTrue(all(len(l) <= 70 for l in body))
 
 
-class _FakeManager:
-    def read_file_safe(self, path):
-        return path.read_text()
-
-
-class TestAiRoundSalvage(unittest.TestCase):
-    """An AI edit that replaced the old first entry keeps its new entry only."""
-
-    def test_old_entry_restored(self):
-        from pathlib import Path
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(__import__("shutil").rmtree, tmp, True)
-        changes = tmp / "gufo.changes"
-        old = HEADER + "- Updated to version 0.4.0\n  * four\n\n"
-        changes.write_text(old)
-        new_entry = HEADER + "- Updated to version 0.5.0\n  * five\n"
-
-        class AI:
-            def call_with_tools(self, *a, **k):
-                changes.write_text(new_entry + "\n")
-                return ["done"]
-        ok = pa._changelog_ai_round(AI(), changes, "0.4.0", "0.5.0", "## 0.5.0\n* five",
-                                    "T <t@e.st>", _FakeManager(), [], str(tmp), False)
-        self.assertTrue(ok)
-        text = changes.read_text()
-        self.assertTrue(text.endswith("- Updated to version 0.5.0\n  * five\n\n" + old), text)
-        self.assertNotIn("Jan  1", text.split("0.5.0")[0])
-
-
 class TestChangelogMode(unittest.TestCase):
     """--changelog covers every upstream release since the last .changes version."""
 
@@ -137,7 +108,7 @@ class TestChangelogMode(unittest.TestCase):
         import pbuild_ai.pbuild_ai as pa
         resp = io.BytesIO(json.dumps({RELEASES!r}).encode())
         with patch.object(pa.urllib.request, 'urlopen', return_value=resp), \\
-                patch.object(LlmAnalyzer, 'call_with_tools', return_value=[]):
+                patch.object(LlmAnalyzer, 'analyze', return_value=''):
             pa.main()
         """)
         result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,

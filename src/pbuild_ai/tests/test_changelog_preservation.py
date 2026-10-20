@@ -55,29 +55,20 @@ class _FakeManager:
 
 
 class _FakeAI:
-    """Fake LLM client whose call_with_tools simulates the tool round.
+    """Fake LLM client whose analyze() returns a canned entry text."""
 
-    The behavior hook is invoked with the resolved changes path; it may mutate
-    the manager's file store to mimic edit_file/write_file side effects.
-    """
+    def __init__(self, answer=""):
+        self.answer = answer
+        self.system = None
+        self.context = None
+        self.task = None
 
-    def __init__(self, manager, behavior=None):
-        self.manager = manager
-        self.behavior = behavior
-        self.last_tools = None
-        self.last_messages = None
-        self.results = []
-
-    def call_with_tools(self, messages, tools, manager, workspace_dir,
-                        allow_tool_scripts=False, interactive=False,
-                        max_rounds=3, task=""):
-        self.last_tools = tools
-        self.last_messages = messages
-        self.last_task = task
-        manager = manager or self.manager
-        if self.behavior is not None:
-            self.behavior(manager)
-        return self.results
+    def analyze(self, system_prompt, context_data, agents_md=None,
+                format_json=False, task=""):
+        self.system = system_prompt
+        self.context = context_data
+        self.task = task
+        return self.answer
 
 
 class _FakeSkills:
@@ -175,178 +166,112 @@ class TestSanitizeReleaseNotes(unittest.TestCase):
 
 
 class TestChangelogAiRoundPreservesHistory(unittest.TestCase):
-    def _round(self, tmp, behavior=None, results=None, create_entry=False,
-               skill_manager=None):
+    """The AI only writes the entry text; pbuild-ai prepends it."""
+
+    def _round(self, tmp, answer="", content=OLDER_ENTRIES, skill_manager=None):
         path = Path(tmp) / "ollama.changes"
-        if create_entry:
-            path.write_text(NEW_ENTRY + OLDER_ENTRIES, encoding="utf-8")
-        manager = _FakeManager({str(path): path.read_text(encoding="utf-8")
-                                if path.exists() else ""})
-        ai = _FakeAI(manager, behavior=behavior)
-        if results is not None:
-            ai.results = results
-        tools = [
-            {"type": "function", "function": {"name": n, "parameters": {}}}
-            for n in ("edit_file", "write_file", "read_file", "web_fetch")
-        ]
+        if content is not None:
+            path.write_text(content, encoding="utf-8")
+        manager = _FakeManager({str(path): content or ""})
+        ai = _FakeAI(answer)
         ok = _changelog_ai_round(
             ai, path, "0.33.1", "0.34.0", "Some release notes",
-            "Maintainer <maint@opensuse.org>", manager, tools,
-            tmp, False, interactive=False, skill_manager=skill_manager)
-        return path, manager, ai, ok
+            "Maintainer <maint@opensuse.org>", manager,
+            skill_manager=skill_manager)
+        return path, ai, ok
 
     def test_missing_file_skips_ai(self):
         with tempfile.TemporaryDirectory() as tmp:
             skills = _FakeSkills()
-            path, manager, ai, ok = self._round(
-                Path(tmp), create_entry=False, skill_manager=skills)
+            path, ai, ok = self._round(tmp, content=None, skill_manager=skills)
             self.assertFalse(ok)
-            self.assertIsNone(ai.last_tools)
+            self.assertIsNone(ai.system)
             self.assertNotIn("changelog", skills.activated_skills)
 
-    def test_skill_recorded_when_round_runs(self):
-        def prepend(manager):
-            for key, old in list(manager.files.items()):
-                manager.files[key] = NEW_ENTRY + old
-
+    def test_entry_prepended_with_real_header(self):
+        answer = ("Here is the entry:\n\n```\n"
+                  "- Updated to version 0.34.0\n"
+                  "  * Fixed the crash\n"
+                  "- Update generated using pbuild-ai\n"
+                  "```\n")
         with tempfile.TemporaryDirectory() as tmp:
             skills = _FakeSkills()
-            path, manager, ai, ok = self._round(
-                Path(tmp), behavior=prepend, results=["edit_file: OK"],
-                create_entry=True, skill_manager=skills)
+            path, ai, ok = self._round(tmp, answer, skill_manager=skills)
             self.assertTrue(ok)
             self.assertIn("changelog", skills.activated_skills)
+            text = path.read_text(encoding="utf-8")
+            self.assertTrue(text.endswith(
+                "\n\n- Updated to version 0.34.0\n"
+                "  * Fixed the crash\n"
+                "- Update generated using pbuild-ai\n\n" + OLDER_ENTRIES), text)
+            self.assertRegex(text.splitlines()[1],
+                             r"^\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d UTC \d{4} - "
+                             r"Maintainer <maint@opensuse.org>$")
+            self.assertEqual(text.count("Update generated using pbuild-ai"), 1)
 
-    def test_no_results_is_failure(self):
+    def test_header_and_repeated_older_entry_dropped(self):
+        """A model that answers with a whole entry, plus the old first entry
+        below it, still only gets its new body in."""
+        answer = NEW_ENTRY + OLDER_ENTRIES
         with tempfile.TemporaryDirectory() as tmp:
-            path, manager, ai, ok = self._round(
-                Path(tmp), create_entry=True, results=[])
-            self.assertFalse(ok)
-            # untouched by the failed round
-            self.assertEqual(manager.files[str(path)],
-                             NEW_ENTRY + OLDER_ENTRIES)
-
-    def test_stripping_older_entries_is_rejected(self):
-        def strip_all(manager):
-            for key in manager.files:
-                manager.files[key] = NEW_ENTRY  # write_file overwrite
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path, manager, ai, ok = self._round(Path(tmp), behavior=strip_all,
-                                                results=["write_file: OK"],
-                                                create_entry=True)
-            self.assertFalse(ok)
-
-    def test_prepend_keeping_history_is_accepted(self):
-        def prepend(manager):
-            for key, old in list(manager.files.items()):
-                manager.files[key] = NEW_ENTRY + old
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path, manager, ai, ok = self._round(Path(tmp), behavior=prepend,
-                                                results=["edit_file: OK"],
-                                                create_entry=True)
+            path, ai, ok = self._round(tmp, answer)
             self.assertTrue(ok)
+            text = path.read_text(encoding="utf-8")
+            self.assertTrue(text.endswith(OLDER_ENTRIES))
+            self.assertEqual(text.count("0.33.1"), 1)
+            self.assertNotIn("Fri Sep 11", text)
 
-    def test_native_style_entry_is_accepted(self):
-        native = ("-------------------------------------------------------------------\n"
-                  "Mon Sep 08 12:00:00 UTC 2026 - Maintainer <maint@opensuse.org>\n"
-                  "\n"
-                  "- Update to 0.34.0\n"
-                  "  * Some feature\n"
-                  "- Update generated using pbuild-ai\n"
-                  "\n")
-
-        def prepend_native(manager):
-            for key, old in list(manager.files.items()):
-                manager.files[key] = native + old
-
+    def test_no_answer_is_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path, manager, ai, ok = self._round(
-                Path(tmp), behavior=prepend_native, results=["edit_file: OK"],
-                create_entry=True)
+            path, ai, ok = self._round(tmp, "")
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), OLDER_ENTRIES)
+
+    def test_entry_without_target_version_is_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ai, ok = self._round(tmp, "- Fixed some things\n")
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), OLDER_ENTRIES)
+
+    def test_entry_repeating_older_version_is_failure(self):
+        answer = ("- Updated to version 0.34.0\n  * New\n"
+                  "- Update to 0.33.1\n  * Some older fix\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ai, ok = self._round(tmp, answer)
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), OLDER_ENTRIES)
+
+    def test_existing_entry_for_version_skips_ai(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ai, ok = self._round(tmp, "- Updated to version 0.34.0\n",
+                                       content=NEW_ENTRY + OLDER_ENTRIES)
+            self.assertFalse(ok)
+            self.assertIsNone(ai.system)
+
+    def test_long_lines_wrapped(self):
+        answer = ("- Updated to version 0.34.0\n"
+                  "  * " + "word " * 30 + "\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ai, ok = self._round(tmp, answer)
             self.assertTrue(ok)
-
-    def test_only_edit_and_read_tools_offered(self):
-        def prepend(manager):
-            for key, old in list(manager.files.items()):
-                manager.files[key] = NEW_ENTRY + old
-
-        with tempfile.TemporaryDirectory() as tmp:
-            resolved = Path(tmp) / "ollama.changes"
-            resolved.write_text(OLDER_ENTRIES, encoding="utf-8")
-            path, manager, ai, ok = self._round(
-                Path(tmp), behavior=prepend, results=["edit_file: OK"],
-                create_entry=True)
-            offered = {(t.get("function", {}) or {}).get("name")
-                       for t in ai.last_tools or []}
-            self.assertIn("edit_file", offered)
-            self.assertIn("read_file", offered)
-            self.assertNotIn("write_file", offered)
-            self.assertNotIn("web_fetch", offered)
-
-    def test_extending_existing_entry_is_rejected(self):
-        """When the model replaces the first entry's header and prepends new
-        bullets into it (instead of adding a completely new entry), the
-        round must detect that the old content was not fully preserved and
-        return False.  The caller then restores the file and falls back to
-        the deterministic writer."""
-        def extend_first_entry(manager):
-            # Simulate: model sets old_string to the first entry, but new_string
-            # replaces the header date and merges bullets — the old header line
-            # ("Thu Aug 27") disappears from the file.
-            for key, old in list(manager.files.items()):
-                mangled = (
-                    "-------------------------------------------------------------------\n"
-                    "Tue Sep 29 10:00:00 UTC 2026 - Adrian Schröter <adrian@suse.de>\n"
-                    "\n"
-                    "- Updated to version 0.34.0\n"
-                    "  * New feature\n"
-                    "- Update to 0.33.1\n"
-                    "  * MLX: Qwen3.8 Flash Next support\n"
-                    "  * cmake: make external compat patches idempotent\n"
-                    "  * MLX and llama.cpp update\n"
-                    "  * mlxrunner: add structured output support\n"
-                    "  * mlxrunner: avoid Metal GPU timeouts\n"
-                    "\n"
-                )
-                manager.files[key] = mangled
-
-        with tempfile.TemporaryDirectory() as tmp:
-            # The round must reject the mangled content.
-            path, manager, ai, ok = self._round(
-                Path(tmp), behavior=extend_first_entry,
-                results=["edit_file: OK"],
-                create_entry=True)
-            self.assertFalse(ok,
-                "Round must reject an extended/mangled first entry")
+            text = path.read_text(encoding="utf-8")
+            self.assertTrue(all(len(l) <= 70 for l in text.splitlines()), text)
+            self.assertIn("\n    word", text)
 
     def test_round_uses_changelog_skill_and_former_release_hint(self):
-        def prepend(manager):
-            for key, old in list(manager.files.items()):
-                manager.files[key] = NEW_ENTRY + old
-
         with tempfile.TemporaryDirectory() as tmp:
-            resolved = Path(tmp) / "ollama.changes"
-            resolved.write_text(NEW_ENTRY + OLDER_ENTRIES, encoding="utf-8")
-            path, manager, ai, ok = self._round(
-                Path(tmp), behavior=prepend, results=["edit_file: OK"],
-                create_entry=True)
+            path, ai, ok = self._round(tmp, "- Updated to version 0.34.0\n  * x\n")
             self.assertTrue(ok)
-            sys_msg = next((m["content"] for m in ai.last_messages
-                            if m["role"] == "system"), "")
-            user_msg = next((m["content"] for m in ai.last_messages
-                             if m["role"] == "user"), "")
-            # The .changes skill must be part of the system message.
-            self.assertIn("## .changes file format (openSUSE policy)", sys_msg)
-            self.assertIn("### Rules:", sys_msg)
-            self.assertIn("- Update generated using pbuild-ai", sys_msg)
+            # The .changes skill must be part of the system prompt.
+            self.assertIn("## .changes file format (openSUSE policy)", ai.system)
+            self.assertIn("### Rules:", ai.system)
+            self.assertIn("Output ONLY the body lines", ai.system)
             # ... including the former-release-coverage rule from the skill.
-            self.assertIn("former upstream releases", sys_msg)
-            self.assertIn("older than some releases that upstream", sys_msg)
-            # The user message repeats the former-release hint.
-            self.assertIn("former releases", user_msg)
-            self.assertIn("old version", user_msg)
+            self.assertIn("former upstream releases", ai.system)
+            self.assertIn("older than some releases that upstream", ai.system)
+            # The context repeats the former-release hint.
+            self.assertIn("former releases", ai.context)
+            self.assertIn("old version", ai.context)
 
 
 class TestChangelogVersionDetection(unittest.TestCase):
