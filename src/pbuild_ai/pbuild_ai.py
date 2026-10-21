@@ -59,7 +59,7 @@ if __name__ == "__main__" and "--version" in sys.argv:
     sys.exit(0)
 
 from pbuild_ai.manifest import list_packages, find_spec_files
-from pbuild_ai.diff_utils import show_diff
+from pbuild_ai.diff_utils import show_diff, write_with_diff
 from pbuild_ai.tools import execute_tool_calls, build_tools_list
 from pbuild_ai.skill_manager import SkillManager
 from pbuild_ai.llm_client import LlmAnalyzer
@@ -666,7 +666,7 @@ def _bump_spec_version(spec_path: Path, new_version: str) -> bool:
         content = spec_path.read_text(encoding='utf-8')
         new_content = re.sub(r'^(Version:\s*).+', rf'\g<1>{new_version}', content, count=1, flags=re.M)
         if new_content != content:
-            spec_path.write_text(new_content)
+            write_with_diff(spec_path, new_content, prefix="[AUTO-DEPS]")
             print(f"[AUTO-DEPS] Bumped Version to {new_version}")
             return True
     except Exception as e:
@@ -1884,7 +1884,7 @@ if __name__ == "__main__":
         if setup_line is not None:
             lines.insert(setup_line + 1, f'%patch{patch_num} -p1')
 
-        spec.write_text('\n'.join(lines), encoding='utf-8')
+        write_with_diff(spec, '\n'.join(lines), prefix="[PATCH]")
         print(f"[PATCH] Added {patch_ref} and %patch{patch_num} -p1 to spec.")
 
     def relocate_patches(tool_results, spec):
@@ -1928,7 +1928,7 @@ if __name__ == "__main__":
                 if line.strip().startswith('%setup'):
                     lines.insert(i + 1, f'%patch{patch_num} -p1')
                     break
-            spec.write_text('\n'.join(lines), encoding='utf-8')
+            write_with_diff(spec, '\n'.join(lines), prefix="[PATCH]")
             print(f"[PATCH] Added {patch_ref} and %patch{patch_num} -p1 to spec.")
             break  # only handle first patch per round
 
@@ -3138,7 +3138,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 sys.exit(1)
                             _rewritten = _extract_rewritten_spec(_ai_text, _spec_now)
                             if _rewritten:
-                                spec.write_text(_rewritten, encoding='utf-8')
+                                write_with_diff(spec, _rewritten)
                                 _spec_now = _rewritten
                                 print(f"[UPDATE] AI returned a full spec rewrite as TEXT "
                                       f"(no tool calls) — wrote {spec.name}. REVIEW REQUIRED.")
@@ -3155,7 +3155,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     if _src_m and _name_m and _src_m.group(0) not in spec_before_update:
                         _named = add_archive_name(_src_m.group(2), _name_m.group(1))
                         if _named != _src_m.group(2):
-                            spec.write_text(_spec_cur[:_src_m.start(2)] + _named + _spec_cur[_src_m.end(2):])
+                            write_with_diff(spec, _spec_cur[:_src_m.start(2)] + _named + _spec_cur[_src_m.end(2):])
                             print(f"[UPDATE] Source URL does not name the archive — added '#/' name: {_named}")
 
                     # Clean up old source tarballs after update
@@ -3268,7 +3268,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         count=1,
                         flags=re.M
                     )
-                    spec.write_text(_spec_updated)
+                    write_with_diff(spec, _spec_updated)
                     # Changelog entry is handled by the unified step after
                     # downloads complete; only bump the Version tag here.
                     # Mark as moved so download/cleanup proceeds
@@ -3278,7 +3278,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 _spec_current = manager.read_file_safe(spec)
                 _repaired, _fixed, _fix_notes = fix_remote_asset_formatting(_spec_current)
                 if _fixed:
-                    spec.write_text(_repaired)
+                    write_with_diff(spec, _repaired)
                     print(f"[UPDATE] Fixed RemoteAsset/CreateArchive formatting: "
                           f"{'; '.join(_fix_notes)}.")
 
@@ -3444,7 +3444,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                                             f"v%{{version}}.tar.gz#/{_raw_base}")
                                                 _spec_content = (_spec_content[:_src_m.start(2)] + _new_src
                                                                  + _spec_content[_src_m.end(2):])
-                                                spec.write_text(_spec_content)
+                                                write_with_diff(spec, _spec_content)
                                                 print(f"[UPDATE] Source now points to the tag archive: {_new_src}")
                                 if not _dl_ok:
                                     _dl_failed = True
@@ -3462,7 +3462,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                             # Add #/fragment to Source URL so OBS saves with the correct name
                                             _new_url = f"{_source_url}#/{_suggested}"
                                             _spec_content = _spec_content.replace(_source_url, _new_url)
-                                            spec.write_text(_spec_content)
+                                            write_with_diff(spec, _spec_content)
                                             print(f"[UPDATE] Added #/{_suggested} to Source URL for correct local filename.")
                                     _old_source_url = None
                                     for _oline in spec_before_update.split('\n'):
@@ -3513,7 +3513,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                   f"could not adapt {spec.name}: {_e}")
                             continue
                         if _updated and _updated != spec_after:
-                            spec.write_text(_updated)
+                            write_with_diff(spec, _updated)
                             spec_after = _updated
                 if spec_after != spec_before_update and _new_v and _old_v and _new_v.group(1) != _old_v.group(1):
                     # Deterministic changes file update if AI didn't handle it

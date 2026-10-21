@@ -23,6 +23,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from pbuild_ai.diff_utils import write_with_diff
 from pbuild_ai.network import is_safe_url
 from pbuild_ai.llm_client import chat_completion, prune_messages
 from pbuild_ai.spinner import Spinner, AI_COLOR
@@ -106,7 +107,7 @@ def _resolve_url_references(ctx):
             modified += 1
 
         if modified:
-            spec.write_text('\n'.join(lines))
+            write_with_diff(spec, '\n'.join(lines), prefix="[MODIFY]")
             print(f"[MODIFY] Updated {spec.name}: {modified} remote URL(s) resolved to local files.")
 
 

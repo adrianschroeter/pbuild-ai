@@ -37,3 +37,14 @@ def show_diff(old_content, new_content, file_path, prefix="[FIX]"):
         else:
             print(f"{prefix} {line}", end="")
     print(f"{prefix} --- End diff ---")
+
+
+def write_with_diff(path, new_content, prefix="[UPDATE]"):
+    """Write `new_content` to `path`, showing the diff against the current file
+    so that mechanical rewrites are as visible as AI edits."""
+    try:
+        old_content = path.read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError):
+        old_content = ""
+    show_diff(old_content, new_content, path, prefix=prefix)
+    path.write_text(new_content, encoding='utf-8')

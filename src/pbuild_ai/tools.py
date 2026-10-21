@@ -636,6 +636,48 @@ def _extract_header(content):
     return '\n'.join(header_lines), '\n'.join(lines[rest_start:])
 
 
+_SNAPSHOT_MAX_SIZE = 1024 * 1024  # text files above 1 MB are not diffed
+
+
+def _snapshot_text_files(dirs):
+    """Map path -> text content of the small text files directly in `dirs`.
+    Used to make changes by external programs (tool scripts, format_spec_file)
+    visible, since they bypass the diff of write_file/edit_file."""
+    snap = {}
+    for d in dirs:
+        try:
+            entries = list(Path(d).iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if p in snap or p.name.endswith(_ARCHIVE_EXTS) or p.suffix in ('.obscpio', '.cpio'):
+                continue
+            try:
+                if not p.is_file() or p.stat().st_size > _SNAPSHOT_MAX_SIZE:
+                    continue
+                snap[p] = p.read_text(encoding='utf-8')
+            except (OSError, UnicodeDecodeError):
+                continue
+    return snap
+
+
+def _report_snapshot_changes(before, dirs, prefix="[TOOL]"):
+    """Show diffs for files changed since `before`; return changed file names."""
+    after = _snapshot_text_files(dirs)
+    changed = []
+    for p in sorted(set(before) | set(after)):
+        old, new = before.get(p), after.get(p)
+        if old == new:
+            continue
+        if new is None:
+            print(f"{prefix} {p.name} was " +
+                  ("replaced by a binary or large file" if p.exists() else "removed"))
+        else:
+            show_diff(old or "", new, p, prefix=prefix)
+        changed.append(p.name)
+    return changed
+
+
 def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False, interactive=False, debug=False):
     """Execute tool calls returned by AI. Returns list of tool results."""
     results = []
@@ -1152,13 +1194,14 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     else:
                         fmt_cwd = Path(_arg).resolve()
                 fmt_cmd = [_FORMAT_SPEC_FILE_PATH]
+                _before = _snapshot_text_files([fmt_cwd])
                 try:
                     fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30, cwd=fmt_cwd)
+                    _changed = _report_snapshot_changes(_before, [fmt_cwd])
                     if fmt_result.returncode == 0:
-                        spec_files = list(fmt_cwd.glob("*.spec"))
-                        if spec_files:
-                            print(f"[TOOL] format_spec_file: normalized {len(spec_files)} spec(s)")
-                        results.append("OK")
+                        if _changed:
+                            print(f"[TOOL] format_spec_file: normalized {', '.join(_changed)}")
+                        results.append(f"OK: changed {', '.join(_changed)}" if _changed else "OK: no changes")
                     else:
                         err = fmt_result.stderr or fmt_result.stdout or "unknown error"
                         results.append(f"Warning: format_spec_file returned {fmt_result.returncode}: {err.strip()}")
@@ -1188,14 +1231,20 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     results.append(_blocked_tool_script_message(script_name, script_path))
                     continue
             full_cmd = [str(script_path)] + args
+            _snap_dirs = {workspace, _spec_dir}
+            _before = _snapshot_text_files(_snap_dirs)
             try:
                 result = subprocess.run(full_cmd, capture_output=True, text=True, cwd=workspace)
+                # Scripts edit files behind write_file/edit_file — show what they changed
+                _changed = _report_snapshot_changes(_before, _snap_dirs)
+                _changed_note = (f"\n[pbuild-ai] Files changed by the script: {', '.join(_changed)}"
+                                 if _changed else "")
                 if result.returncode == 0:
                     print(f"[TOOL] run_tool_script: {script_name}")
                     output = (result.stdout or "") + (result.stderr or "")
-                    results.append(output[:10000] if output else "OK")
+                    results.append((output[:10000] if output else "OK") + _changed_note)
                 else:
-                    results.append(f"Error: Script failed (exit {result.returncode}):\n{result.stderr or result.stdout or 'No output'}")
+                    results.append(f"Error: Script failed (exit {result.returncode}):\n{result.stderr or result.stdout or 'No output'}" + _changed_note)
             except Exception as e:
                 results.append(f"Error executing script: {e}")
         elif tool_name == "ask_user":
