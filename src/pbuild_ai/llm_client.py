@@ -214,20 +214,29 @@ class LlmAnalyzer:
 
         # Detect OpenAI-compatible mode
         _raw_host = self.host
+        self._is_ollama = False
+        self._probed_context = None
         if '/v1' in _raw_host:
             # Explicit /v1 in URL → OpenAI mode
             self._openai_mode = True
             _base_host = _raw_host.replace('/v1', '').rstrip('/')
         else:
-            # Auto-detect Ollama → use native API (supports tools + num_ctx)
-            self._is_ollama = self._detect_ollama(_raw_host)
-            self._openai_mode = False
             _base_host = _raw_host.rstrip('/')
+            # Auto-detect Ollama → use native API (supports tools + num_ctx)
+            self._is_ollama = self._detect_ollama(_base_host)
+            if not self._is_ollama:
+                # Not Ollama → probe /v1/models so plain OpenAI-compatible
+                # server URLs (without the /v1 suffix) work as well.
+                self._openai_mode = self._detect_openai(_base_host)
+            else:
+                self._openai_mode = False
 
         if self._openai_mode:
+            self._base_host = _base_host
             self.api_url = f"{_base_host}/v1/chat/completions"
             self.chat_api_url = f"{_base_host}/v1/chat/completions"
         else:
+            self._base_host = _raw_host.rstrip('/')
             self.api_url = f"{_raw_host}/api/generate"
             self.chat_api_url = f"{_raw_host}/api/chat"
         self._context = None
@@ -247,14 +256,17 @@ class LlmAnalyzer:
         # Only auto-discover when no explicit model was provided (i.e. still "default")
         self.max_tokens = 32768
         if self.model == "default":
-            if getattr(self, '_is_ollama', False):
+            if self._is_ollama:
                 # Ollama detected — use /api/tags for model discovery
                 self._discover_ollama_model()
             elif self._openai_mode:
                 self._discover_openai_model()
             if self.debug:
-                source = "explicit /v1" if '/v1' in self.host else ("Ollama" if getattr(self, '_is_ollama', False) else "server")
+                source = "explicit /v1" if '/v1' in self.host else ("Ollama" if self._is_ollama else ("probed /v1" if self._openai_mode else "server"))
                 print(f"[DEBUG] Server detected ({source}): {self.host} (model: {self.model})", flush=True)
+        elif self._probed_context:
+            # Explicit model: keep the context length the probe matched for it
+            self.max_tokens = self._probed_context
 
         if self.options.get("num_ctx"):
             self.max_tokens = int(self.options["num_ctx"])
@@ -280,6 +292,37 @@ class LlmAnalyzer:
             return is_ollama
         except Exception:
             return False
+
+    def _detect_openai(self, host):
+        """Detect an OpenAI-compatible server by probing /v1/models.
+        Returns True when the endpoint answers with a model list. Also
+        records the context length advertised for the selected model
+        (meta.n_ctx or context_length) so an explicit --ai-model still
+        gets the right window."""
+        try:
+            req = urllib.request.Request(
+                f"{host.rstrip('/')}/v1/models",
+                headers={"Content-Type": "application/json"}
+            )
+            with self._opener.open(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode())
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+        models = data.get("data") or data.get("models") or []
+        if not isinstance(models, list):
+            return False
+        for entry in models:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("id") or entry.get("name") or entry.get("model") or ""
+            if name == self.model:
+                ctx = (entry.get("meta") or {}).get("n_ctx") or entry.get("context_length")
+                if isinstance(ctx, int) and ctx > 0:
+                    self._probed_context = ctx
+                break
+        return True
 
     def _model_supports_tools(self):
         """Whether the resolved model can receive tool-calling rounds.
@@ -493,7 +536,7 @@ class LlmAnalyzer:
         Also extracts n_ctx from llama.cpp meta field."""
         try:
             req = urllib.request.Request(
-                f"{self.host}/models",
+                f"{self._base_host}/v1/models",
                 headers={"Content-Type": "application/json"}
             )
             with self._opener.open(req, timeout=10) as resp:
@@ -509,9 +552,10 @@ class LlmAnalyzer:
                 discovered = first.get("id") or first.get("name") or first.get("model") or ""
                 if discovered:
                     self.model = discovered
-                # Extract n_ctx from meta (llama.cpp format)
+                # Extract n_ctx from meta (llama.cpp format) or the
+                # context_length field some servers advertise directly
                 meta = first.get("meta") or {}
-                n_ctx = meta.get("n_ctx")
+                n_ctx = meta.get("n_ctx") or first.get("context_length")
                 if n_ctx and isinstance(n_ctx, int) and n_ctx > 0:
                     self.max_tokens = n_ctx
                     if self.debug:
