@@ -350,7 +350,9 @@ class RpmSourceManager:
 
         content = raw_log()
         if content is None:
-            return True
+            # _build.* dir exists but holds no log: pbuild died before the
+            # build phase started (e.g. stale build root) — retry with --clean.
+            return False
         return "----- building " in content
 
     def get_build_log(self, package_name=None):

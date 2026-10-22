@@ -170,6 +170,35 @@ def _is_environment_error(build_out: str) -> bool:
             return True
     return False
 
+def _fatal_pbuild_reason(build_out: str) -> str:
+    """Return the offending line if build output shows an OBS API access failure
+    (401/403), else an empty string. pbuild fetches project metadata anonymously,
+    so these mean a private or non-existent project: the build phase never starts
+    and no retry or AI fix can resolve them."""
+    if not build_out:
+        return ""
+    for _line in build_out.splitlines():
+        _low = _line.lower()
+        if re.search(r"failed:\s*40[13]\b", _low) or "401 unauthorized" in _low or "403 forbidden" in _low:
+            return _line.strip()
+    return ""
+
+def _abort_fatal_pbuild_error(reason_line: str, ai=None, manager=None,
+                              program_start=None, skill_manager=None):
+    """Report a pbuild-level auth failure that prevented the build phase and abort."""
+    print("\n[FATAL] pbuild failed before the build phase started (no build log):", flush=True)
+    print(f"  {reason_line}", flush=True)
+    print("[HINT] pbuild requests OBS project metadata anonymously — oscrc credentials are NOT "
+          "used for --obs downloads. The project is private or does not exist (OBS answers 401 "
+          "for both). Check the project name, or make it public, or use a public --obs instance. "
+          "Aborting without AI analysis.", flush=True)
+    if ai is not None and program_start is not None:
+        try:
+            ai.print_stats(manager, program_start, skill_manager)
+        except Exception:
+            pass
+    sys.exit(1)
+
 def _is_comment_only_change(original: str, modified: str) -> bool:
     """Return True if the only differences between original and modified
     are comment lines (starting with #) or blank/whitespace-only lines."""
@@ -908,6 +937,12 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
         else:
             print("[INFO] Single package mode (no _manifest found). Running orphan build...")
             build_success, build_out = manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG)
+
+        if not build_success and build_out:
+            _fatal_reason = _fatal_pbuild_reason(build_out)
+            if _fatal_reason and not manager.get_build_log(package_name=spec.stem)[0]:
+                _abort_fatal_pbuild_error(_fatal_reason, ai=ai, manager=manager,
+                                          program_start=program_start)
 
         INCOMPLETE_SETUP_MSG = "It seems that there was an incomplete setup of /"
         if not build_success and INCOMPLETE_SETUP_MSG in build_out:
@@ -2144,6 +2179,10 @@ if __name__ == "__main__":
             print(f"[FIX] No saved context found, but --prompt will be included in the fix context.")
         _deep_retry_ok = False
         if DEEP_ANALYZE:
+            _fatal_reason = _fatal_pbuild_reason(current_build_out)
+            if _fatal_reason and not manager.get_build_log(package_name=spec.stem)[0]:
+                _abort_fatal_pbuild_error(_fatal_reason, ai=ai, manager=manager,
+                                          program_start=ctx.program_start, skill_manager=skill_manager)
             if "unresolvable" in current_build_out.lower() or "nothing provides" in current_build_out.lower():
                 print(f"\n[DEEP ANALYZE] Unresolvable dependencies in build output — build environment cannot be created. Skipping deep shell.")
             elif _is_environment_error(current_build_out):
@@ -2169,6 +2208,7 @@ if __name__ == "__main__":
                         current_build_out = _retry_out
                 print("[DEEP ANALYZE] Shell exited. Terminating pbuild and releasing build root...")
                 time.sleep(3)
+        _nolog_clean_retry_done = False
         while fix_attempt < MAX_ATTEMPTS:
             if _deep_retry_ok:
                 break
@@ -2204,13 +2244,27 @@ if __name__ == "__main__":
                     error_context += f"\n\nBuild log:\n{log_content}"
                 else:
                     print(f"[DIAG] Warning: {log_content}")
+                    _fatal_reason = _fatal_pbuild_reason(current_build_out)
+                    if _fatal_reason:
+                        _abort_fatal_pbuild_error(_fatal_reason, ai=ai, manager=manager,
+                                                  program_start=ctx.program_start, skill_manager=skill_manager)
                     # No log found — check unresolvable or env error in build output
                     if not PROJECT_MODE and not ("unresolvable" in build_out_lower or "nothing provides" in build_out_lower):
                         if _is_environment_error(current_build_out):
                             print(f"[DIAG] Infrastructure issue detected (no build log). Will retry.")
+                        elif not _nolog_clean_retry_done:
+                            _nolog_clean_retry_done = True
+                            print(f"[DIAG] No build log — build phase likely never started. Retrying with --clean...")
+                            _ok, current_build_out = rebuild_func(spec.stem, force_clean=True)
+                            if _ok:
+                                print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
+                                build_success2 = True
+                                break
+                            build_out_lower = current_build_out.lower()
+                            print("[DIAG] Clean retry also failed. Re-diagnosing with its output...")
+                            continue
                         else:
-                            print("[BUG] No build log and no unresolvable deps detected. This is likely a bug in pbuild-ai or pbuild. Aborting.")
-                            sys.exit(1)
+                            print("[DIAG] Still no build log after --clean retry — analyzing pbuild output instead.")
                     error_context = current_build_out
             _files_failure = any(p in build_out_lower for p in (
                 "file not found", "unable to find", "unpackaged file",
@@ -2583,6 +2637,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 break
             else:
                 print(f"\n[WARN] Fix attempt {fix_attempt} still failing.")
+                _fatal_reason = _fatal_pbuild_reason(build_out2)
+                if _fatal_reason and not manager.get_build_log(package_name=package_name)[0]:
+                    _abort_fatal_pbuild_error(_fatal_reason, ai=ai, manager=manager,
+                                              program_start=ctx.program_start, skill_manager=skill_manager)
                 if _is_environment_error(build_out2):
                     print(f"[RETRY] Environment/VM issue detected (attempt {fix_attempt}). Retrying with --clean...")
                     _retry_ok, _retry_out = rebuild_func(package_name, force_clean=True)
