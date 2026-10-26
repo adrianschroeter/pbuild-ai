@@ -30,6 +30,9 @@ Tue Nov  8 10:21:12 UTC 2022 - Previous Author <email>
 - Replace `pbuild-ai <email@suse.de>` with the author you are given. Do NOT
   leave `<EMAIL>` as a literal placeholder — substitute a real address.
 - Entry body uses `- ` bullet lines.
+- Skip release-note items that do not affect Linux: items that apply only to
+  other platforms (MS-Windows, macOS, iOS, Android, ...) are irrelevant for
+  the package and must never show up as bullets or sub-bullets.
 - Keep every line of an entry at most 70 characters wide (the format is
   column-based and diffs stay readable). Wrap long bullets onto continuation
   lines indented with `  ` rather than exceeding 70 chars.
@@ -395,6 +398,10 @@ line itself and prepends the entry to the file.
 Output ONLY the body lines of the new entry: `- ` bullet lines, each
 followed by its `  * ` sub-bullets. No separator line, no header line, no
 older entries, no explanations, no markdown code fences.
+
+Summarize only what matters for Linux users: leave out release-note items
+that are specific to non-Linux platforms (e.g. MS-Windows- or macOS-only
+changes).
 """
 
 
