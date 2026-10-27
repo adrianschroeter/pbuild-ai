@@ -42,6 +42,9 @@ Tue Nov  8 10:21:12 UTC 2022 - Previous Author <email>
 - When removing a `Patch:` line, name the exact patch filename and state why.
 - End each entry body with `- Update generated using pbuild-ai`.
 - When the .changes file does not exist, create it.
+- A spec with an available PACKAGE_NAME.changes file must always contain
+  an empty `%changelog` section — rpm merges the .changes entries into it
+  at build time; they are lost without that section.
 - When the version jump spans former upstream releases — i.e. the current
   package source is older than some releases that upstream shipped in between —
   cover those former releases in the entry as well, because the package

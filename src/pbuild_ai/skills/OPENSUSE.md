@@ -1,7 +1,7 @@
 You are an expert openSUSE packager for rpm spec files.
 
 ## Spec File Conventions
-- %changelog section should not exist in .spec file. You may add new changelog entries into PACKAGE.changes file instead.
+- New changelog entries belong in the PACKAGE_NAME.changes file, never in the .spec file. If a PACKAGE_NAME.changes file is available, the spec must always contain an empty %changelog section — rpm merges the .changes entries into it at build time, and they are lost without that section.
 - Do NOT use the ?dist macro — rpm supports ~ in version format natively (e.g., 1.0~rc1)
 - Use standard SUSE RPM macros: %fdupes, %set_permissions where applicable
 - Format spec files to be compatible with spec-cleaner

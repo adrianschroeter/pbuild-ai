@@ -116,11 +116,11 @@ Follow these rules:
 3. Create the .spec file directly in the workspace root, next to the downloaded source tarball — do NOT use a subdirectory.
 4. Create a complete .spec file following openSUSE packaging conventions from OPENSUSE.md:
    - Keep the copyright header
-   - Empty %%changelog is acceptable
+   - If you create a PACKAGE_NAME.changes file, always keep an empty %%changelog section in the spec — rpm merges the .changes entries into it at build time
    - Do NOT use ?dist macro — use ~ in version format
    - Use standard SUSE RPM macros: %%fdupes, %%set_permissions
    - Single dependency per BuildRequires: line
-   - Omit empty %%clean, %%changelog, %%post, %%pre, %%preun, %%postun sections
+   - Omit empty %%clean, %%post, %%pre, %%preun, %%postun sections (an empty %%changelog stays when a PACKAGE_NAME.changes file exists)
    - Never recommend rpmbuild
    - Build environment has NO network access — patch out any code that tries to reach external hosts at build time
 5. If the upstream provides source archives, set Source0 to the download URL and Source1..N for additional files.
