@@ -1183,8 +1183,10 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
         elif tool_name == "run_tool_script":
             script_name = tool_input.get("script_name", "")
             args = tool_input.get("args", [])
-            # format_spec_file is a well-known OBS service, not a tool-scripts entry
-            if script_name == "format_spec_file":
+            # format_spec_file is a well-known OBS service, not a tool-scripts
+            # entry; models may pass the absolute path (e.g. from OPENSUSE.md),
+            # so accept both spellings and always run the hardcoded binary.
+            if script_name in ("format_spec_file", _FORMAT_SPEC_FILE_PATH):
                 fmt_cwd = _spec_dir
                 if args:
                     _arg = args[0]

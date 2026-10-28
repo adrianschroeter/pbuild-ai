@@ -23,7 +23,7 @@ You are an expert openSUSE packager for rpm spec files.
 - The build environment has NO network access. Any code that tries to reach external hosts at build time (e.g., downloading dependencies, fetching resources, running tests that contact remote servers) will fail. Such code must be patched to disable or skip the network-dependent parts, or those tests must be disabled in %check.
 - When a _service file exists in a package source directory, run `/usr/lib/build/runservices DIRECTORY` at least once to expand the service into source files before building.
 - If the `_service` file uses `obs_scm` source service, replace it by adding `#!RemoteAsset: GIT_URL#TAG` and `#!CreateArchive` as prefix hints on the `Source:` line of the spec file.
-- Run `/usr/lib/obs/service/format_spec_file` on each directory that contains a `.spec` file to normalize the spec formatting. Make sure execution of this tool is permitted.
+- Run `run_tool_script("format_spec_file", [SPEC_DIRECTORY])` on each directory that contains a `.spec` file to normalize the spec formatting. Use the bare name `format_spec_file` as script_name, never the absolute path. This tool is always permitted, no `--allow-tool-scripts` needed.
 - If a `cd` in the `%prep` section fails, the extraction directory of the tarball doesn't match. Inside the build environment, run `tar -tzf ~/rpmbuild/SOURCES/PACKAGE-VERSION.tar.gz | sed 's|/.*||' | sort -u` to find the actual directory name. Add `-v` to `%autosetup` or `%setup` to make rpm print the extraction directory, then add `-n DIRECTORY` with the correct name to `%autosetup` or `%setup`.
 - Comment lines in spec file starting with '#!' are specific hints for or build tooling.
             

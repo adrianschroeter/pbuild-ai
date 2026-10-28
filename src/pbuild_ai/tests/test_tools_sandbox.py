@@ -497,6 +497,19 @@ class TestExecuteToolCallsSandbox(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertNotIn("--allow-tool-scripts", results[0])
 
+    def test_format_spec_file_absolute_path_accepted(self):
+        # Models may pass the canonical OBS path instead of the bare name;
+        # it must take the known-service branch, not the workspace sandbox.
+        results = execute_tool_calls(
+            [("run_tool_script", {"script_name": "/usr/lib/obs/service/format_spec_file",
+                                  "args": [str(self.ws)]})],
+            self.manager, str(self.ws),
+            allow_tool_scripts=False,
+        )
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("outside the workspace", results[0])
+        self.assertNotIn("--allow-tool-scripts", results[0])
+
     def test_multiple_tool_calls_include_run_tool_script_without_flag(self):
         self._safe_file("existing.txt", "data")
         results = execute_tool_calls(
