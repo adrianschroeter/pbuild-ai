@@ -78,6 +78,7 @@ from pbuild_ai.skills.changelog_skill import (
     last_changelog_version, changelog_versions, CHANGELOG_BODY_PROMPT,
     changelog_body_from_answer, changelog_entry_header,
     add_release_url_bullet, clean_release_notes_body,
+    strip_release_notes_bullets,
 )
 from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_RESEARCH_TASK_PROMPT, VERSION_UPDATE_SYSTEM_PROMPT, VERSION_UPDATE_TASK_PROMPT, POST_UPDATE_CHECK_PROMPT
 from pbuild_ai.generate_mode import run_generate_mode
@@ -1126,7 +1127,11 @@ def _apply_analysis_fix_patterns(spec: Path, spec_content: str, error_analysis: 
 def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program_start,
                      run_fix_loop_func):
     """Execute pbuild for a spec if fix_mode or update_version is set, otherwise skip.
-    
+
+    With ctx.from_log set, the initial build is skipped and that log file
+    provides the build failure for the fix loop (verification builds still
+    run).
+
     Returns enriched error_prompt (or original if gitexplorer wasn't triggered).
     """
     if ctx.fix_mode or ctx.update_version is not None:
@@ -1136,7 +1141,24 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
         _DIST = ctx.dist
         SHOW_BUILDLOG = ctx.show_buildlog
 
-        if PACKAGE_FILTER:
+        if ctx.from_log:
+            # --fix --from-log: the failure is described by an existing log
+            # file (saved --build-log, a log from another machine, an OBS
+            # build log). Skip the initial build and start the fix loop from
+            # it; only the verification builds below run pbuild.
+            package_name = spec.stem
+            try:
+                build_out = Path(ctx.from_log).read_text(encoding='utf-8', errors='replace')
+            except OSError as exc:
+                print(f"[ERROR] --from-log: cannot read {ctx.from_log}: {exc}")
+                sys.exit(1)
+            if not build_out.strip():
+                print(f"[ERROR] --from-log: {ctx.from_log} is empty.")
+                sys.exit(1)
+            build_success = False
+            print(f"[INFO] Taking the build failure from {ctx.from_log} "
+                  f"({len(build_out)} bytes); skipping the initial build.")
+        elif PACKAGE_FILTER:
             package_name = spec.stem
             print(f"[INFO] Building single package: {package_name}...")
             build_success, build_out = manager.run_project_build(package_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG)
@@ -1148,31 +1170,34 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
             print("[INFO] Single package mode (no _manifest found). Running orphan build...")
             build_success, build_out = manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG)
 
-        if not build_success and build_out:
-            _fatal_reason = _fatal_pbuild_reason(build_out)
-            if _fatal_reason and not manager.get_build_log(package_name=spec.stem)[0]:
-                _abort_fatal_pbuild_error(_fatal_reason, ai=ai, manager=manager,
-                                          program_start=program_start)
+        if not ctx.from_log:
+            # The checks below retry or abort local builds — a log read from
+            # disk must never trigger one.
+            if not build_success and build_out:
+                _fatal_reason = _fatal_pbuild_reason(build_out)
+                if _fatal_reason and not manager.get_build_log(package_name=spec.stem)[0]:
+                    _abort_fatal_pbuild_error(_fatal_reason, ai=ai, manager=manager,
+                                              program_start=program_start)
 
-        INCOMPLETE_SETUP_MSG = "It seems that there was an incomplete setup of /"
-        if not build_success and INCOMPLETE_SETUP_MSG in build_out:
-            print(f"[RETRY] Incomplete setup detected. Retrying with --clean...")
-            if PACKAGE_FILTER or PROJECT_MODE:
-                build_success, build_out = manager.run_project_build(package_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
-            else:
-                build_success, build_out = manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
-
-        if not build_success:
-            if not manager.build_phase_reached(package_name=spec.stem):
-                print(f"[RETRY] Build did not reach build phase. Retrying with --clean...")
+            INCOMPLETE_SETUP_MSG = "It seems that there was an incomplete setup of /"
+            if not build_success and INCOMPLETE_SETUP_MSG in build_out:
+                print(f"[RETRY] Incomplete setup detected. Retrying with --clean...")
                 if PACKAGE_FILTER or PROJECT_MODE:
                     build_success, build_out = manager.run_project_build(package_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
                 else:
                     build_success, build_out = manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
-                if build_success:
-                    print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
-                else:
-                    print(f"[RETRY] Clean build also failed. Proceeding with fix mode.")
+
+            if not build_success:
+                if not manager.build_phase_reached(package_name=spec.stem):
+                    print(f"[RETRY] Build did not reach build phase. Retrying with --clean...")
+                    if PACKAGE_FILTER or PROJECT_MODE:
+                        build_success, build_out = manager.run_project_build(package_name, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
+                    else:
+                        build_success, build_out = manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=True)
+                    if build_success:
+                        print(f"\n[OK] Build for {spec.name} succeeded after --clean retry.")
+                    else:
+                        print(f"[RETRY] Clean build also failed. Proceeding with fix mode.")
 
         if not build_success and build_out:
             error_prompt = _inject_gitexplorer_results(error_prompt, build_out)
@@ -1180,7 +1205,10 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
         if build_success:
             print(f"\n[OK] Build for {spec.name} succeeded.")
         else:
-            print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ai.model}...")
+            if ctx.from_log:
+                print(f"\n[ERROR] {spec.name} failed according to {ctx.from_log}. Consulting {ai.model}...")
+            else:
+                print(f"\n[ERROR] Build for {spec.name} failed. Consulting {ai.model}...")
             if not ctx.fix_mode:
                 _err_ctx = _extract_error_context(build_out)
                 error_analysis = ai.analyze(error_prompt, f"{_err_ctx}\n\n{_sanitize_analysis_context(build_out)}" if _err_ctx else _sanitize_analysis_context(build_out), full_context, format_json=True, task="Analyzing build failure")
@@ -1224,7 +1252,8 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
                     rebuild_func = lambda p, force_clean=False: manager.run_project_build(p, preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
                 else:
                     rebuild_func = lambda p, force_clean=False: manager.run_orphan_build(preset=PRESET, dist=_DIST, stream_output=SHOW_BUILDLOG, force_clean=force_clean)
-                run_fix_loop_func(spec, pkg_name, build_out, error_prompt, rebuild_func, exit_on_no_changes=True)
+                run_fix_loop_func(spec, pkg_name, build_out, error_prompt, rebuild_func,
+                                  exit_on_no_changes=True, initial_from_log=bool(ctx.from_log))
 
     return error_prompt
 
@@ -1274,6 +1303,14 @@ def _check_arg_conflicts(parser, args):
             _fix_conflicts.append('--changelog')
         if _fix_conflicts:
             parser.error(f"--fix cannot be used with: {', '.join(_fix_conflicts)}")
+    _from_log = getattr(args, 'from_log', None)
+    if _from_log:
+        if not args.fix:
+            parser.error("--from-log requires --fix")
+        if args.update or args.update_only:
+            parser.error("--from-log cannot be used with --update/--update-only")
+        if not Path(_from_log).is_file():
+            parser.error(f"--from-log: file not found: {_from_log}")
     if args.analyze:
         _analyze_conflicts = []
         if args.update or args.update_only:
@@ -1591,6 +1628,11 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
         # This round is best-effort; an AI failure must not kill the run.
         _answer = ""
     _body = changelog_body_from_answer(_answer)
+    if release_url:
+        # The canonical single-line URL bullet is placed below; an
+        # AI-written copy — possibly wrapped, which no exact-URL check can
+        # recognize — must not remain as a duplicate.
+        _body = strip_release_notes_bullets(_body)
     if not has_changelog_version("\n".join(_body), new_version):
         print(f"[CHANGELOG] AI gave no usable entry for {new_version}.")
         return False
@@ -1743,6 +1785,7 @@ if __name__ == "__main__":
     parser.add_argument("--root", default=None, help="Root directory for pbuild (passed as --root to pbuild)")
     parser.add_argument("--show-buildlog", "-L", action="store_true", help="Show the pbuild build log output")
     parser.add_argument("--build-log", default=None, help="Write the full pbuild build log to this file")
+    parser.add_argument("--from-log", default=None, metavar="FILE", help="With --fix: skip the initial build and take the build failure from this existing log file (e.g. a saved --build-log or an OBS build log); the fix loop's verification builds still run")
     parser.add_argument("--shell-after-build", action="store_true", help="Open a shell in the build environment on failure for debugging")
     parser.add_argument("--vm-type", default=None, help="VM type for pbuild (e.g., kvm, qemu)")
     parser.add_argument("--vm-memory", default=None, help="VM memory for pbuild (e.g., 4096)")
@@ -1876,6 +1919,7 @@ if __name__ == "__main__":
         analyze_mode=args.analyze,
         max_rounds=args.max_ai_rounds,
         build_log=args.build_log,
+        from_log=args.from_log,
         program_start=time.time(),
     )
 
@@ -2298,8 +2342,15 @@ if __name__ == "__main__":
                 return True
         return False
 
-    def run_fix_loop(spec, package_name, initial_build_out, error_prompt, rebuild_func, exit_on_no_changes=False):
-        """Shared fix loop: diagnose → apply tool changes → rebuild → repeat."""
+    def run_fix_loop(spec, package_name, initial_build_out, error_prompt, rebuild_func, exit_on_no_changes=False, initial_from_log=False):
+        """Shared fix loop: diagnose → apply tool changes → rebuild → repeat.
+
+        initial_from_log marks initial_build_out as an externally provided
+        --from-log failure description: on the first pass there is no local
+        build behind it, so the no-build-log and environment-retry heuristics
+        (which detect a local pbuild that died before writing a log) must not
+        fire, and a stale local _build.* log must not replace the given text.
+        """
         MAX_ATTEMPTS = FIX_ATTEMPTS if FIX_ATTEMPTS > 0 else 999999
         unlimited = FIX_ATTEMPTS == 0
         fix_attempt = 0
@@ -2323,6 +2374,8 @@ if __name__ == "__main__":
         _file_versions = {spec.name: [_initial_spec_hash]}
         _blocked_files = set()
         _build_skill_files = set()
+        # True only for the first pass with a --from-log failure description.
+        _external_log_pass = bool(initial_from_log)
 
         def _merge_build_skills(prompt, build_out):
             """Re-evaluate skills against build output and inject AI_ERROR_PROMPT from newly-matched skills."""
@@ -2401,7 +2454,10 @@ if __name__ == "__main__":
         elif PROMPT_HINT:
             print(f"[FIX] No saved context found, but --prompt will be included in the fix context.")
         _deep_retry_ok = False
-        if DEEP_ANALYZE:
+        if DEEP_ANALYZE and initial_from_log:
+            print("[DEEP ANALYZE] Skipped with --from-log: no local build "
+                  "environment exists to investigate.")
+        elif DEEP_ANALYZE:
             _fatal_reason = _fatal_pbuild_reason(current_build_out)
             if _fatal_reason and not manager.get_build_log(package_name=spec.stem)[0]:
                 _abort_fatal_pbuild_error(_fatal_reason, ai=ai, manager=manager,
@@ -2436,9 +2492,11 @@ if __name__ == "__main__":
             if _deep_retry_ok:
                 break
             fix_attempt += 1
+            _external_log = _external_log_pass
+            _external_log_pass = False
             attempt_label = fix_attempt if not unlimited else "∞"
             print(f"\n[FIX MODE] Attempt {attempt_label}/{MAX_ATTEMPTS if not unlimited else '∞'} — Diagnosing build failure...")
-            _br = _buildroot_install_failure(spec, current_build_out, rebuild_func)
+            _br = None if _external_log else _buildroot_install_failure(spec, current_build_out, rebuild_func)
             if _br is not None:
                 if _br[0]:
                     print(f"\n[OK] Build for {spec.name} succeeded after fixing its build root packages.")
@@ -2453,7 +2511,14 @@ if __name__ == "__main__":
                     break
                 continue
             build_out_lower = current_build_out.lower()
-            if "unresolvable" in build_out_lower or "nothing provides" in build_out_lower:
+            if _external_log:
+                # --from-log pass: the provided log IS the diagnosis input.
+                # A stale local _build.* log must not replace it, and the
+                # no-local-log heuristics below do not apply to it.
+                print("[DIAG] Analyzing the failure description from --from-log "
+                      "(local build logs are ignored).")
+                error_context = current_build_out
+            elif "unresolvable" in build_out_lower or "nothing provides" in build_out_lower:
                 print("[DIAG] Missing build dependencies detected.")
                 error_context = current_build_out
             else:
@@ -2563,7 +2628,7 @@ if __name__ == "__main__":
                         _latest_analysis = error_analysis
                         print(f"\n{_color(AI_COLOR, '--- AI ERROR ANALYSIS (after deep investigation) ---')}\n{error_analysis}\n{_color(AI_COLOR, '------------------------------------------')}\n")
                         ai._write_analysis_file(error_analysis)
-            if _is_environment_error(current_build_out):
+            if _is_environment_error(current_build_out) and not _external_log:
                 print(f"[RETRY] Environment/VM issue detected. Retrying with --clean...")
                 if PROJECT_MODE:
                     _retry_ok, _retry_out = manager.run_project_build(package_name, preset=PRESET, dist=DIST, stream_output=SHOW_BUILDLOG, force_clean=True)

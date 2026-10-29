@@ -464,15 +464,47 @@ changes).
 """
 
 
+_GENERATED_FOOTER_RE = re.compile(
+    r'^\s*(?:[-*+]\s*)?Update generated using pbuild-ai\s*$', re.I)
+_RELEASE_NOTES_BULLET_RE = re.compile(
+    r'^\s*(?:[-*+]\s*)?Release notes\s*:\s*\S+\s*$', re.I)
+
+
 def _wrap_body_line(line, width=70):
     """*line* wrapped to *width* columns; continuation lines are indented to
-    the text after the leading '- ' or '  * ' marker."""
-    if len(line) <= width:
+    the text after the leading '- ' or '  * ' marker. A 'Release notes:' URL
+    line is never wrapped: breaking the URL apart makes it unclickable and
+    hides it from the duplicate check in :func:`add_release_url_bullet`."""
+    if len(line) <= width or _RELEASE_NOTES_BULLET_RE.match(line):
         return [line]
     lead = re.match(r'^\s*(?:[-*+]\s+)?', line).group(0)
     return textwrap.wrap(line[len(lead):], width=width, initial_indent=lead,
                          subsequent_indent=' ' * len(lead),
                          break_long_words=False) or [line]
+
+
+def strip_release_notes_bullets(body):
+    """Remove 'Release notes:' bullets with their wrapped continuation lines.
+
+    The caller places the one canonical single-line bullet through
+    :func:`add_release_url_bullet`; an AI-written copy — possibly wrapped,
+    which no exact-URL check can recognize — must not survive next to it.
+    """
+    out = []
+    dropping = False
+    for line in body:
+        if _RELEASE_NOTES_BULLET_RE.match(line):
+            dropping = True
+            continue
+        if dropping:
+            # A wrapped URL continues as indented, space-free fragments;
+            # prose continuations contain spaces and end the run.
+            stripped = line.strip()
+            if stripped and line[:1].isspace() and ' ' not in stripped:
+                continue
+            dropping = False
+        out.append(line)
+    return out
 
 
 def changelog_body_from_answer(text):
@@ -481,8 +513,10 @@ def changelog_body_from_answer(text):
     Keeps '- ' bullet lines and the indented lines below them, wrapped to 70
     columns.  Prose around the entry and markdown code fences are dropped;
     the body ends at the first separator line, so a repeated older entry
-    never gets in.  The '- Update generated using pbuild-ai' line is dropped
-    too, the caller appends it."""
+    never gets in.  Any 'Update generated using pbuild-ai' line is dropped —
+    in '- ' as well as in '  * ' style — the caller appends the canonical
+    footer.
+    """
     body = []
     in_bullet = False
     for line in (text or '').splitlines():
@@ -490,10 +524,12 @@ def changelog_body_from_answer(text):
         if body and _SEPARATOR_LINE_RE.match(line):
             break
         if line.startswith('- '):
-            in_bullet = line != '- Update generated using pbuild-ai'
+            in_bullet = not _GENERATED_FOOTER_RE.match(line)
             if in_bullet:
                 body.extend(_wrap_body_line(line))
         elif in_bullet and line[:1].isspace() and line.strip():
+            if _GENERATED_FOOTER_RE.match(line):
+                continue
             body.extend(_wrap_body_line(line))
         else:
             in_bullet = False

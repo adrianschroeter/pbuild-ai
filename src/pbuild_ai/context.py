@@ -56,6 +56,7 @@ class PbuildContext:
     analyze_mode: bool = False
     max_rounds: int = 15
     build_log: Optional[str] = None
+    from_log: Optional[str] = None  # --fix --from-log: failure source log file
     program_start: float = 0.0
 
     # Derived at startup

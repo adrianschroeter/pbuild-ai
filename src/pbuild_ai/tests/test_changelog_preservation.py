@@ -19,8 +19,9 @@ from pbuild_ai.skills.changelog_skill import (
     is_new_package_changes, sanitize_package_description, spec_description,
     collapse_repeated_separators, has_changelog_version, sanitize_release_notes,
     split_release_notes, versioned_release_versions,
-    release_notes_changelog_body,
+    release_notes_changelog_body, strip_release_notes_bullets,
     would_duplicate_changelog_entry, write_changelog_entry,
+    _wrap_body_line,
 )
 from pbuild_ai.pbuild_ai import _changelog_ai_round, _extract_changelog_author, _norm_ws
 
@@ -310,6 +311,67 @@ class TestChangelogAiRoundPreservesHistory(unittest.TestCase):
             path, ai, ok = self._round_url(tmp, answer, url)
             self.assertTrue(ok)
             self.assertEqual(path.read_text(encoding="utf-8").count(url), 1)
+
+    def test_long_ai_url_and_subbullet_footer_not_duplicated(self):
+        """The reported case: a >70-char 'Release notes:' bullet the model
+        wrapped by hand, plus the footer echoed as a '  * ' sub-bullet.
+        The entry must end up with exactly one single-line URL bullet and
+        one canonical footer line."""
+        url = "https://github.com/gufo-org/gufo/releases/tag/v0.34.0"
+        answer = ("- Updated to version 0.34.0\n"
+                  "  * keep prefill rows independent of the pass route (#875)\n"
+                  "  * Release notes: https://github.com/gufo-\n"
+                  "    org/gufo/releases/tag/v0.34.0\n"
+                  "  * Update generated using pbuild-ai\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ai, ok = self._round_url(tmp, answer, url)
+            self.assertTrue(ok)
+            text = path.read_text(encoding="utf-8")
+            self.assertEqual(text.count(url), 1, text)
+            self.assertEqual(text.count("Release notes:"), 1, text)
+            self.assertEqual(text.count("Update generated using pbuild-ai"), 1, text)
+            self.assertIn("\n  * Release notes: " + url + "\n", text)
+            self.assertIn("\n- Update generated using pbuild-ai\n\n", text)
+            self.assertNotIn("gufo-\n", text)  # no half URL left over
+
+
+class TestGeneratedClutterStripping(unittest.TestCase):
+    def test_long_release_notes_line_is_not_wrapped(self):
+        line = "  * Release notes: https://github.com/gufo-org/gufo/releases/tag/v0.28.1"
+        self.assertGreater(len(line), 70)
+        self.assertEqual(_wrap_body_line(line), [line])
+
+    def test_other_long_lines_still_wrap(self):
+        wrapped = _wrap_body_line("  * a very long highlight " * 5)
+        self.assertGreater(len(wrapped), 1)
+        self.assertTrue(all(len(l) <= 70 for l in wrapped))
+
+    def test_answer_footer_variants_dropped(self):
+        from pbuild_ai.skills.changelog_skill import changelog_body_from_answer
+        answer = ("- Updated to version 1.1\n"
+                  "  * Fixed a thing\n"
+                  "  * Update generated using pbuild-ai\n"
+                  "- Update generated using pbuild-ai\n")
+        body = changelog_body_from_answer(answer)
+        self.assertEqual(body, ["- Updated to version 1.1", "  * Fixed a thing"])
+
+    def test_strip_removes_wrapped_pair_keeps_prose(self):
+        body = ["- Updated to version 1.1",
+                "  * highlight text that was wrapped",
+                "    onto a continuation line",
+                "  * Release notes: https://github.com/o/",
+                "    p/releases/tag/v1.1",
+                "  * another highlight"]
+        self.assertEqual(strip_release_notes_bullets(body),
+                         ["- Updated to version 1.1",
+                          "  * highlight text that was wrapped",
+                          "    onto a continuation line",
+                          "  * another highlight"])
+
+    def test_strip_keeps_prose_mentioning_release_notes(self):
+        body = ["- Updated to version 1.1",
+                "  * Release notes: see the upstream blog for details"]
+        self.assertEqual(strip_release_notes_bullets(body), body)
 
 
 class TestChangelogVersionDetection(unittest.TestCase):

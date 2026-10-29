@@ -216,6 +216,20 @@ attempt. pbuild calculates which packages need rebuilding and only rebuilds
 changed and depending ones. When a package fails, only that one is fixed,
 then the set is built again to verify.
 
+### `--fix --from-log FILE`
+
+Fix a failure described by an existing log file instead of reproducing it
+first: the initial test build is skipped and the file — e.g. output saved
+with `--build-log`, a build log from another machine, or an OBS build log —
+becomes the failure input for the AI diagnosis and fix loop. The provided
+log is analyzed as-is: stale local `_build.*` logs are ignored and the
+"no build log / environment issue" retries never trigger a rebuild based
+on it. The loop still verifies each applied change with a real test build;
+such a build only counts as successful when it actually reached the build
+phase — pbuild exiting 0 with an empty result directory is reported as a
+failure. Requires `--fix`; cannot be combined with `--update` or
+`--update-only`.
+
 ### `--fix --prompt PROMPT`
 
 Runs a test build, and if it fails, passes your hint to AI to guide

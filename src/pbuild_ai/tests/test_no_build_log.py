@@ -142,5 +142,63 @@ class TestFixLoopNoBuildLog(unittest.TestCase):
                                f"expected a force_clean retry among builds: {clean_line[0]}")
 
 
+class TestClaimedSuccessVerification(unittest.TestCase):
+    """pbuild exiting 0 without ever reaching the build phase must not be
+    reported as a successful build (phantom success with empty results)."""
+
+    def setUp(self):
+        _yaml = types.ModuleType('yaml')
+        _yaml.YAMLError = Exception
+        sys.modules.setdefault('yaml', _yaml)
+        if SRC_DIR not in sys.path:
+            sys.path.insert(0, SRC_DIR)
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="pbuild_phantom_"))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _manager(self, build_phase_ok):
+        import subprocess as sp
+        from pbuild_ai.workspace import RpmSourceManager
+        mgr = RpmSourceManager(str(self.tmpdir))
+        mgr._run_captured = (
+            lambda cmd, cwd, stream_output=False:
+            sp.CompletedProcess(cmd, 0, "pbuild said done\n", ""))
+        mgr.build_phase_reached = lambda package_name=None: build_phase_ok
+        return mgr
+
+    def test_orphan_exit_0_without_build_phase_is_failure(self):
+        mgr = self._manager(False)
+        ok, out = mgr.run_orphan_build()
+        self.assertFalse(ok)
+        self.assertFalse(mgr.last_build_successful)
+        self.assertIn("no build phase", out.lower())
+
+    def test_orphan_exit_0_with_build_phase_is_success(self):
+        mgr = self._manager(True)
+        ok, out = mgr.run_orphan_build()
+        self.assertTrue(ok)
+        self.assertTrue(mgr.last_build_successful)
+        self.assertIn("pbuild said done", out)
+
+    def test_project_exit_0_without_build_phase_is_failure(self):
+        mgr = self._manager(False)
+        ok, out = mgr.run_project_build("testpkg")
+        self.assertFalse(ok)
+        self.assertFalse(mgr.last_build_successful)
+        self.assertIn("no build phase", out.lower())
+
+    def test_empty_build_dir_after_exit_0_is_failure(self):
+        """The reported scenario: _build.<dist>.x86_64 exists but is empty."""
+        (self.tmpdir / "_build.tumbleweed.x86_64").mkdir()
+        from pbuild_ai.workspace import RpmSourceManager
+        mgr = self._manager(True)  # the stub would claim success…
+        # …but the real build_phase_reached sees the empty result dir.
+        mgr.build_phase_reached = RpmSourceManager(str(self.tmpdir)).build_phase_reached
+        ok, out = mgr.run_orphan_build()
+        self.assertFalse(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

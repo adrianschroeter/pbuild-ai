@@ -397,6 +397,143 @@ class TestAnalyzeConflicts(unittest.TestCase):
                 self.assertIsNone(self._check(argv))
 
 
+class TestFromLogBuildGuard(unittest.TestCase):
+    """--fix --from-log: skip the initial build and fix from the given log."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="pbuild_fromlog_test_"))
+        self.spec_path = self.tmpdir / "testpkg.spec"
+        self.spec_path.write_text("Name: testpkg\nVersion: 1.0\n\n%description\nTest.\n")
+        self.log_path = self.tmpdir / "build.log"
+        self.log_path.write_text("[ 42s] error: cc: foo.c: undefined reference to 'bar'\n")
+
+        self.manager = MagicMock()
+        self.manager.run_orphan_build.side_effect = AssertionError("pbuild must not be called")
+        self.manager.run_project_build.side_effect = AssertionError("pbuild must not be called")
+
+        self.ai = MagicMock()
+        self.ai.model = "test-model"
+
+        self.ctx = PbuildContext(
+            workspace_dir=str(self.tmpdir),
+            fix_mode=True,
+            update_version=None,
+            project_mode=False,
+            from_log=str(self.log_path),
+        )
+        self.run_fix_loop = MagicMock()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_initial_build_skipped_and_log_passed_to_fix_loop(self):
+        _run_build_guard(
+            self.spec_path, self.manager, self.ai, "full_context",
+            "error prompt", self.ctx, 100.0, self.run_fix_loop,
+        )
+        self.manager.run_orphan_build.assert_not_called()
+        self.manager.run_project_build.assert_not_called()
+        self.run_fix_loop.assert_called_once()
+        call_args = self.run_fix_loop.call_args[0]
+        self.assertEqual(call_args[0], self.spec_path)
+        self.assertEqual(call_args[1], "testpkg")
+        self.assertIn("undefined reference", call_args[2])
+        self.assertTrue(self.run_fix_loop.call_args.kwargs.get("initial_from_log"),
+                        "the fix loop must know the initial output is an external log")
+
+    def test_incomplete_setup_in_log_does_not_trigger_rebuild(self):
+        """A local --clean retry makes no sense for an externally given log."""
+        self.log_path.write_text("It seems that there was an incomplete setup of /var/tmp/build.root\n")
+        _run_build_guard(
+            self.spec_path, self.manager, self.ai, "full_context",
+            "error prompt", self.ctx, 100.0, self.run_fix_loop,
+        )
+        self.manager.run_orphan_build.assert_not_called()
+        self.manager.run_project_build.assert_not_called()
+        self.run_fix_loop.assert_called_once()
+
+    def test_build_phase_retry_not_triggered_for_log(self):
+        """build_phase_reached (a local pbuild concept) must not be consulted."""
+        self.manager.build_phase_reached.side_effect = AssertionError("must not be consulted")
+        _run_build_guard(
+            self.spec_path, self.manager, self.ai, "full_context",
+            "error prompt", self.ctx, 100.0, self.run_fix_loop,
+        )
+        self.run_fix_loop.assert_called_once()
+
+    def test_empty_log_aborts(self):
+        self.log_path.write_text("  \n")
+        with self.assertRaises(SystemExit) as cm:
+            _run_build_guard(
+                self.spec_path, self.manager, self.ai, "full_context",
+                "error prompt", self.ctx, 100.0, self.run_fix_loop,
+            )
+        self.assertEqual(cm.exception.code, 1)
+        self.run_fix_loop.assert_not_called()
+
+
+class TestFromLogConflicts(unittest.TestCase):
+    """--from-log requires --fix, a readable file, and no --update."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="pbuild_fromlog_conf_"))
+        self.log = self.tmpdir / "build.log"
+        self.log.write_text("error: boom\n")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _check(self, argv):
+        import argparse, io
+        parser = argparse.ArgumentParser(description="RPM packager helper")
+        parser.add_argument("workspace_dir")
+        parser.add_argument("--analyze", "-a", action="store_true")
+        parser.add_argument("--fix", "-f", action="store_true")
+        parser.add_argument("--update", "-u", action="store_true")
+        parser.add_argument("--update-only", action="store_true")
+        parser.add_argument("--changelog", action="store_true")
+        parser.add_argument("--generate", default=None)
+        parser.add_argument("--create", "-c", default=None)
+        parser.add_argument("--modify", "-m", default=None)
+        parser.add_argument("--from-log", default=None)
+        stderr_buf = io.StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = stderr_buf
+        try:
+            args = parser.parse_args(argv)
+            _check_arg_conflicts(parser, args)
+            return None
+        except SystemExit:
+            return stderr_buf.getvalue()
+        finally:
+            sys.stderr = old_stderr
+
+    def test_requires_fix(self):
+        msg = self._check(["--from-log", str(self.log), "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--from-log requires --fix", msg)
+
+    def test_conflicts_with_update(self):
+        msg = self._check(["--fix", "--update", "--from-log", str(self.log), "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--from-log cannot be used with --update", msg)
+
+    def test_conflicts_with_update_only(self):
+        msg = self._check(["--fix", "--update-only", "--from-log", str(self.log), "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("--from-log cannot be used with --update", msg)
+
+    def test_missing_file(self):
+        msg = self._check(["--fix", "--from-log", str(self.tmpdir / "nope.log"), "/tmp/d"])
+        self.assertIsNotNone(msg)
+        self.assertIn("file not found", msg)
+
+    def test_valid_combo(self):
+        self.assertIsNone(self._check(["--fix", "--from-log", str(self.log), "/tmp/d"]))
+
+
 class TestUpdateHints(unittest.TestCase):
     """Test _check_update_hints: detects [REBUILD: pkg] and cross-package spec edits."""
 

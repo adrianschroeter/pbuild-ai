@@ -295,8 +295,16 @@ class RpmSourceManager:
             elapsed = time.time() - t0
             self.pbuild_calls += 1
             self.pbuild_time += elapsed
+            tail = "\n".join(result.stdout.strip().split('\n')[-50:])
+            if not self.build_phase_reached():
+                self.last_build_successful = False
+                print("[BUILD] pbuild exited 0 but no build phase was found in the "
+                      "result directory — treating the build as failed.")
+                return False, (tail + "\n\n[WARN] pbuild exited 0 but reached no build "
+                               "phase (the _build.* result dir holds no log) — no "
+                               "RPMs were built.")
             self.last_build_successful = True
-            return True, "\n".join(result.stdout.strip().split('\n')[-50:])
+            return True, tail
         except subprocess.CalledProcessError as e:
             elapsed = time.time() - t0
             self.pbuild_calls += 1
@@ -447,8 +455,16 @@ class RpmSourceManager:
             elapsed = time.time() - t0
             self.pbuild_calls += 1
             self.pbuild_time += elapsed
+            tail = "\n".join(result.stdout.strip().split('\n')[-50:])
+            if not self.build_phase_reached(package_name=package_name):
+                self.last_build_successful = False
+                print("[BUILD] pbuild exited 0 but no build phase was found in the "
+                      "result directory — treating the build as failed.")
+                return False, (tail + "\n\n[WARN] pbuild exited 0 but reached no build "
+                               "phase (the _build.* result dir holds no log) — no "
+                               "RPMs were built.")
             self.last_build_successful = True
-            return True, "\n".join(result.stdout.strip().split('\n')[-50:])
+            return True, tail
         except subprocess.CalledProcessError as e:
             elapsed = time.time() - t0
             self.pbuild_calls += 1
