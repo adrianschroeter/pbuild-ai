@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -225,6 +226,51 @@ class TestReleaseNotesUrl(unittest.TestCase):
         self.assertEqual(out[3], "  * Release notes: u")
         self.assertEqual(add_release_url_bullet(out, "u"), out)
         self.assertEqual(add_release_url_bullet(body, ""), body)
+
+
+class TestServiceFileProjectUrl(unittest.TestCase):
+    SERVICE_XML = ('<services>\n'
+                   '  <service name="tar_scm" mode="manual">\n'
+                   '    <param name="scm">git</param>\n'
+                   '    <param name="url">https://github.com/pytorch/pytorch</param>\n'
+                   '    <param name="revision">v2.14.0</param>\n'
+                   '  </service>\n'
+                   '</services>\n')
+
+    def _pkg(self, name, url):
+        tmp = tempfile.mkdtemp(prefix="pbuild_service_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with open(os.path.join(tmp, name), "w") as f:
+            f.write(self.SERVICE_XML.replace("https://github.com/pytorch/pytorch", url))
+        return tmp
+
+    def test_forge_url_from_service_file(self):
+        urls = pa._forge_urls_from_service_files(
+            self._pkg("_service", "https://github.com/pytorch/pytorch"))
+        self.assertEqual(urls, ["https://github.com/pytorch/pytorch"])
+
+    def test_dot_service_file_and_non_forge(self):
+        self.assertEqual(
+            pa._forge_urls_from_service_files(
+                self._pkg(".service", "https://gitlab.com/o/p")),
+            ["https://gitlab.com/o/p"])
+        self.assertEqual(
+            pa._forge_urls_from_service_files(
+                self._pkg("_service", "https://code.example.org/o/p")), [])
+        self.assertEqual(pa._forge_urls_from_service_files(None), [])
+
+    def test_release_notes_via_service_url(self):
+        tmp = self._pkg("_service", "https://github.com/pytorch/pytorch")
+        spec = ("Name: python-torch\nVersion: 2.15.0\nURL: https://pytorch.org\n"
+                "Source0: pytorch-v%{version}.tar.gz\n")
+        releases = [{"tag_name": "v2.15.0", "body": "* big",
+                     "html_url": "https://github.com/pytorch/pytorch/releases/tag/v2.15.0"}]
+        resp = io.BytesIO(json.dumps(releases).encode())
+        with patch.object(pa.urllib.request, "urlopen", return_value=resp) as m:
+            notes, url = pa._upstream_release_notes(spec, "2.14.1", "2.15.0", tmp)
+        self.assertIn("repos/pytorch/pytorch/releases", m.call_args[0][0].full_url)
+        self.assertIn("## 2.15.0", notes)
+        self.assertEqual(url, "https://github.com/pytorch/pytorch/releases/tag/v2.15.0")
 
 
 class TestReleaseHtmlUrl(unittest.TestCase):
