@@ -15,6 +15,7 @@ Mon Jun 29 12:00:00 UTC 2026 - pbuild-ai <email@suse.de>
 
 - Updated to version 1.2.3
   * upstream changelog details here
+  * Release notes: https://github.com/acme/foo/releases/tag/1.2.3
 - Updated to version 1.2.2
   * upstream changelog details here
 - Remove old-patch.patch (upstream applied the fix)
@@ -35,7 +36,11 @@ Tue Nov  8 10:21:12 UTC 2022 - Previous Author <email>
   the package and must never show up as bullets or sub-bullets.
 - Keep every line of an entry at most 70 characters wide (the format is
   column-based and diffs stay readable). Wrap long bullets onto continuation
-  lines indented with `  ` rather than exceeding 70 chars.
+  lines indented with `  ` rather than exceeding 70 chars. A
+  `Release notes:` URL line is the exception: keep the URL on a single line
+  and never break it apart.
+- When a release-notes URL is given, add `  * Release notes: <url>` as the
+  last sub-bullet of the newest version's group.
 - Do NOT end your new entry with a `---` separator line: exactly one `---`
   line separates two entries, and the older entry below already begins with
   its own. Two consecutive `---` lines are invalid.
@@ -88,6 +93,10 @@ def split_release_notes(notes):
 # A version/date title line such as '0.8.0 (2026-10-05)' or 'v1.2 - 2026-01-02'.
 _VERSION_HEADING_LINE_RE = re.compile(r'^\[?v?\d+(\.\d+)+\]?(\s*[-(:]?\s*\d{4}-\d\d-\d\d\)?)?\s*$')
 
+# A table-of-contents line linking to an anchor on the same page
+# ('- [Highlights](#highlights)'): navigation, not a change.
+_ANCHOR_LINK_LINE_RE = re.compile(r'^\s*(?:[-*+]\s*)?\[[^\]]*\]\(\s*#[^)]*\)\s*$', re.M)
+
 
 _RST_UNDERLINE_RE = re.compile(r'^\s*([=\-~^*#+"])\1{2,}\s*$')
 
@@ -117,6 +126,48 @@ def _notes_items(text):
     return items
 
 
+def clean_release_notes_body(text):
+    """Flatten raw upstream release notes *before* they are truncated.
+
+    Large GitHub release bodies (e.g. PyTorch) start with a table of
+    contents and keep their highlights in HTML tables; cutting such a body
+    from the head would leave nothing but the TOC.  This drops anchor-only
+    TOC lines and flattens HTML (block-level tags become line breaks) so the
+    leading part of the text already carries the real changes."""
+    if not text:
+        return ''
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.I)
+    text = re.sub(r'</t[dh]>', ' ', text, flags=re.I)
+    text = re.sub(r'</?(?:p|div|tr|table|ul|ol|li|h\d|blockquote)[^>]*>', '\n',
+                  text, flags=re.I)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = _ANCHOR_LINK_LINE_RE.sub('', text)
+    return re.sub(r'\n{3,}', '\n\n', text).strip()
+
+
+def release_notes_url_bullet(url):
+    """The ``  * Release notes: <url>`` sub-bullet; the URL stays on one
+    line so it remains clickable in the .changes file."""
+    return f'  * Release notes: {str(url).strip()}'
+
+
+def add_release_url_bullet(body, url):
+    """Insert :func:`release_notes_url_bullet` at the end of the first
+    (newest version) bullet group of *body*; *body* is returned unchanged
+    when *url* is empty or already present."""
+    if not url or any(str(url) in line for line in body):
+        return body
+    out = list(body)
+    i = 0
+    if out and out[0].startswith('- '):
+        i = 1
+        while i < len(out) and out[i][:1].isspace():
+            i += 1
+    out.insert(i, release_notes_url_bullet(url))
+    return out
+
+
 def _sanitize_notes_text(text, limit, max_chars_per_line=300):
     """Turn one block of upstream release notes into at most *limit* plain
     lines: HTML/markdown/RST markup, links, headings and boilerplate are
@@ -124,6 +175,7 @@ def _sanitize_notes_text(text, limit, max_chars_per_line=300):
     if not text:
         return []
     text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
+    text = _ANCHOR_LINK_LINE_RE.sub('', text)
     text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', text)
     text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
@@ -145,7 +197,7 @@ def _sanitize_notes_text(text, limit, max_chars_per_line=300):
         if low.startswith(('http://', 'https://', '#')):
             continue
         if low.startswith(("what's changed", "what's new", "release notes", "changelog", "highlight",
-                           "full changelog")):
+                           "full changelog", "for more details", "below are the full")):
             continue
         if _VERSION_HEADING_LINE_RE.match(line) or re.match(r'(?i)no (functional )?changes since', line):
             continue
@@ -176,7 +228,7 @@ def sanitize_release_notes(notes, max_bullets=4, max_chars_per_line=120):
 
 def release_notes_changelog_body(new_version, old_version, notes,
                                  existing_content='', max_bullets=8,
-                                 max_bullets_per_release=5):
+                                 max_bullets_per_release=5, release_url=None):
     """Build the ``- Updated to version X`` groups of a .changes entry body.
 
     The first group is always *new_version*.  When *notes* carry
@@ -184,7 +236,9 @@ def release_notes_changelog_body(new_version, old_version, notes,
     *old_version* and *new_version*, each of those gets its own group below,
     newest first, so the entry records the whole jump.  Releases already
     recorded in *existing_content* (an earlier, unfinished update) and
-    *old_version* itself are skipped.
+    *old_version* itself are skipped.  *release_url* adds a
+    ``  * Release notes: <url>`` sub-bullet to the newest group, so the
+    entry always points at the full upstream notes.
     """
     sections = split_release_notes(notes)
     new_clean = _clean_version(new_version)
@@ -201,6 +255,8 @@ def release_notes_changelog_body(new_version, old_version, notes,
     per_release = max_bullets if not intermediate else max_bullets_per_release
     body = [f'- Updated to version {new_version}']
     body.extend(_bullet_lines(_sanitize_notes_text('\n'.join(new_texts), per_release)))
+    if release_url:
+        body.append(release_notes_url_bullet(release_url))
     for version, text in reversed(intermediate):
         body.append(f'- Updated to version {_clean_version(version)}')
         body.extend(_bullet_lines(_sanitize_notes_text(text, per_release)))
@@ -445,7 +501,7 @@ def changelog_body_from_answer(text):
 
 
 def write_changelog_entry(changes_path, old_version, new_version, email_author, release_notes=None,
-                          package_description=None):
+                          package_description=None, release_url=None):
     """Prepend a deterministic changelog entry to a .changes file.
     When release_notes is provided, its leading content is added as sub-bullets
     under the version line.  Multi-version notes (with ``## <version>``
@@ -453,6 +509,8 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
     first (see release_notes_changelog_body).
     Without *old_version* and without any existing entry the package is new:
     the entry says 'Initial package' followed by *package_description*.
+    *release_url* adds a 'Release notes:' link to the newest version group
+    even when no release-note text was found.
     Returns True if the entry was written, False if the file already had a
     changelog entry for this version (skipped to avoid duplicates).
     """
@@ -463,7 +521,8 @@ def write_changelog_entry(changes_path, old_version, new_version, email_author, 
         body = new_package_changelog_body(changes_path.stem, new_version, package_description or '')
     else:
         body = release_notes_changelog_body(new_version, old_version, release_notes,
-                                            existing_content=_existing)
+                                            existing_content=_existing,
+                                            release_url=release_url)
         body.append('- Update generated using pbuild-ai')
     entry = (
         changelog_entry_header(email_author)

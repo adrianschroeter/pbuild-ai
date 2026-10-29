@@ -76,6 +76,7 @@ from pbuild_ai.skills.changelog_skill import (
     is_new_package_changes, sanitize_package_description, spec_description,
     last_changelog_version, changelog_versions, CHANGELOG_BODY_PROMPT,
     changelog_body_from_answer, changelog_entry_header,
+    add_release_url_bullet, clean_release_notes_body,
 )
 from pbuild_ai.skills.version_research_skill import VERSION_RESEARCH_SYSTEM_PROMPT, VERSION_RESEARCH_TASK_PROMPT, VERSION_UPDATE_SYSTEM_PROMPT, VERSION_UPDATE_TASK_PROMPT, POST_UPDATE_CHECK_PROMPT
 from pbuild_ai.generate_mode import run_generate_mode
@@ -569,7 +570,9 @@ def _notes_from_releases(releases, current_version, body_key, max_version=None):
     Returns ``(latest_version, notes)`` where ``latest_version`` is the newest
     stable tag (prereleases and drafts are skipped) in the list and ``notes``
     is ``## <version>``-labelled blocks (or ''). Releases newer than
-    ``max_version`` are left out of the notes.
+    ``max_version`` are left out of the notes. Bodies are flattened with
+    :func:`clean_release_notes_body` *before* the budget cut so a huge body
+    with a leading table of contents still contributes its highlights.
     """
     latest = ''
     parts = []
@@ -589,7 +592,7 @@ def _notes_from_releases(releases, current_version, body_key, max_version=None):
             continue
         if max_version and _parse_version(tag) > _parse_version(max_version):
             continue
-        parts.append((tag, (rel.get(body_key) or "").strip()))
+        parts.append((tag, clean_release_notes_body(rel.get(body_key) or "")))
     # Every release gets its share of the budget; cutting the joined text
     # would drop the notes of the target release, which come last.
     share = 10000 // max(len(parts), 1)
@@ -604,14 +607,32 @@ def _upstream_release_notes(spec_text, old_version, new_version, spec_dir=None):
 
     The project is taken from the main Source URL or the URL: tag, whichever
     is on GitHub or gitlab.com. Without notes there, the changelog file in
-    the new source archive next to the spec (*spec_dir*) is used. Returns ''
-    when nothing is found."""
-    notes = _api_release_notes(spec_text, old_version, new_version)
+    the new source archive next to the spec (*spec_dir*) is used. Returns
+    ``(notes, release_url)``; *release_url* is the upstream release page for
+    *new_version* ('' when unknown), so a .changes entry can always link to
+    the full notes even when no note text was found."""
+    notes, url = _api_release_notes(spec_text, old_version, new_version)
     if not notes and spec_dir:
         notes = archive_release_notes(spec_dir, old_version, new_version)
     if not notes:
         print(f"[CHANGELOG] No upstream release notes found for {old_version} -> {new_version}.")
-    return notes
+    return notes, url
+
+
+def _release_html_url(releases, version):
+    """The release page URL of *version* in a GitHub/GitLab releases list
+    ('' when the list has no entry for it). Tags match with or without a
+    leading 'v'."""
+    clean = str(version or '').lstrip('v')
+    if not clean:
+        return ''
+    for rel in releases or []:
+        if not isinstance(rel, dict):
+            continue
+        tag = str(rel.get('tag_name') or rel.get('name') or '').lstrip('v')
+        if tag == clean and rel.get('html_url'):
+            return str(rel['html_url'])
+    return ''
 
 
 def _api_release_notes(spec_text, old_version, new_version):
@@ -637,16 +658,23 @@ def _api_release_notes(spec_text, old_version, new_version):
         body_key = "description"
     else:
         print("[CHANGELOG] No GitHub/GitLab project URL in the spec.")
-        return ''
+        return '', ''
     try:
         with urllib.request.urlopen(urllib.request.Request(api, headers=headers), timeout=10) as resp:
             data = json.loads(resp.read())
     except Exception as e:
         status = getattr(e, 'code', None) or getattr(e, 'status', None) or type(e).__name__
         print(f"[CHANGELOG] Fetching release notes ({api}) failed: {status}.")
-        return ''
-    return _notes_from_releases(data if isinstance(data, list) else [],
-                                old_version, body_key, max_version=new_version)[1]
+        return '', ''
+    releases = data if isinstance(data, list) else []
+    notes = _notes_from_releases(releases, old_version, body_key, max_version=new_version)[1]
+    url = _release_html_url(releases, new_version)
+    if not url:
+        # No release entry for that version (yanked, unreleased or beyond the
+        # fetched page): at least link the project's releases page.
+        url = (f'https://github.com/{gh.group(1)}/releases' if gh
+               else f'https://gitlab.com/{gl.group(1)}/-/releases')
+    return notes, url
 
 
 def _extract_spec_version(spec_path: Path) -> str | None:
@@ -1318,7 +1346,8 @@ def _extract_changelog_author(changes_text):
 
 
 def _changelog_ai_round(ai, changes_path, old_version, new_version,
-                        release_notes, email_author, manager, skill_manager=None):
+                        release_notes, email_author, manager, skill_manager=None,
+                        release_url=None):
     """Let the AI write the text of the .changes entry for a version bump.
 
     The AI gets a short, single-purpose prompt (release notes + the current
@@ -1327,7 +1356,10 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
     prepends the entry, so the AI can never alter or drop older entries in
     this step.  (Older entries can still be fixed with edit_file in the
     other modes.)  A non-existent .changes file skips the AI entirely — the
-    deterministic path creates it.
+    deterministic path creates it.  An answer without any highlights while
+    *release_notes* carry content is rejected so the caller falls back to
+    the deterministic enriched entry instead of writing a bare version line.
+    *release_url* guarantees a 'Release notes:' link in the entry.
 
     Returns True when the entry was added; False when the AI gave no usable
     body.  Never raises — on any failure the caller falls back to the
@@ -1361,7 +1393,10 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
         "sub-bullets, newest first, per the skill rules above. Never add a "
         "version line without highlights from the notes, and never invent "
         "highlights. Never prefix sub-bullets with a version ('  * 1.2.3: ...').\n\n"
-        "Upstream release notes (sections are labeled with the release "
+        + (f"Always include the sub-bullet '  * Release notes: {release_url}' "
+           f"as the last sub-bullet of the '- Updated to version {new_version}' "
+           "group; keep the URL on a single line.\n\n" if release_url else "")
+        + "Upstream release notes (sections are labeled with the release "
         f"version):\n\n{_notes}\n\n"
         f"Current {changes_path.name} (head, for style only — do not repeat "
         f"it):\n\n{_before[:2500]}\n"
@@ -1380,6 +1415,12 @@ def _changelog_ai_round(ai, changes_path, old_version, new_version,
     if set(changelog_versions("\n".join(_body))) & set(changelog_versions(_before)):
         print("[CHANGELOG] AI entry repeats versions of older entries; not used.")
         return False
+    if (release_notes or "").strip() and not any(
+            line.lstrip().startswith('*') for line in _body):
+        print("[CHANGELOG] AI entry has no highlights despite release notes; "
+              "using the deterministic entry instead.")
+        return False
+    _body = add_release_url_bullet(_body, release_url)
     _body.append("- Update generated using pbuild-ai")
     _entry = changelog_entry_header(email_author) + "\n" + "\n".join(_body) + "\n\n"
     show_diff(_before, _entry + _before, changes_path, prefix="[CHANGELOG]")
@@ -2827,13 +2868,13 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     # one, as the --update-only version bump does.
                     print(f"[CHANGELOG] {_changes_path.name} ends at {_last}, collecting "
                           f"upstream release notes up to {_version}...")
-                    _notes = _upstream_release_notes(_spec_text, _last, _version, _spec.parent)
+                    _notes, _url = _upstream_release_notes(_spec_text, _last, _version, _spec.parent)
                     _ok = _notes and _changelog_ai_round(
                         ai, _changes_path, _last, _version, _notes, _email, manager,
-                        skill_manager=skill_manager)
+                        skill_manager=skill_manager, release_url=_url)
                     if not _ok:
                         write_changelog_entry(_changes_path, _last, _version, _email,
-                                              release_notes=_notes)
+                                              release_notes=_notes, release_url=_url)
                     print(f"[CHANGELOG] Added entry for {_spec.stem} ({_last} -> {_version}).")
                 elif write_changelog_entry(_changes_path, "", _version, _email,
                                            package_description=_description):
@@ -2946,6 +2987,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             print(f"[UPDATE] Skill {getattr(_s, 'SKILL_NAME', _s.__name__)} "
                                   f"snapshot failed: {_e}")
                 _release_notes = ""
+                _release_url = ""
                 _prefetched_context = ""
                 # Needed with and without --update-version (update prompt).
                 _current_v_match = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
@@ -3028,6 +3070,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                         _current_version, "body")
                                     if _notes:
                                         _release_notes = _notes
+                                    _release_url = _release_url or _release_html_url(_data, _latest)
                                     _prefetched_data[_github_api_url] = json.dumps(_prefetch_summary(_data), indent=2)[:2000]
                                     if _latest and _current_version and _latest == _current_version:
                                         print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
@@ -3055,6 +3098,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                         _current_version, "description")
                                     if _notes:
                                         _release_notes = _notes
+                                    _release_url = _release_url or _release_html_url(_data, _latest)
                                     _prefetched_data[_gl_api_url] = json.dumps(_prefetch_summary(_data), indent=2)[:2000]
                                     if _latest and _current_version and _latest == _current_version:
                                         print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
@@ -3130,7 +3174,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     target_version = _v
                                     _body = _data.get("body") or _data.get("description") or "" if isinstance(_data, dict) else ""
                                     if _body:
-                                        _release_notes = _body[:10000]
+                                        _release_notes = clean_release_notes_body(_body)[:10000]
+                                    if isinstance(_data, dict) and _data.get("html_url"):
+                                        _release_url = _release_url or str(_data["html_url"])
                                     print(f"[UPDATE] Found latest version {target_version} via research results for {spec.name}.")
                                     break
                         if _skip_spec:
@@ -3590,8 +3636,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     if not _release_notes:
                         # The version may have come from another API (PyPI,
                         # ...); the release notes still live on GitHub/GitLab.
-                        _release_notes = _upstream_release_notes(
+                        _release_notes, _refetched_url = _upstream_release_notes(
                             spec_before_update, _old_v.group(1), _new_v.group(1), spec.parent)
+                        if _refetched_url:
+                            _release_url = _refetched_url
                     _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''
                     _changelog_restored = False
                     if (_changes_after != _changes_before_text
@@ -3616,14 +3664,14 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         if _changelog_ai_round(
                                 ai, _changes_file, _old_v.group(1), _new_v.group(1),
                                 _release_notes, email_author, manager,
-                                skill_manager=ctx.skill_manager):
+                                skill_manager=ctx.skill_manager, release_url=_release_url):
                             _changes_after = manager.read_file_safe(_changes_file)
                     if _changelog_restored or _changes_after == _changes_before_text:
                         # Deterministic fallback: enriched from release notes
                         if write_changelog_entry(
                                 _changes_file, _old_v.group(1),
                                 _new_v.group(1), email_author,
-                                release_notes=_release_notes):
+                                release_notes=_release_notes, release_url=_release_url):
                             print(f"[UPDATE] Added changelog entry for "
                                   f"{_old_v.group(1)} -> {_new_v.group(1)}.")
                     if not _dl_failed:

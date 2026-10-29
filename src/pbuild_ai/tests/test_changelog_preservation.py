@@ -273,6 +273,44 @@ class TestChangelogAiRoundPreservesHistory(unittest.TestCase):
             self.assertIn("former releases", ai.context)
             self.assertIn("old version", ai.context)
 
+    def test_bare_version_line_rejected_when_notes_present(self):
+        """A model that ignores the notes must not produce a bare entry; the
+        caller falls back to the deterministic enriched one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ai, ok = self._round(tmp, "- Updated to version 0.34.0\n")
+            self.assertFalse(ok)
+            self.assertEqual(path.read_text(encoding="utf-8"), OLDER_ENTRIES)
+
+    def _round_url(self, tmp, answer, url):
+        path = Path(tmp) / "ollama.changes"
+        path.write_text(OLDER_ENTRIES, encoding="utf-8")
+        manager = _FakeManager({str(path): OLDER_ENTRIES})
+        ai = _FakeAI(answer)
+        ok = _changelog_ai_round(
+            ai, path, "0.33.1", "0.34.0", "Some release notes",
+            "Maintainer <maint@opensuse.org>", manager, release_url=url)
+        return path, ai, ok
+
+    def test_release_url_bullet_appended_when_ai_omits_it(self):
+        url = "https://github.com/o/p/releases/tag/v0.34.0"
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ai, ok = self._round_url(
+                tmp, "- Updated to version 0.34.0\n  * Fixed the crash\n", url)
+            self.assertTrue(ok)
+            self.assertIn(f"Release notes: {url}", ai.context)
+            text = path.read_text(encoding="utf-8")
+            self.assertEqual(text.count(url), 1)
+            self.assertLess(text.index("* Fixed the crash"),
+                            text.index("Release notes:"))
+
+    def test_release_url_from_ai_not_duplicated(self):
+        url = "https://github.com/o/p/releases/tag/v0.34.0"
+        answer = f"- Updated to version 0.34.0\n  * Fixed the crash\n  * Release notes: {url}\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ai, ok = self._round_url(tmp, answer, url)
+            self.assertTrue(ok)
+            self.assertEqual(path.read_text(encoding="utf-8").count(url), 1)
+
 
 class TestChangelogVersionDetection(unittest.TestCase):
     def test_has_version_matches_native_and_canonical_styles(self):
