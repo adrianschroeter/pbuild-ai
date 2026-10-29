@@ -1366,5 +1366,102 @@ class TestApplyPatch(unittest.TestCase):
         self.assertIn("missing 'diff'", results[0])
 
 
+class TestRemovedPatchHint(unittest.TestCase):
+    """Dropping a Patch: line hints to delete the file and document it."""
+
+    SPEC = ("Name:           foo\n"
+            "Version:        1.0\n"
+            "Release:        0\n"
+            "Summary:        Test package\n"
+            "License:        MIT\n"
+            "\n"
+            "Patch0:         fix-crash.patch\n"
+            "\n"
+            "%description\n"
+            "A test package.\n")
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="pbuild_test_")
+        self.ws = Path(self.tmpdir).resolve()
+        self.manager = RpmSourceManager(str(self.ws))
+        (self.ws / "foo.spec").write_text(self.SPEC)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _spec_without_patch_line(self):
+        return self.SPEC.replace("Patch0:         fix-crash.patch\n", "")
+
+    def test_edit_file_removed_patch_line_hints(self):
+        (self.ws / "fix-crash.patch").write_text("--- a\n+++ b\n")
+        results = execute_tool_calls(
+            [("edit_file", {"path": "foo.spec",
+                            "old_string": "Patch0:         fix-crash.patch\n",
+                            "new_string": ""})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Edited foo.spec", results[0])
+        self.assertIn("fix-crash.patch", results[0])
+        self.assertIn("remove_file", results[0])
+        self.assertIn(".changes", results[0])
+
+    def test_write_file_removed_patch_line_hints(self):
+        (self.ws / "fix-crash.patch").write_text("--- a\n+++ b\n")
+        results = execute_tool_calls(
+            [("write_file", {"path": "foo.spec", "content": self._spec_without_patch_line()})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Wrote foo.spec", results[0])
+        self.assertIn("Still on disk: fix-crash.patch", results[0])
+
+    def test_apply_patch_removed_patch_line_hints(self):
+        (self.ws / "fix-crash.patch").write_text("--- a\n+++ b\n")
+        diff = "@@ -7,1 +6,0 @@\n-Patch0:         fix-crash.patch"
+        results = execute_tool_calls(
+            [("apply_patch", {"path": "foo.spec", "diff": diff})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertIn("Patched foo.spec", results[0])
+        self.assertIn("fix-crash.patch", results[0])
+
+    def test_hint_silent_when_file_gone_and_changes_mentions_patch(self):
+        (self.ws / "foo.changes").write_text(
+            "Wed Oct 28 2026 - dev@example.com\n"
+            "- Update to 1.1\n"
+            "  * Remove fix-crash.patch (fixed upstream)\n")
+        results = execute_tool_calls(
+            [("edit_file", {"path": "foo.spec",
+                            "old_string": "Patch0:         fix-crash.patch\n",
+                            "new_string": ""})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(results, ["OK: Edited foo.spec"])
+
+    def test_hint_silent_when_patch_line_kept(self):
+        (self.ws / "fix-crash.patch").write_text("--- a\n+++ b\n")
+        results = execute_tool_calls(
+            [("edit_file", {"path": "foo.spec", "old_string": "Version:        1.0",
+                            "new_string": "Version:        1.1"})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("[pbuild-ai]", results[0])
+
+    def test_hint_only_for_spec_files(self):
+        (self.ws / "notes.txt").write_text("Patch0:         fix-crash.patch\ntext\n")
+        (self.ws / "fix-crash.patch").write_text("--- a\n+++ b\n")
+        results = execute_tool_calls(
+            [("edit_file", {"path": "notes.txt",
+                            "old_string": "Patch0:         fix-crash.patch\n",
+                            "new_string": ""})],
+            self.manager, str(self.ws),
+        )
+        self.assertEqual(results, ["OK: Edited notes.txt"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -678,6 +678,45 @@ def _report_snapshot_changes(before, dirs, prefix="[TOOL]"):
     return changed
 
 
+_PATCH_LINE_RE = re.compile(r'^\s*Patch\d*\s*:\s*(\S+)', re.MULTILINE)
+
+
+def _spec_patch_refs(text):
+    """Set of file names referenced by Patch/PatchN: lines in a spec file."""
+    return {m.group(1) for m in _PATCH_LINE_RE.finditer(text)}
+
+
+def _patch_removal_hint(old_text, new_text, spec_path):
+    """Return a hint appended to the tool result when Patch: lines vanished.
+
+    openSUSE policy: a removed patch must also be deleted from disk and the
+    .changes entry must name the exact patch filename with a reason. Neither
+    is enforced mechanically here — the hint reminds the AI to do both."""
+    if spec_path.suffix != '.spec':
+        return ""
+    dropped = sorted(_spec_patch_refs(old_text) - _spec_patch_refs(new_text))
+    if not dropped:
+        return ""
+    orphans = [n for n in dropped if (spec_path.parent / Path(n).name).is_file()]
+    changes_text = ""
+    for cf in spec_path.parent.glob("*.changes"):
+        try:
+            changes_text += cf.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+    unmentioned = [n for n in dropped if Path(n).name not in changes_text]
+    if not orphans and not unmentioned:
+        return ""
+    msg = f"\n[pbuild-ai] Patch reference(s) removed from {spec_path.name}: {', '.join(dropped)}."
+    if orphans:
+        msg += (f" Still on disk: {', '.join(orphans)} — these orphaned patch files must be "
+                "deleted with remove_file as well.")
+    if unmentioned:
+        msg += (f" openSUSE policy: the .changes entry must name {', '.join(unmentioned)} and "
+                "state why the patch was removed (e.g. 'Remove foo.patch (fixed upstream)').")
+    return msg
+
+
 def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False, interactive=False, debug=False):
     """Execute tool calls returned by AI. Returns list of tool results."""
     results = []
@@ -746,7 +785,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(tool_input["content"])
             print(f"[TOOL] write_file: {tool_input['path']}")
-            results.append(f"OK: Wrote {tool_input['path']}")
+            results.append(f"OK: Wrote {tool_input['path']}"
+                           + _patch_removal_hint(old, tool_input["content"], file_path))
             # Track spec directory for subsequent tool call lookups
             if file_path.suffix == '.spec':
                 _spec_dir = file_path.parent
@@ -806,7 +846,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(new_content)
             print(f"[TOOL] edit_file: {path} (1 match replaced)")
-            results.append(f"OK: Edited {path}")
+            results.append(f"OK: Edited {path}"
+                           + _patch_removal_hint(content, new_content, file_path))
             # Track spec directory for subsequent tool call lookups
             if file_path.suffix == '.spec':
                 _spec_dir = file_path.parent
@@ -927,7 +968,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(new_content)
                 print(f"[TOOL] apply_patch: {path} ({len(hunks)} hunk(s) applied)")
-                results.append(f"OK: Patched {path}")
+                results.append(f"OK: Patched {path}"
+                               + _patch_removal_hint(content, new_content, file_path))
                 if file_path.suffix == '.spec':
                     _spec_dir = file_path.parent
                     fmt_cmd = [_FORMAT_SPEC_FILE_PATH, str(file_path.parent)]
