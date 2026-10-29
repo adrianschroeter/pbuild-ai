@@ -67,6 +67,7 @@ from pbuild_ai.workspace import RpmSourceManager
 from pbuild_ai.parsing import parse_agents_md_scripts, parse_post_update_scripts, parse_failed_package, extract_spec, find_rpm_tags, apply_spec_insertions, fix_remote_asset_formatting, parse_buildroot_install_failures, spec_binary_packages
 from pbuild_ai.context import PbuildContext
 from pbuild_ai.identity import resolve_changelog_author
+from pbuild_ai.network import is_safe_url
 from pbuild_ai.service_file import sync_service_version
 from pbuild_ai.release_notes import archive_release_notes
 from pbuild_ai.source_fetch import add_archive_name, expand_spec_macros, fetch_missing_source
@@ -551,7 +552,9 @@ def _version_from_research_data(data):
                 continue
             if item.get('prerelease') or item.get('draft'):
                 continue
-            for key in ("name", "tag_name"):
+            # tag_name is the version; 'name' is a human title that may be
+            # prose (e.g. 'PyTorch 2.15.0 Release') — only a fallback.
+            for key in ("tag_name", "name"):
                 val = item.get(key)
                 if val and isinstance(val, str) and not _is_prerelease(val):
                     return val
@@ -602,21 +605,35 @@ def _notes_from_releases(releases, current_version, body_key, max_version=None):
     return latest, notes
 
 
-def _upstream_release_notes(spec_text, old_version, new_version, spec_dir=None):
+def _upstream_release_notes(spec_text, old_version, new_version, spec_dir=None,
+                            extra_urls=None):
     """Release notes of every upstream release in (old_version, new_version].
 
-    The project is taken from the main Source URL or the URL: tag, whichever
-    is on GitHub or gitlab.com. Without notes there, the changelog file in
-    the new source archive next to the spec (*spec_dir*) is used. Returns
-    ``(notes, release_url)``; *release_url* is the upstream release page for
-    *new_version* ('' when unknown), so a .changes entry can always link to
-    the full notes even when no note text was found."""
-    notes, url = _api_release_notes(spec_text, old_version, new_version, spec_dir)
+    The project is taken from the main Source URL, the URL: tag or the
+    *extra_urls* the version research discovered, whichever is on GitHub or
+    gitlab.com, then from the osc service files in *spec_dir*. Without
+    notes there, the changelog file in the new source archive next to the
+    spec (*spec_dir*) is used. Returns ``(notes, release_url)``;
+    *release_url* is the upstream release page for *new_version* ('' when
+    unknown), so a .changes entry can always link to the full notes even
+    when no note text was found."""
+    notes, url = _api_release_notes(spec_text, old_version, new_version, spec_dir,
+                                    extra_urls)
     if not notes and spec_dir:
         notes = archive_release_notes(spec_dir, old_version, new_version)
     if not notes:
         print(f"[CHANGELOG] No upstream release notes found for {old_version} -> {new_version}.")
     return notes, url
+
+
+def _forge_urls_from_service_xml(text):
+    """GitHub/GitLab URLs from the url parameters of osc service XML."""
+    urls = []
+    for m in re.finditer(r'<param[^>]*\bname=["\']url["\'][^>]*>([^<]+)<', text or ''):
+        u = m.group(1).strip()
+        if ('github.com' in u or 'gitlab' in u) and u not in urls:
+            urls.append(u)
+    return urls
 
 
 def _forge_urls_from_service_files(spec_dir):
@@ -633,11 +650,150 @@ def _forge_urls_from_service_files(spec_dir):
             text = (Path(spec_dir) / name).read_text(encoding='utf-8', errors='replace')
         except OSError:
             continue
-        for m in re.finditer(r'<param[^>]*\bname=["\']url["\'][^>]*>([^<]+)<', text):
-            u = m.group(1).strip()
-            if ('github.com' in u or 'gitlab' in u) and u not in urls:
+        for u in _forge_urls_from_service_xml(text):
+            if u not in urls:
                 urls.append(u)
     return urls
+
+
+def _public_obs_get(apiurl, path):
+    """GET a path below the public OBS API ('' on any failure)."""
+    url = f'{str(apiurl).rstrip("/")}/public/{path.lstrip("/")}'
+    safe, _ = is_safe_url(url)
+    if not safe:
+        return ''
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "pbuild-ai/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.read().decode('utf-8', errors='replace')
+    except Exception:
+        return ''
+
+
+def _forge_urls_from_obs_origin(apiurl, project, package):
+    """Forge URLs from the OBS origin packages link to (`_link` branches).
+
+    Home-project checkouts often branch a project that carries the
+    `_service` file naming the upstream forge while neither the local spec
+    nor the local files reveal it — follow the <linkinfo> chain (bounded)
+    and parse the service XML found on each origin package."""
+    urls = []
+    seen = set()
+    for _hop in range(5):
+        key = (project, package)
+        if key in seen:
+            break
+        seen.add(key)
+        listing = _public_obs_get(apiurl, f'source/{project}/{package}')
+        m = re.search(r'<linkinfo\b[^>]*>', listing)
+        if not m:
+            break
+        pm = re.search(r'\bproject="([^"]+)"', m.group(0))
+        gm = re.search(r'\bpackage="([^"]+)"', m.group(0))
+        if not (pm and gm):
+            break
+        project, package = pm.group(1), gm.group(1)
+        for u in _forge_urls_from_service_xml(
+                _public_obs_get(apiurl, f'source/{project}/{package}/_service')):
+            if u not in urls:
+                urls.append(u)
+        if urls:
+            break
+    return urls
+
+
+def _obs_origin_urls(manager):
+    """Forge URLs discovered through the OBS link chain of an osc checkout."""
+    if not manager or not getattr(manager, 'osc_mode', False) or not manager.osc_project:
+        return []
+    package = getattr(manager, 'osc_package', None) or Path(manager.base_dir).name
+    urls = _forge_urls_from_obs_origin(manager.osc_apiurl, manager.osc_project, package)
+    for u in urls:
+        print(f"[CHANGELOG] Found upstream project {u} via the OBS origin of "
+              f"{manager.osc_project}/{package}.")
+    return urls
+
+
+def _fetched_url(header_line):
+    """The URL of a web_fetch result header '[Fetched N bytes from <url>]'.
+    ('' in results written before the URL was recorded.)"""
+    m = re.search(r'\[Fetched \d+ bytes from (\S+)\]', header_line or '')
+    return m.group(1) if m else ''
+
+
+def _forge_hint_from_url(url):
+    """The forge project URL implied by a URL that the version research
+    fetched — GitHub/GitLab API URLs as well as project or release pages."""
+    url = url or ''
+    m = re.search(r'api\.github\.com/repos/([^/?#]+/[^/?#]+?)(?:\.git)?(?:[/?#]|$)', url)
+    if m:
+        return f'https://github.com/{m.group(1)}'
+    m = re.search(r'/api/v4/projects/([^/?#]+)', url)
+    if m:
+        proj = urllib.parse.unquote(m.group(1))
+        return f'https://gitlab.com/{proj}' if '/' in proj else ''
+    if '/api/' in url:
+        return ''
+    m = re.search(r'github\.com[/:]([^/]+/[^/#?]+?)(?:\.git|/|#|$)', url)
+    if m:
+        return f'https://github.com/{m.group(1)}'
+    m = re.search(r'gitlab\.com[/:]([^/]+/[^/#?]+?)(?:\.git|/|#|$)', url)
+    if m:
+        return f'https://gitlab.com/{m.group(1)}'
+    return ''
+
+
+def _forge_hint_from_payload(data):
+    """Forge project URL contained anywhere in API JSON the version research
+    fetched. Release payloads carry html_url/web_url fields; ecosystem
+    registries (PyPI project_urls, npm repository, ...) hide the forge in
+    values of arbitrary keys, so every URL-looking string is tried —
+    well-known keys first."""
+    preferred, other = [], []
+
+    def _walk(obj, depth=0):
+        if depth > 5:
+            return
+        if isinstance(obj, dict):
+            for key, val in obj.items():
+                if isinstance(val, str):
+                    if val.startswith(('http://', 'https://', 'git+http')):
+                        if key in ('html_url', 'web_url', 'url', 'repository_url',
+                                   'home_page', 'repository', 'homepage'):
+                            preferred.append(val)
+                        elif len(other) < 64:
+                            other.append(val)
+                else:
+                    _walk(val, depth + 1)
+        elif isinstance(obj, list):
+            for item in obj[:16]:
+                _walk(item, depth + 1)
+
+    _walk(data)
+    for val in preferred + other:
+        hint = _forge_hint_from_url(val)
+        if hint:
+            return hint
+    return ''
+
+
+def _notes_url_from_research_data(data, current_version, new_version, fetched_url=""):
+    """Release notes and release page from JSON the AI version research
+    fetched: a GitHub/GitLab releases list or a single release object.
+    Returns ``(notes, release_url)``, either '' when absent."""
+    body_key = "description" if "gitlab" in (fetched_url or "") else "body"
+    if isinstance(data, list):
+        if body_key == "body" and any(isinstance(d, dict) and d.get("description")
+                                      and not d.get("body") for d in data):
+            body_key = "description"
+        notes = _notes_from_releases(data, current_version, body_key,
+                                     max_version=new_version)[1]
+        return notes, _release_html_url(data, new_version)
+    if isinstance(data, dict):
+        body = data.get(body_key) or data.get("body") or data.get("description") or ""
+        notes = clean_release_notes_body(body)[:10000] if body else ""
+        return notes, str(data.get("html_url") or data.get("web_url") or "")
+    return "", ""
 
 
 def _release_html_url(releases, version):
@@ -656,12 +812,15 @@ def _release_html_url(releases, version):
     return ''
 
 
-def _api_release_notes(spec_text, old_version, new_version, spec_dir=None):
+def _api_release_notes(spec_text, old_version, new_version, spec_dir=None,
+                       extra_urls=None):
     urls = []
     for tag in ('Source0?', 'URL'):
         m = re.search(rf'^{tag}:\s*(\S+)', spec_text or '', re.M | re.I)
         if m:
             urls.append(expand_spec_macros(m.group(1), spec_text))
+    # URLs the version research discovered but the spec does not name.
+    urls.extend(u for u in (extra_urls or []) if u)
     # tar_scm packages name their forge project only in _service/.service.
     urls.extend(_forge_urls_from_service_files(spec_dir))
     gh = gl = None
@@ -2891,7 +3050,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     # one, as the --update-only version bump does.
                     print(f"[CHANGELOG] {_changes_path.name} ends at {_last}, collecting "
                           f"upstream release notes up to {_version}...")
-                    _notes, _url = _upstream_release_notes(_spec_text, _last, _version, _spec.parent)
+                    _notes, _url = _upstream_release_notes(_spec_text, _last, _version,
+                                                           _spec.parent,
+                                                           extra_urls=_obs_origin_urls(manager))
                     _ok = _notes and _changelog_ai_round(
                         ai, _changes_path, _last, _version, _notes, _email, manager,
                         skill_manager=skill_manager, release_url=_url)
@@ -3011,6 +3172,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                   f"snapshot failed: {_e}")
                 _release_notes = ""
                 _release_url = ""
+                _forge_hint = ""
                 _prefetched_context = ""
                 # Needed with and without --update-version (update prompt).
                 _current_v_match = re.search(r'^Version:\s*(\S+)', spec_before_update, re.M)
@@ -3061,6 +3223,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             _data = json.loads(_resp.read())
                             _latest = _extract_by_key(_data, _v_key)
                             _prefetched_data[_v_url] = json.dumps(_prefetch_summary(_data), indent=2)[:2000]
+                            # Ecosystem registries name the forge project even
+                            # when the spec does not (PyPI project_urls, npm
+                            # repository) — keep it for the changelog.
+                            if not _forge_hint:
+                                _forge_hint = _forge_hint_from_payload(_data)
                             if _latest:
                                 _latest = str(_latest).lstrip('v')
                                 if _current_version and _latest == _current_version:
@@ -3185,6 +3352,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     if not target_version and results:
                         for _r in results:
                             if _r.startswith("web_fetch: [Fetched ") and "\n" in _r:
+                                _fetched = _fetched_url(_r.split("\n", 1)[0])
+                                if _fetched and not _forge_hint:
+                                    # Even unfetchable/parse-failed content
+                                    # reveals which forge project the AI used.
+                                    _forge_hint = _forge_hint_from_url(_fetched)
                                 _content = _r.split("\n", 1)[1].strip()
                                 try:
                                     _data = json.loads(_content)
@@ -3201,11 +3373,17 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                         _skip_spec = True
                                         break
                                     target_version = _v
-                                    _body = _data.get("body") or _data.get("description") or "" if isinstance(_data, dict) else ""
-                                    if _body:
-                                        _release_notes = clean_release_notes_body(_body)[:10000]
-                                    if isinstance(_data, dict) and _data.get("html_url"):
-                                        _release_url = _release_url or str(_data["html_url"])
+                                    # The JSON the AI fetched is the very
+                                    # GitHub/GitLab data the changelog needs;
+                                    # reuse it instead of discarding it.
+                                    _rn, _ru = _notes_url_from_research_data(
+                                        _data, _current_version, _v, _fetched)
+                                    if _rn and not _release_notes:
+                                        _release_notes = _rn
+                                    _release_url = _release_url or _ru
+                                    _forge_hint = (_forge_hint
+                                                   or _forge_hint_from_url(_fetched)
+                                                   or _forge_hint_from_payload(_data))
                                     print(f"[UPDATE] Found latest version {target_version} via research results for {spec.name}.")
                                     break
                         if _skip_spec:
@@ -3393,10 +3571,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                 if target_version and target_version not in ('latest',) and _actual_v and _actual_v.group(1) != target_version:
                     print(f"[WARNING] AI did not update version; forcing mechanical update "
                           f"{_actual_v.group(1)} -> {target_version}")
-                    # Update Version tag
+                    # Update Version tag (keep the padding after the colon)
                     _spec_updated = re.sub(
-                        r'^Version:\s*\S+',
-                        f'Version: {target_version}',
+                        r'^(Version:\s*)\S+',
+                        lambda m: f'{m.group(1)}{target_version}',
                         _spec_after_ai,
                         count=1,
                         flags=re.M
@@ -3664,9 +3842,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         print(f"[UPDATE] Reusing changelog author: {email_author}")
                     if not _release_notes:
                         # The version may have come from another API (PyPI,
-                        # ...); the release notes still live on GitHub/GitLab.
+                        # ...); the release notes still live on GitHub/GitLab
+                        # — possibly at the project the AI research found.
                         _release_notes, _refetched_url = _upstream_release_notes(
-                            spec_before_update, _old_v.group(1), _new_v.group(1), spec.parent)
+                            spec_before_update, _old_v.group(1), _new_v.group(1), spec.parent,
+                            extra_urls=[_forge_hint] if _forge_hint else _obs_origin_urls(manager))
                         if _refetched_url:
                             _release_url = _refetched_url
                     _changes_after = manager.read_file_safe(_changes_file) if _changes_file.exists() else ''

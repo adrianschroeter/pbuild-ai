@@ -81,11 +81,17 @@ class RpmSourceManager:
             raise ValueError(f"Base directory {self.base_dir} does not exist.")
         self.osc_mode = False
         self.osc_project = None
+        self.osc_package = None
         self.osc_repository = None
         self.osc_apiurl = "https://api.opensuse.org"
         self.obs_url = obs_url
         osc_dir = self.base_dir / ".osc"
         if osc_dir.is_dir():
+            package_file = osc_dir / "_package"
+            if package_file.is_file():
+                self.osc_package = package_file.read_text().strip() or None
+            if not self.osc_package:
+                self.osc_package = self.base_dir.name
             project_file = osc_dir / "_project"
             repos_file = osc_dir / "_build_repositories"
             apiurl_file = osc_dir / "_apiurl"

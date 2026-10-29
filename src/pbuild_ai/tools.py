@@ -1004,7 +1004,7 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     stripped = _strip_html(content)
                     display = stripped[:100000] if len(stripped) < len(content) else content[:100000]
                     print(f"[TOOL] web_fetch: {url} ({len(content)} bytes -> {len(stripped)} stripped)")
-                    results.append(f"[Fetched {len(content)} bytes]\n{display}")
+                    results.append(f"[Fetched {len(content)} bytes from {url}]\n{display}")
             except Exception as e:
                 msg = f"Error fetching {url}: {e}"
                 if "api.github.com" in url and hasattr(e, 'code') and e.code == 403:

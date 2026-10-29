@@ -352,6 +352,10 @@ class TestVersionFromResearchData(unittest.TestCase):
         ]
         self.assertEqual(_version_from_research_data(data), "0.34.2")
 
+    def test_list_prefers_tag_name_over_prose_title(self):
+        data = [{"tag_name": "v2.15.0", "name": "PyTorch 2.15.0 Release"}]
+        self.assertEqual(_version_from_research_data(data), "v2.15.0")
+
     def test_unrecognized_data(self):
         self.assertIsNone(_version_from_research_data({"foo": "bar"}))
         self.assertIsNone(_version_from_research_data([]))
