@@ -55,6 +55,7 @@ class PbuildContext:
     auto_deps_hint: str = ""  # interactive user instructions for creating a dependency
     analyze_mode: bool = False
     max_rounds: int = 15
+    max_generate_rounds: int = 50  # --max-generate-rounds, 0 = unlimited
     build_log: Optional[str] = None
     from_log: Optional[str] = None  # --fix --from-log: failure source log file
     program_start: float = 0.0

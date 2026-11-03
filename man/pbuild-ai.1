@@ -105,6 +105,15 @@ describes what to package. pbuild\-ai researches upstream sources via
 web fetch, asks clarifying questions, writes spec files and supporting
 files into the workspace directory.
 No build is performed.
+The run ends with exit code 1 when the workspace still has no
+.IR .spec
+file, e.g. when the AI uses up its round budget without writing one.
+Before every round, a
+.B [WORKSPACE STATUS]
+message listing the workspace files, source archives, already fetched
+URLs and already read files is added to the conversation; from half of
+the round budget on it also tells the AI to stop researching and to
+write the spec from what it knows.
 .TP
 .B \-\-create PROMPT, \-c PROMPT
 Same as \fB\-\-generate\fR, but also runs a test build and automatically
@@ -165,6 +174,13 @@ Max fix retry attempts per package (default: 10, 0 = unlimited).
 Max AI tool-call rounds per fix attempt (default: 15, 0 = unlimited).
 This controls how many times the AI can call tools (read, edit, write)
 within a single fix cycle before moving on.
+.TP
+.B \-\-max\-generate\-rounds N
+Max AI tool-call rounds for \fB\-\-generate\fR and \fB\-\-create\fR
+(default: 50, 0 = unlimited). From half of them on, the
+.B [WORKSPACE STATUS]
+message tells the AI to stop researching and to write the spec file with
+what it already knows.
 .TP
 .B \-\-clean
 Clean build artifacts before building.

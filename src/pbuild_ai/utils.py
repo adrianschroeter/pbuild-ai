@@ -1,10 +1,15 @@
 import hashlib
+import re
 from pathlib import Path
+
+# A model that cannot complete a mandated step says so with this marker
+# instead of pretending success.
+ABORT_RE = re.compile(r'\[ABORT:\s*([^\]\n]*)\]')
 
 
 def ranges_covered(ranges, start, end):
-    for rs, re in ranges:
-        if rs <= start and (re is None or (end is not None and re >= end)):
+    for rs, rend in ranges:
+        if rs <= start and (rend is None or (end is not None and rend >= end)):
             return True
     return False
 
@@ -12,8 +17,8 @@ def ranges_covered(ranges, start, end):
 def ranges_merge(ranges, start, end):
     if not ranges:
         return [(start, end)]
-    for rs, re in ranges:
-        if rs <= start and (re is None or (end is not None and re >= end)):
+    for rs, rend in ranges:
+        if rs <= start and (rend is None or (end is not None and rend >= end)):
             return ranges
     new_ranges = [r for r in ranges if not (start <= r[0] and (end is None or (r[1] is not None and end >= r[1])))]
     new_ranges.append((start, end))
@@ -130,7 +135,8 @@ class ReadCoverageTracker:
                         if prev and manager:
                             current_hash = hashlib.md5(manager.read_file_safe(resolved).encode()).hexdigest()
                             if prev["hash"] == current_hash and ranges_covered(prev["ranges"], 0, None):
-                                skipped[ci] = f"READ SKIP: {path} already read \u2014 see earlier tool result"
+                                skipped[ci] = (f"READ SKIP: {path} was already read in full — do not read it "
+                                               f"again and do not download a copy of it, work with what you have.")
             elif name == "read_file_from_archive":
                 archive_path = inp.get("archive_path", "")
                 file_path = inp.get("file_path", "")
@@ -141,7 +147,8 @@ class ReadCoverageTracker:
                     if offset is None and limit is None:
                         cache_key = (str(arch_resolved), file_path)
                         if ranges_covered(self._archive_coverage.get(cache_key, []), 0, None):
-                            skipped[ci] = f"READ SKIP: {archive_path}/{file_path} already read \u2014 see earlier tool result"
+                            skipped[ci] = (f"READ SKIP: {archive_path}/{file_path} was already read in full — do not "
+                                           f"read it again and do not fetch a copy from upstream, work with what you have.")
 
         filtered = [c for ci, c in enumerate(round_calls) if ci not in skipped]
         return filtered, skipped
@@ -191,6 +198,29 @@ class ReadCoverageTracker:
                     end = start + limit if limit is not None else None
                     prev_ranges = self._archive_coverage.get(cache_key, [])
                     self._archive_coverage[cache_key] = ranges_merge(prev_ranges, start, end)
+
+    def fully_read(self, workspace_dir=None):
+        """Labels of the files already read complete, for the model's status block.
+
+        Partial (offset/limit) reads are left out on purpose: reading the rest of
+        such a file is a legitimate next step.
+        """
+        labels = []
+        for path, info in sorted(self._file_coverage.items()):
+            if not ranges_covered(info["ranges"], 0, None):
+                continue
+            label = path
+            if workspace_dir:
+                try:
+                    label = str(Path(path).relative_to(Path(workspace_dir).resolve()))
+                except ValueError:
+                    pass
+            labels.append(label)
+        for (archive, file_path), ranges in sorted(self._archive_coverage.items()):
+            if not ranges_covered(ranges, 0, None):
+                continue
+            labels.append(f"{Path(archive).name}!{file_path}")
+        return labels
 
     @staticmethod
     def merge_results(round_calls, filtered_results, skipped_lookup):

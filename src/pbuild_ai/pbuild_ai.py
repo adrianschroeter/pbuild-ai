@@ -71,6 +71,7 @@ from pbuild_ai.network import is_safe_url
 from pbuild_ai.service_file import sync_service_version
 from pbuild_ai.release_notes import archive_release_notes
 from pbuild_ai.source_fetch import add_archive_name, expand_spec_macros, fetch_missing_source
+from pbuild_ai.utils import ABORT_RE
 from pbuild_ai.skills.changelog_skill import (
     CHANGELOG_PROMPT, has_changelog_version, write_changelog_entry,
     NEW_PACKAGE_DESCRIPTION_PROMPT,
@@ -1327,15 +1328,12 @@ def _check_arg_conflicts(parser, args):
             parser.error(f"--analyze cannot be used with: {', '.join(_analyze_conflicts)}")
 
 
-_ABORT_RE = re.compile(r'\[ABORT:\s*([^\]\n]*)\]')
-
-
 def _ai_requested_abort(messages):
     """Return the reason the AI asked to abort, or None if it did not."""
     if not messages:
         return None
     text = " ".join(m.get("content", "") or "" for m in messages if m.get("role") == "assistant")
-    match = _ABORT_RE.search(text)
+    match = ABORT_RE.search(text)
     if not match:
         return None
     return match.group(1).strip() or "aborted by AI"
@@ -1815,6 +1813,7 @@ if __name__ == "__main__":
     parser.add_argument("--debug", "-D", action="store_true", help="Print raw JSON responses from AI")
     parser.add_argument("--max-fix-attempts", type=int, default=10, help="Max fix retry attempts per package (default: 10, 0 = unlimited)")
     parser.add_argument("--max-ai-rounds", type=int, default=30, help="Max AI tool-call rounds per fix attempt (default: 30, 0 = unlimited). Controls how many times the AI can call tools within a single fix cycle.")
+    parser.add_argument("--max-generate-rounds", type=int, default=50, help="Max AI tool-call rounds for --generate/--create (default: 50, 0 = unlimited). From half of them on, the AI is told to stop researching and write the spec file.")
     parser.add_argument("--auto-deps", nargs='?', const=10, type=int, default=0, help="Auto-create missing dependency packages (depth: %(const)d, 0=unlimited, default: disabled)")
     parser.add_argument("--try-build-first", action="store_true", help="Skip initial AI spec analysis; build first and only use AI if build fails")
     parser.add_argument("--deep-analyze", "-d", action="store_true", help="On build failure, open an interactive shell in the build environment instead of auto-fixing")
@@ -1918,6 +1917,7 @@ if __name__ == "__main__":
         email=args.email or "",
         analyze_mode=args.analyze,
         max_rounds=args.max_ai_rounds,
+        max_generate_rounds=args.max_generate_rounds,
         build_log=args.build_log,
         from_log=args.from_log,
         program_start=time.time(),
@@ -3135,10 +3135,14 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
 
         # --generate mode: create a new package from scratch
         if ctx.generate_prompt:
-            run_generate_mode(ctx)
+            _generated = run_generate_mode(ctx)
             if not FIX_MODE:
                 ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
-                sys.exit(0)
+                sys.exit(0 if _generated else 1)
+            if not _generated:
+                print("[ERROR] --generate did not create a .spec file — there is nothing to build.")
+                ai.print_stats(manager=manager, program_start=ctx.program_start, skill_manager=skill_manager)
+                sys.exit(1)
             # Re-scan for spec files created by generate mode before entering fix phase
             spec_files = [f for f in find_spec_files(WORKSPACE_DIR, PROJECT_MODE) if manager._is_safe_path(f)]
             ctx.spec_files = spec_files
@@ -3507,7 +3511,7 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                         else:
                             print("[UPDATE] No changes made.")
                             _ai_text = ai.last_text_response
-                            _abort_match = _ABORT_RE.search(_ai_text) if _ai_text else None
+                            _abort_match = ABORT_RE.search(_ai_text) if _ai_text else None
                             if _abort_match:
                                 print(f"[ABORT] {_abort_match.group(1).strip() or 'aborted by AI'}")
                                 print("[UPDATE] Aborting: a mandatory project step could not be completed.")
@@ -4032,14 +4036,14 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             _assistant_text = ai.last_text_response
                         _is_valid_terminal = (
                             _assistant_text.lower() in ("nothing-to-do",)
-                            or bool(_ABORT_RE.search(_assistant_text))
+                            or bool(ABORT_RE.search(_assistant_text))
                         )
                         if not _is_valid_terminal:
                             _preview = _assistant_text[:200]
                             print(f"[UPDATE] Follow-up failed: AI produced no tool calls. "
                                   f"Response: {_preview!r}. Aborting.")
                             sys.exit(1)
-                        _abort_match = _ABORT_RE.search(_assistant_text)
+                        _abort_match = ABORT_RE.search(_assistant_text)
                         if _abort_match:
                             print(f"[ABORT] {_abort_match.group(1).strip() or 'aborted by AI'}")
                             sys.exit(1)

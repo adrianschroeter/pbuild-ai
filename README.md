@@ -313,6 +313,23 @@ web fetch, asks clarifying questions, and writes spec files and
 supporting files into the workspace directory.
 No build is performed.
 
+The run ends with exit code 1 when the workspace still has no `.spec`
+file — the AI running out of tool-call rounds or aborting is a failure,
+not a success. Two mechanisms keep the round budget from being spent on
+research alone:
+
+* Before every round pbuild-ai injects a `[WORKSPACE STATUS]` message
+  listing the workspace files, the source archives with the directory
+  they extract to, the URLs already fetched and the files already read.
+  It replaces what context pruning dropped, so the AI does not
+  re-download and re-read the same sources.
+* From half of the rounds on (80% and the final round with stronger
+  wording) that message tells the AI to stop researching and write the
+  spec from what it knows, marking open points with `# TODO` comments.
+
+The budget is 50 rounds; change it with `--max-generate-rounds`
+(0 = unlimited).
+
 ### `--create PROMPT`
 
 Same as `--generate`, but also runs a test build and automatically fixes
