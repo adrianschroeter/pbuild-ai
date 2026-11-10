@@ -24,7 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from pbuild_ai.spinner import Spinner, AI_COLOR
+from pbuild_ai.spinner import Spinner, AI_COLOR, _color
 from pbuild_ai.skills.changelog_skill import would_duplicate_changelog_entry
 from pbuild_ai.utils import resolve_path, ReadCoverageTracker, truncate_tool_result
 from pbuild_ai.tools import (execute_tool_calls, format_tool_display, FINISH_TOOL, FINISH_TOOL_NAME,
@@ -184,11 +184,268 @@ def _is_repeat_limit_error(error):
     return "repeat limit" in str(error)
 
 
+_THINKING_COLOR = "90"  # dim gray for the live-streamed thinking text
+
+
+def _wants_streaming(ai):
+    """True only when --show-thinking was explicitly enabled on *ai*.
+    The strict check keeps MagicMock test doubles (which auto-create the
+    attribute as a truthy Mock) out of the streaming path."""
+    return getattr(ai, "show_thinking", False) is True
+
+
+class _StreamAggregator:
+    """Consumes a streaming AI response (--show-thinking) and aggregates it
+    into the same result shape the corresponding non-streaming response
+    would have produced, so all downstream handling stays unchanged.
+
+    Thinking and content tokens are echoed live to stderr while they arrive,
+    giving immediate feedback on slow thinking models. Supported wire
+    formats: Ollama NDJSON (native /api/generate and /api/chat) and OpenAI
+    server-sent events (/v1/chat/completions)."""
+
+    def __init__(self, openai_mode):
+        self._openai_mode = openai_mode
+        self._model = None
+        # Live echo state
+        self._think_header = False
+        self._content_header = False
+        self._line_open = False
+        # Native (Ollama) aggregation
+        self._native_content = []
+        self._native_thinking = []
+        self._tool_calls = []
+        self._context = None
+        self._final_message = None   # message of the done=true chunk (fallback)
+        self._final_response = None  # response/thinking of the done chunk
+        self._final_thinking = None
+        # OpenAI aggregation
+        self._oai_content = []
+        self._oai_reasoning = []
+        self._oai_tc = {}  # index -> {"id", "type", "name", "args": [str]}
+        self._complete_message = None  # server ignored stream=true
+        self._fed_any = False
+
+    # -- live echo ----------------------------------------------------------
+    def _write(self, text):
+        sys.stderr.write(text)
+        sys.stderr.flush()
+
+    def _end_line(self):
+        if self._line_open:
+            self._write("\n")
+            self._line_open = False
+
+    def _echo_thinking(self, text):
+        if not text:
+            return
+        if not self._think_header:
+            self._end_line()
+            self._write(_color(_THINKING_COLOR, "[AI] thinking:") + "\n")
+            self._think_header = True
+        self._line_open = True
+        self._write(_color(_THINKING_COLOR, text))
+
+    def _echo_content(self, text):
+        if not text:
+            return
+        if self._think_header and not self._content_header:
+            self._end_line()
+            self._write("[AI] response:\n")
+            self._content_header = True
+        self._line_open = True
+        self._write(text)
+
+    def _echo_tool_call(self, name):
+        self._end_line()
+        self._write(f"[AI] tool call: {name}\n")
+
+    # -- Ollama NDJSON -------------------------------------------------------
+    def feed_ollama(self, obj):
+        if obj.get("error"):
+            self._end_line()
+            raise RuntimeError(str(obj["error"]))
+        self._model = obj.get("model") or self._model
+        if obj.get("done"):
+            msg = obj.get("message")
+            if msg:
+                self._final_message = msg
+            self._final_response = obj.get("response")
+            self._final_thinking = obj.get("thinking")
+            if obj.get("context") is not None:
+                self._context = obj.get("context")
+            return
+        msg = obj.get("message")
+        if msg is not None:
+            self._echo_thinking(msg.get("thinking") or "")
+            self._echo_content(msg.get("content") or "")
+            if msg.get("content"):
+                self._native_content.append(msg["content"])
+            if msg.get("thinking"):
+                self._native_thinking.append(msg["thinking"])
+            for tc in (msg.get("tool_calls") or []):
+                self._tool_calls.append(tc)
+                self._echo_tool_call((tc.get("function") or {}).get("name", "?"))
+        else:
+            # /api/generate chunks keep content and thinking at the top level
+            response = obj.get("response") or ""
+            thinking = obj.get("thinking") or ""
+            self._echo_thinking(thinking)
+            self._echo_content(response)
+            if response:
+                self._native_content.append(response)
+            if thinking:
+                self._native_thinking.append(thinking)
+
+    # -- OpenAI server-sent events -------------------------------------------
+    def feed_openai_chunk(self, chunk):
+        self._fed_any = True
+        if chunk.get("error"):
+            self._end_line()
+            raise RuntimeError(str(chunk["error"]))
+        choices = chunk.get("choices") or []
+        if not choices:
+            return  # keep-alive or usage-only chunk
+        choice = choices[0]
+        if "delta" not in choice:
+            # Server ignored stream=true and sent the complete message
+            message = choice.get("message") or {}
+            self._complete_message = message
+            self._echo_thinking(message.get("reasoning_content") or "")
+            self._echo_content(message.get("content") or "")
+            for tc in (message.get("tool_calls") or []):
+                self._echo_tool_call((tc.get("function") or {}).get("name", "?"))
+            return
+        delta = choice.get("delta") or {}
+        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+        content = delta.get("content")
+        self._echo_thinking(reasoning or "")
+        self._echo_content(content or "")
+        if reasoning:
+            self._oai_reasoning.append(reasoning)
+        if content:
+            self._oai_content.append(content)
+        for tc in (delta.get("tool_calls") or []):
+            idx = tc.get("index") or 0
+            entry = self._oai_tc.setdefault(
+                idx, {"id": "", "type": "function", "name": "", "args": []})
+            if tc.get("id"):
+                entry["id"] = tc["id"]
+            if tc.get("type"):
+                entry["type"] = tc["type"]
+            func = tc.get("function") or {}
+            if func.get("name"):
+                entry["name"] += func["name"]
+                self._echo_tool_call(entry["name"])
+            if func.get("arguments"):
+                entry["args"].append(func["arguments"])
+
+    # -- result assembly -------------------------------------------------------
+    def finish(self, is_chat):
+        """Return the aggregated result in the non-streaming response shape."""
+        self._end_line()
+        if self._openai_mode:
+            if self._complete_message is not None:
+                return {"model": self._model,
+                        "choices": [{"message": self._complete_message}]}
+            message = {"role": "assistant"}
+            content = "".join(self._oai_content)
+            reasoning = "".join(self._oai_reasoning)
+            if content:
+                message["content"] = content
+            if reasoning:
+                message["reasoning_content"] = reasoning
+            if self._oai_tc:
+                message["tool_calls"] = [
+                    {"id": self._oai_tc[i]["id"],
+                     "type": self._oai_tc[i]["type"],
+                     "function": {"name": self._oai_tc[i]["name"],
+                                  "arguments": "".join(self._oai_tc[i]["args"])}}
+                    for i in sorted(self._oai_tc)]
+            return {"model": self._model, "choices": [{"message": message}]}
+        thinking = "".join(self._native_thinking)
+        if is_chat:
+            # The done=true chunk may repeat the complete message (Ollama) or
+            # carry an empty one (some servers) — merge field by field so
+            # neither duplication nor loss can happen.
+            fm = self._final_message or {}
+            content = "".join(self._native_content) or (fm.get("content") or "")
+            thinking = thinking or (fm.get("thinking") or "")
+            tool_calls = self._tool_calls or (fm.get("tool_calls") or [])
+            message = {"role": fm.get("role", "assistant"), "content": content}
+            if thinking:
+                message["thinking"] = thinking
+            if tool_calls:
+                message["tool_calls"] = tool_calls
+            result = {"model": self._model, "message": message, "done": True}
+            if self._context is not None:
+                result["context"] = self._context
+            return result
+        # /api/generate shape
+        response = "".join(self._native_content)
+        if not response and self._final_response:
+            response = self._final_response
+        if not thinking and self._final_thinking:
+            thinking = self._final_thinking
+        result = {"model": self._model, "response": response, "done": True}
+        if thinking:
+            result["thinking"] = thinking
+        if self._context is not None:
+            result["context"] = self._context
+        return result
+
+    # -- wire consumption --------------------------------------------------------
+    def consume(self, response, is_chat):
+        """Read the streaming body line by line and return the aggregated
+        result dict. Handles Ollama NDJSON, OpenAI SSE, and servers that
+        ignored stream=true and answered with one plain JSON body."""
+        buf = ""
+        try:
+            for raw_line in response:
+                line = (raw_line.decode('utf-8', errors='replace')
+                        if isinstance(raw_line, (bytes, bytearray)) else raw_line)
+                if self._openai_mode:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith(":"):
+                        continue  # empty line or keep-alive comment
+                    if stripped.startswith("data:"):
+                        data = stripped[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        self.feed_openai_chunk(json.loads(data))
+                        continue
+                    # Not an SSE field: a server that ignored stream=true and
+                    # sent one plain (possibly pretty-printed) JSON body.
+                    buf += line + "\n"
+                    continue
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    # Not one-object-per-line: a server that ignored
+                    # stream=true and sent one (pretty-printed) JSON body.
+                    buf += line + "\n"
+                    continue
+                self.feed_ollama(obj)
+        finally:
+            self._end_line()
+        if buf:
+            if self._openai_mode:
+                if not self._fed_any:
+                    self.feed_openai_chunk(json.loads(buf))
+            else:
+                self.feed_ollama(json.loads(buf))
+        return self.finish(is_chat)
+
+
 class LlmAnalyzer:
-    def __init__(self, host=None, model="default", debug=False, timeout=None, options=None):
+    def __init__(self, host=None, model="default", debug=False, timeout=None, options=None, show_thinking=False):
         self.host = (host or os.environ.get("AI_HOST") or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip('/')
         self.model = model
         self.debug = debug
+        self.show_thinking = show_thinking
         self.timeout = timeout if timeout is not None else int(os.environ.get("AI_TIMEOUT", os.environ.get("OLLAMA_TIMEOUT", "900")))
         self.options = options or {}
         # Trust tool capability by default: pbuild-ai supplies the tools itself,
@@ -844,6 +1101,22 @@ class LlmAnalyzer:
             payload["think"] = False
         return payload
 
+    def _fetch_raw(self, req, payload, spinner_prefix, spinner_suffix):
+        """One HTTP round trip returning the raw response body. With
+        --show-thinking the response is consumed as a stream — thinking and
+        content are echoed live to stderr while they arrive, and the
+        aggregated result is re-serialized so callers see the same
+        non-streaming shape. The spinner is suppressed while streaming: the
+        live output replaces it as progress feedback."""
+        if self.show_thinking:
+            with self._opener.open(req, timeout=self.timeout) as response:
+                result = _StreamAggregator(self._openai_mode).consume(
+                    response, is_chat="messages" in payload)
+            return json.dumps(result)
+        with Spinner(prefix=spinner_prefix, suffix=spinner_suffix, color=AI_COLOR):
+            with self._opener.open(req, timeout=self.timeout) as response:
+                return response.read().decode('utf-8')
+
     def _request_once(self, url, payload):
         if self._openai_mode:
             _passthrough = {k: payload[k] for k in ("tool_choice", "response_format",
@@ -881,6 +1154,8 @@ class LlmAnalyzer:
         else:
             if payload.get("context") is None:
                 payload.pop("context", None)
+        if self.show_thinking:
+            payload = dict(payload, stream=True)
         if self.debug:
             payload_str = json.dumps(payload)
             print(f"[DEBUG] AI request ({len(payload_str)} bytes):\n{payload_str}", flush=True)
@@ -902,11 +1177,8 @@ class LlmAnalyzer:
                 _ctx_str = f" ({_tok//1024}k/{self.max_tokens//1024}k tok)"
             else:
                 _ctx_str = ""
-            with Spinner(prefix=f"[AI] {model_name}{_ctx_str}",
-                         suffix=getattr(self, "_task", "") or "",
-                         color=AI_COLOR):
-                with self._opener.open(req, timeout=self.timeout) as response:
-                    raw = response.read().decode('utf-8')
+            raw = self._fetch_raw(req, payload, f"[AI] {model_name}{_ctx_str}",
+                                  getattr(self, "_task", "") or "")
         except urllib.error.HTTPError as e:
             body = e.read().decode('utf-8', errors='replace')[:2000] if e.fp else ''
             if self.debug:
@@ -917,8 +1189,8 @@ class LlmAnalyzer:
                 print(f"[DEBUG] AI request failed (will retry once): {e}", flush=True)
             time.sleep(2)
             try:
-                with self._opener.open(req, timeout=self.timeout) as response:
-                    raw = response.read().decode('utf-8')
+                raw = self._fetch_raw(req, payload, f"[AI] {model_name}{_ctx_str}",
+                                      getattr(self, "_task", "") or "")
             except urllib.error.HTTPError as e2:
                 body2 = e2.read().decode('utf-8', errors='replace')[:2000] if e2.fp else ''
                 raise RuntimeError(f"HTTP Error {e2.code}: {e2.reason} — {body2}") from e2
@@ -1766,6 +2038,8 @@ def chat_completion(ai, messages, tools, debug=False, track_stats=False):
                 payload.setdefault("think", _opts.pop(_k))
         if _opts:
             payload["options"] = _opts
+    if _wants_streaming(ai):
+        payload = dict(payload, stream=True)
     _payload_str = None
     data_bytes = b''
     try:
@@ -1793,7 +2067,14 @@ def chat_completion(ai, messages, tools, debug=False, track_stats=False):
                 headers={'Content-Type': 'application/json'},
             )
             with urllib.request.urlopen(req, timeout=ai.timeout) as resp:
-                raw = resp.read().decode('utf-8')
+                if _wants_streaming(ai):
+                    # Stream the response and echo thinking/content live;
+                    # the aggregated result is re-serialized so the handling
+                    # below stays identical to a non-streaming response.
+                    result = _StreamAggregator(ai._openai_mode).consume(resp, is_chat=True)
+                    raw = json.dumps(result)
+                else:
+                    raw = resp.read().decode('utf-8')
             if debug:
                 print(f"[DEBUG] AI response ({len(raw)} bytes):\n{raw}", flush=True)
             result = json.loads(raw)

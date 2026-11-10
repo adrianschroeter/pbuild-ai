@@ -221,6 +221,14 @@ thinking.
 Example: \fB\-\-ai\-option temperature=0.1 \-\-ai\-option num_ctx=16384\fR.
 Values are coerced: floats for strings containing \fB.\fR, ints for
 integer-like strings, booleans for \fBtrue\fR/\fBfalse\fR/\fByes\fR/\fBno\fR.
+.TP
+.B \-\-show\-thinking
+Stream the AI's thinking live to the terminal while the response is
+generated, instead of waiting on a spinner. With thinking-capable models
+(e.g. qwen3.6) the chain-of-thought is shown as it is generated; with
+other models the plain response streams as it is written. Tool calls are
+announced by name. The output goes to stderr, so stdout stays
+machine-parseable.
 .SH ENVIRONMENT
 .TP
 .B AI_HOST

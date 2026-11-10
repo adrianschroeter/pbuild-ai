@@ -305,6 +305,19 @@ grammar-constrained to a tool call (Ollama `format` / OpenAI
 `response_format` JSON schema). `--ai-option force_tools=false` restores the
 plain text nudge.
 
+### `--show-thinking`
+
+Streams the AI's thinking live to the terminal while the response is
+generated, instead of waiting on a spinner while the model works. With
+thinking-capable models (e.g. qwen3.6) the chain-of-thought is shown as it
+is generated; with other models the plain response streams as it is
+written. Tool calls are announced by name. The output goes to stderr, so
+stdout stays machine-parseable:
+
+```bash
+pbuild-ai --fix --show-thinking bc
+```
+
 ### `--generate PROMPT`
 
 Creates a new openSUSE RPM package from scratch. The given prompt

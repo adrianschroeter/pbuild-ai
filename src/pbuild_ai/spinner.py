@@ -30,16 +30,17 @@ class Spinner:
 
     CHARS = itertools.cycle("⣾⣽⣻⢿⡿⣟⣯⣷")
 
-    def __init__(self, prefix="", suffix="", color=None, delay=0.1):
+    def __init__(self, prefix="", suffix="", color=None, delay=0.1, enabled=True):
         self.prefix = _color(color, prefix) if color else prefix
         self.suffix = suffix
         self.delay = delay
+        self.enabled = enabled and _SPINNER_ENABLED
         self._running = False
         self._thread = None
         self._t0 = None
 
     def start(self):
-        if not _SPINNER_ENABLED:
+        if not self.enabled:
             return
         self._t0 = time.time()
         self._running = True
@@ -54,7 +55,7 @@ class Spinner:
             time.sleep(self.delay)
 
     def stop(self):
-        if not _SPINNER_ENABLED:
+        if not self.enabled:
             return
         self._running = False
         if self._thread:

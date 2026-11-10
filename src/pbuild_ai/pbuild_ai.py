@@ -1826,6 +1826,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", "--ai-model", default=None, help="AI model name (overrides AI_MODEL env var; legacy OLLAMA_MODEL is also honored, default gemma4)")
     parser.add_argument("--ai-timeout", type=int, default=None, help="Timeout in seconds for AI API requests (default: 900, overrides AI_TIMEOUT env var; legacy OLLAMA_TIMEOUT is also honored)")
     parser.add_argument("--ai-option", action="append", default=[], help="Pass a model parameter to AI (repeatable, e.g. --ai-option temperature=0.1 --ai-option num_ctx=8192). Thinking-capable models (e.g. qwen3.6) auto-default to thinking=true for tool-calling rounds so they emit tool calls; an explicit value here overrides that default. By default trust_tools=true is set so Ollama models that advertise only 'completion' (e.g. qwen3.8:27b-q4) can still receive tool-calling rounds; --ai-option trust_tools=false restores the strict advertised-capability gate. force_tools=true (default) requires a tool call in tool-calling rounds (finish tool, tool_choice=required, schema-constrained retry); force_tools=false falls back to a text nudge.")
+    parser.add_argument("--show-thinking", action="store_true", help="Stream the AI's thinking live to the terminal while the response is generated, instead of waiting on a spinner. Works with thinking-capable models (e.g. qwen3.6); with other models the plain response is streamed as it is generated.")
     parser.add_argument("--email", default=None, help="Author for PACKAGE.changes entries ('Name <email>' or just the email). Defaults to the name/email stored in ~/.config/pbuild-ai/config; when unset, interactive runs ask (proposing values from osc, git and $EMAIL) and store the answer.")
     parser.add_argument("--changelog", action="store_true", help="Prepend a changelog entry for the current version, then exit")
     parser.add_argument("--skills-dir", action="append", default=[], help="Extra directory to load skill .py files from (repeatable). Combined with the built-in skills dir and ~/.config/pbuild-ai/skills/ if it exists.")
@@ -1912,6 +1913,7 @@ if __name__ == "__main__":
         ai_model_arg=args.model,
         ai_timeout=args.ai_timeout or int(os.environ.get("AI_TIMEOUT", os.environ.get("OLLAMA_TIMEOUT", "900"))),
         ai_options=ai_options,
+        show_thinking=args.show_thinking,
         shell_after_build=args.shell_after_build,
         interactive=_resolve_interactive(args),
         email=args.email or "",
@@ -1995,7 +1997,7 @@ if __name__ == "__main__":
     if agent_skills_text:
         full_context = f"{full_context}\n\n{agent_skills_text}"
 
-    ai = LlmAnalyzer(host=AI_SERVER, model=AI_MODEL_ARG or os.environ.get("AI_MODEL", os.environ.get("OLLAMA_MODEL", "default")), debug=DEBUG, timeout=ctx.ai_timeout, options=ai_options)
+    ai = LlmAnalyzer(host=AI_SERVER, model=AI_MODEL_ARG or os.environ.get("AI_MODEL", os.environ.get("OLLAMA_MODEL", "default")), debug=DEBUG, timeout=ctx.ai_timeout, options=ai_options, show_thinking=ctx.show_thinking)
     ai.manager = manager
     ctx.ai = ai
     ctx.full_context = full_context

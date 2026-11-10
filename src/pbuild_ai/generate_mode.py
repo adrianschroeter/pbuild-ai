@@ -22,7 +22,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from pbuild_ai.llm_client import chat_completion, prune_messages, _summarize_round_calls
+from pbuild_ai.llm_client import chat_completion, prune_messages, _summarize_round_calls, _wants_streaming
 from pbuild_ai.tools import (execute_tool_calls, format_tool_display, resolve_path,
                              MODIFICATION_TOOLS, ask_tool_selection, instruction_messages)
 from pbuild_ai.spinner import Spinner, AI_COLOR
@@ -289,7 +289,7 @@ Start researching and building — do NOT ask me what to package, I already told
         _all_text = "\n".join(msg.get('content', '') or '' for msg in messages)
         _tok = ctx.ai.count_tokens(_all_text)
         _ctx_str = f" ({_tok//1024}k/{ctx.ai.max_tokens//1024}k tok)"
-        with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", suffix=f"Analyzing spec ({round_idx+1}{_round_note})", color=AI_COLOR):
+        with Spinner(prefix=f"[AI] {ctx.ai.model}{_ctx_str}", suffix=f"Analyzing spec ({round_idx+1}{_round_note})", color=AI_COLOR, enabled=not _wants_streaming(ctx.ai)):
             result = chat_completion(ctx.ai, messages, ctx.tools, debug=ctx.debug, track_stats=True)
 
         message = result.get('message', {})
