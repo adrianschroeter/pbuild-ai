@@ -407,6 +407,28 @@ def build_tools_list(interactive=False):
         {
             "type": "function",
             "function": {
+                "name": "search_package",
+                "description": "Look up openSUSE/SLE packages via the gitexplorer.opensuse.org API. ALWAYS use this instead of web_fetch when you need the real package name for a BuildRequires/Requires: search_by='file' finds the packages providing a given file path (e.g. query '/usr/bin/protoc' → the protobuf devel package), search_by='name' finds packages whose name contains the query. NEVER write a file path such as /usr/bin/protoc as a dependency name — resolve it with this tool and require the returned PACKAGE name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "File path (with search_by='file') or package-name substring (with search_by='name')"
+                        },
+                        "search_by": {
+                            "type": "string",
+                            "enum": ["name", "file"],
+                            "description": "'file' to find packages providing a file, 'name' to search package names. Defaults to 'name'."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "download_file",
                 "description": "Download a file from a remote HTTPS URL and save it to the workspace directory. Use this for source tarballs — unlike web_fetch, this saves the file permanently to disk. Only safe HTTPS URLs are allowed.",
                 "parameters": {
@@ -717,6 +739,22 @@ def _patch_removal_hint(old_text, new_text, spec_path):
     return msg
 
 
+def _spec_write_hints(file_path, new_text):
+    """Collect content hints from skills for a spec file the AI just wrote.
+
+    The packaging policy lives in the skills — e.g. unresolvable_skill flags
+    file-path BuildRequires and appends the gitexplorer provider candidates.
+    A failing skill must never break the file write, so hints are best
+    effort."""
+    hint = ""
+    try:
+        from pbuild_ai.skills.unresolvable_skill import spec_write_hint
+        hint += spec_write_hint(file_path, new_text) or ""
+    except Exception:
+        pass
+    return hint
+
+
 def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False, interactive=False, debug=False):
     """Execute tool calls returned by AI. Returns list of tool results."""
     results = []
@@ -786,7 +824,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 f.write(tool_input["content"])
             print(f"[TOOL] write_file: {tool_input['path']}")
             results.append(f"OK: Wrote {tool_input['path']}"
-                           + _patch_removal_hint(old, tool_input["content"], file_path))
+                           + _patch_removal_hint(old, tool_input["content"], file_path)
+                           + _spec_write_hints(file_path, tool_input["content"]))
             # Track spec directory for subsequent tool call lookups
             if file_path.suffix == '.spec':
                 _spec_dir = file_path.parent
@@ -847,7 +886,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 f.write(new_content)
             print(f"[TOOL] edit_file: {path} (1 match replaced)")
             results.append(f"OK: Edited {path}"
-                           + _patch_removal_hint(content, new_content, file_path))
+                           + _patch_removal_hint(content, new_content, file_path)
+                           + _spec_write_hints(file_path, new_content))
             # Track spec directory for subsequent tool call lookups
             if file_path.suffix == '.spec':
                 _spec_dir = file_path.parent
@@ -969,7 +1009,8 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     f.write(new_content)
                 print(f"[TOOL] apply_patch: {path} ({len(hunks)} hunk(s) applied)")
                 results.append(f"OK: Patched {path}"
-                               + _patch_removal_hint(content, new_content, file_path))
+                               + _patch_removal_hint(content, new_content, file_path)
+                               + _spec_write_hints(file_path, new_content))
                 if file_path.suffix == '.spec':
                     _spec_dir = file_path.parent
                     fmt_cmd = [_FORMAT_SPEC_FILE_PATH, str(file_path.parent)]
@@ -1053,6 +1094,37 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                     if not os.environ.get("GITHUB_TOKEN") and not os.environ.get("GH_TOKEN"):
                         msg += " [HINT] Set GITHUB_TOKEN env var to increase GitHub API rate limits."
                 results.append(msg)
+        elif tool_name == "search_package":
+            query = (tool_input.get("query") or "").strip()
+            search_by = (tool_input.get("search_by") or "name").strip().lower()
+            if not query:
+                results.append("Error: search_package requires a 'query' argument.")
+                continue
+            if search_by not in ("name", "file"):
+                results.append(f"Error: search_package: unknown search_by '{search_by}' — use 'name' or 'file'.")
+                continue
+            try:
+                from pbuild_ai.query_gitexplorer import query_package_by_file, query_package_by_name, format_results
+                with Spinner(prefix="[TOOL] search_package", color=GREEN):
+                    if search_by == "file":
+                        found = query_package_by_file(query)
+                    else:
+                        found = query_package_by_name(query)
+            except Exception as e:
+                results.append(f"Error: search_package: gitexplorer query failed: {e}")
+                continue
+            if found:
+                print(f"[TOOL] search_package: {search_by} '{query}' -> {len(found)} package(s)")
+                if search_by == "file":
+                    results.append(f"Packages providing '{query}' — use one of these PACKAGE NAMES "
+                                   f"as BuildRequires, never the file path itself:\n"
+                                   + format_results(found))
+                else:
+                    results.append(f"Packages whose name matches '{query}':\n" + format_results(found))
+            else:
+                results.append(f"No packages found for {search_by} '{query}' in any openSUSE/SLE repo. "
+                               "Do NOT invent a file-path dependency — try a broader query "
+                               "(e.g. the library or tool name without version) or search_by='file'.")
         elif tool_name == "download_file":
             url = tool_input.get("url")
             filename = tool_input.get("filename")

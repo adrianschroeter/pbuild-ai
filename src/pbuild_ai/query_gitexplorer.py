@@ -15,6 +15,33 @@ _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
 
+# Successful lookups are cached for the lifetime of the process: one run hits
+# the same unresolvable dependency repeatedly (prompt injection, spec-write
+# hints, search_package calls, skill fixes) and the answer cannot change
+# mid-run. Failed lookups are never cached.
+_CACHE = {}
+_CACHE_MAX = 256
+
+
+def clear_cache():
+    """Drop all cached lookups (used by tests)."""
+    _CACHE.clear()
+
+
+def _cache_get(kind, query, fetcher):
+    key = (kind, query)
+    if key not in _CACHE:
+        if len(_CACHE) >= _CACHE_MAX:
+            _CACHE.clear()
+        _CACHE[key] = fetcher(query)
+    return _CACHE[key]
+
+
+def _fetch_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "pbuild-ai/1.0"})
+    with urllib.request.urlopen(req, timeout=15, context=_CTX) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
 
 def _deduplicate(raw_list, limit):
     seen = set()
@@ -34,22 +61,24 @@ def _deduplicate(raw_list, limit):
     return results
 
 
+def _fetch_by_file(filename):
+    data = _fetch_json(f"{API_BASE}/files?q={urllib.parse.quote(filename)}")
+    return _deduplicate(data.get("results", []), limit=1000)
+
+
+def _fetch_by_name(search_term):
+    data = _fetch_json(f"{API_BASE}/packages?q={urllib.parse.quote(search_term)}")
+    return _deduplicate(data.get("packages", []), limit=1000)
+
+
 def query_package_by_file(filename: str, limit: int = 20) -> list[dict]:
     """Find packages providing a file. Returns deduplicated [{package_name, tracking_branch}]."""
-    url = f"{API_BASE}/files?q={urllib.parse.quote(filename)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "pbuild-ai/1.0"})
-    with urllib.request.urlopen(req, timeout=15, context=_CTX) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return _deduplicate(data.get("results", []), limit=limit)
+    return _cache_get("file", filename, _fetch_by_file)[:limit]
 
 
 def query_package_by_name(search_term: str, limit: int = 20) -> list[dict]:
     """Find packages matching a name substring (case-insensitive). Returns deduplicated [{package_name, tracking_branch}]."""
-    url = f"{API_BASE}/packages?q={urllib.parse.quote(search_term)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "pbuild-ai/1.0"})
-    with urllib.request.urlopen(req, timeout=15, context=_CTX) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return _deduplicate(data.get("packages", []), limit=limit)
+    return _cache_get("name", search_term, _fetch_by_name)[:limit]
 
 
 def format_results(results: list[dict]) -> str:

@@ -408,11 +408,22 @@ def _inject_gitexplorer_results(error_prompt: str, build_out: str) -> str:
 
         pkg = parse_unresolved_package_from_log(build_out)
         if pkg:
-            print(f"[GITEXPLORER] Querying packages endpoint for: {pkg}")
-            results = query_package_by_name(pkg)
-            if results:
-                lines.append(f"Packages matching '{pkg}':")
-                lines.append(format_results(results))
+            if pkg.startswith('/'):
+                # The spec requires a file path ("nothing provides /usr/bin/protoc")
+                # — the packages endpoint cannot match a path, so look up which
+                # packages provide that file and tell the AI to use their names.
+                print(f"[GITEXPLORER] Querying files endpoint for file-path dependency: {pkg}")
+                results = query_package_by_file(pkg)
+                if results:
+                    lines.append(f"Packages providing '{pkg}' — the spec must require the PACKAGE NAME, "
+                                 f"never the file path '{pkg}':")
+                    lines.append(format_results(results))
+            else:
+                print(f"[GITEXPLORER] Querying packages endpoint for: {pkg}")
+                results = query_package_by_name(pkg)
+                if results:
+                    lines.append(f"Packages matching '{pkg}':")
+                    lines.append(format_results(results))
 
         directory = parse_unowned_directory_from_log(build_out)
         if directory:
@@ -1033,6 +1044,11 @@ def _handle_auto_deps(build_out: str, workspace_dir: str, pkg_name: str,
     if not _parsed:
         return None
     dep_name, _constraint_op, _constraint_ver = _parsed
+    if dep_name.startswith('/'):
+        print(f"[AUTO-DEPS] '{dep_name}' is a file path, not a package name — "
+              f"the spec must require the providing package instead (gitexplorer "
+              f"files lookup), auto-creating a package for a path makes no sense.")
+        return None
     print(f"[AUTO-DEPS] Detected missing dependency: {dep_name}")
     if _constraint_op:
         print(f"[AUTO-DEPS]   Constraint: {_constraint_op} {_constraint_ver}")
@@ -1226,6 +1242,11 @@ def _run_build_guard(spec, manager, ai, full_context, error_prompt, ctx, program
                 if ctx.interactive and ctx.auto_deps == 0:
                     from pbuild_ai.skills.unresolvable_skill import parse_unresolved_package_from_log
                     _missing = parse_unresolved_package_from_log(build_out)
+                    if _missing and _missing.startswith('/'):
+                        print(f"[AUTO-DEPS] '{_missing}' is a file path — the spec must "
+                              f"require the providing package's NAME instead; not asking "
+                              f"to create a package for a path.")
+                        _missing = None
                     if _missing:
                         from pbuild_ai.tools import ask_yes_no_or_instruction
                         _ans, _hint = ask_yes_no_or_instruction(

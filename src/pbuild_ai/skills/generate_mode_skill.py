@@ -17,6 +17,7 @@ Follow these rules:
    - Do NOT use ?dist macro — use ~ in version format
    - Use standard SUSE RPM macros: %%fdupes, %%set_permissions
    - Single dependency per BuildRequires: line
+   - Dependencies must be real PACKAGE NAMES — never file paths like /usr/bin/protoc. If you do not know which package provides a tool, file or library, call search_package (search_by='file' for a file path, search_by='name' for a name guess) and use the returned package name
    - Omit empty %%clean, %%post, %%pre, %%preun, %%postun sections (an empty %%changelog stays when a PACKAGE_NAME.changes file exists)
    - Never recommend rpmbuild
    - Build environment has NO network access — patch out any code that tries to reach external hosts at build time

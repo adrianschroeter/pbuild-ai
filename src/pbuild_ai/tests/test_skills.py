@@ -228,8 +228,48 @@ class TestPythonMacroGuidance(unittest.TestCase):
         self.assertIn("%{python_module MODULE_NAME}", sp)
         self.assertIn("python-rpm-macros", sp)
         self.assertIn("never remove the %{python_module } wrapper", sp)
+        # explicit BuildRequires must be mandated, no default-requirement excuse
+        self.assertIn("BuildRequires: python-rpm-macros", sp)
+        self.assertNotIn("default build-time requirement", sp)
         # old typo must be gone
         self.assertNotIn("MODLE_NAME", sp)
+
+    def test_lang_python_fix_content_adds_python_rpm_macros(self):
+        fc = self._skill_module("lang_python_skill").fix_content
+        spec = (
+            "Name:           python-foo\n"
+            "BuildRequires:  %{python_module setuptools}\n"
+            "\n"
+            "%build\n"
+            "%pyproject_wheel\n"
+        )
+        result = fc(spec)
+        self.assertIn("BuildRequires:  python-rpm-macros", result)
+        self.assertEqual(result.count("BuildRequires:  python-rpm-macros"), 1)
+
+    def test_lang_python_fix_content_no_duplicate_python_rpm_macros(self):
+        fc = self._skill_module("lang_python_skill").fix_content
+        spec = (
+            "BuildRequires:  python-rpm-macros\n"
+            "BuildRequires:  %{python_module setuptools}\n"
+            "%build\n"
+            "%pyproject_wheel\n"
+        )
+        self.assertEqual(fc(spec), spec)
+
+    def test_lang_python_fix_content_ignores_commented_buildrequires(self):
+        fc = self._skill_module("lang_python_skill").fix_content
+        spec = (
+            "# BuildRequires: python-rpm-macros\n"
+            "BuildRequires:  %{python_module setuptools}\n"
+        )
+        result = fc(spec)
+        self.assertIn("BuildRequires:  python-rpm-macros", result)
+
+    def test_lang_python_fix_content_needs_python_macro_usage(self):
+        fc = self._skill_module("lang_python_skill").fix_content
+        spec = "Name: foo\nBuildRequires: cmake\n"
+        self.assertEqual(fc(spec), spec)
 
     def test_lang_python_error_prompt_unresolvable_rename_guidance(self):
         ep = self._skill_module("lang_python_skill").AI_ERROR_PROMPT

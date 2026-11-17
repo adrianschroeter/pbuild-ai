@@ -24,8 +24,8 @@ Check the following Spec-file. Pay special attention to:
 1. Do NOT use  %py3_build, %py3_install, %pyproject_buildrequires, %pyproject_files, or %pyproject_save_files macros — avoid them entirely.
 2. Use %pyproject_wheel and %pyproject_install instead when the source uses a pyproject.toml.
 3. Generate new spec files by using "py2pack generate MODULE VERSION" command
-4. Write every Python BuildRequires as `BuildRequires: %{python_module MODULE_NAME}`. The %{python_module } macro is provided by python-rpm-macros, a default build-time requirement in openSUSE builds, and expands to the correct interpreter-specific package. Never write a literal python3x-... package name and never remove the %{python_module } wrapper.
-5. Are there any obvious missing BuildRequires like for devel or for pip? or python-rpm-macros?
+4. Write every Python BuildRequires as `BuildRequires: %{python_module MODULE_NAME}`. The macro expands to the correct interpreter-specific package. Never write a literal python3x-... package name and never remove the %{python_module } wrapper.
+5. Ensure `BuildRequires: python-rpm-macros` is present — it provides the %{python_module } macro and the other Python macros; add it if missing. Are there any other obvious missing BuildRequires like for devel or for pip?
 6. The Python BuildRequires (`%{python_module foo >= 1.2}`) and Requires (`python-foo >= 1.2`) follow the pyproject.toml of the source: dependencies upstream added are added, dropped ones removed, minimum versions taken over. Requires: of the main package lists only runtime dependencies ([project] dependencies): never build backends (setuptools, hatchling, ...), test or optional dependencies.
 Summarize your analysis in a maximum of 3 sentences.
 """
@@ -124,15 +124,43 @@ def fix_build_error(spec_path, spec_text, build_log, log=print):
     return fix_missing_module(spec_path, spec_text, build_log, log)
 
 
+# Substrings that indicate Python RPM macro usage requiring python-rpm-macros
+_PYTHON_MACRO_MARKERS = ("%{python_", "%python", "%py3_", "%py_", "%pyproject_")
+
+
+def ensure_python_rpm_macros(content: str) -> str:
+    """Add BuildRequires: python-rpm-macros when the spec uses Python macros
+    but does not require the package providing them."""
+    lines = content.split('\n')
+    uses_macros = False
+    anchor = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('#'):
+            continue
+        if any(m in stripped for m in _PYTHON_MACRO_MARKERS):
+            uses_macros = True
+        if stripped.startswith('BuildRequires'):
+            if 'python-rpm-macros' in stripped:
+                return content
+            if anchor is None:
+                anchor = i
+    if not uses_macros or anchor is None:
+        return content
+    lines.insert(anchor + 1, 'BuildRequires:  python-rpm-macros')
+    return '\n'.join(lines)
+
+
 def fix_content(content: str) -> str:
     """
     This function is executed to patch the Spec-file before the build.
     """
-    # Example fix: Ensure outdated Python macros are replaced (highly simplified)
+    # Ensure outdated Python macros are replaced (highly simplified)
     if "%{__python3} setup.py install" in content:
         content = content.replace(
             "%{__python3} setup.py install", 
             "# WARNING: Outdated setup found. Replaced with a more modern variant (please check manually)\n%py3_install"
         )
-    
+
+    content = ensure_python_rpm_macros(content)
     return content
