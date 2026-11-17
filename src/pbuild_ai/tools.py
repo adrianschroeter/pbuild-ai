@@ -185,6 +185,12 @@ def format_tool_display(name, inp, r, debug):
         return f"read_file: {_p or '?'} ({line_count} lines)"
     if name in ("list_archive", "list_files"):
         return None
+    if name == "grep":
+        # Successful matches are summarized by the "[TOOL] grep ..." line the
+        # executor prints; errors and the no-match note carry information the
+        # executor did not print.
+        if isinstance(r, str) and not r.startswith("Error") and not r.startswith("No matches"):
+            return None
     if name == "read_file_from_archive":
         if not debug:
             return None
@@ -384,6 +390,39 @@ def build_tools_list(interactive=False):
                         }
                     },
                     "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "grep",
+                "description": "Search text inside files in the workspace: one file or a whole directory tree (hidden directories, binary files and files above 1 MB are skipped). The pattern is a literal string by default; set regex=true to interpret it as a Python regular expression. Returns matching lines as 'path:lineno: text'. Use this to scan sources and specs instead of reading every file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Text to search for (literal by default, regular expression with regex=true)"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "File or directory to search in (relative to workspace root). Defaults to '.' (the whole workspace)."
+                        },
+                        "regex": {
+                            "type": "boolean",
+                            "description": "Interpret pattern as a Python regular expression. Default false (literal match)."
+                        },
+                        "ignore_case": {
+                            "type": "boolean",
+                            "description": "Case-insensitive matching. Default true."
+                        },
+                        "include": {
+                            "type": "string",
+                            "description": "Optional glob to restrict which files are searched (e.g. '*.spec', '*.py', '*.rs')."
+                        }
+                    },
+                    "required": ["pattern"]
                 }
             }
         },
@@ -755,6 +794,54 @@ def _spec_write_hints(file_path, new_text):
     return hint
 
 
+_GREP_MAX_MATCHES = 100
+_GREP_MAX_LINE_CHARS = 300
+_GREP_MAX_FILES = 5000
+
+
+def _grep_target_files(root, include, workspace=None):
+    """Files to grep: a single file, or a directory tree with hidden
+    directories, archives and files that escape the workspace through a
+    symlink skipped. `include` is an optional glob matched against the file
+    name or the path relative to the search root. Every yielded file must
+    resolve inside `workspace` (the sandbox root) when it is given."""
+    if root.is_file():
+        yield root
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith('.'))
+        for name in sorted(filenames):
+            f = Path(dirpath) / name
+            if workspace is not None:
+                try:
+                    # Same rule as WorkspaceManager._is_safe_path: resolve
+                    # symlinks and stay inside the workspace — a link to
+                    # /etc/passwd must not leak external content.
+                    if not f.resolve(strict=False).is_relative_to(workspace):
+                        continue
+                except (OSError, ValueError):
+                    continue
+            if any(name.endswith(ext) for ext in _ARCHIVE_EXTS) or name.endswith(('.obscpio', '.cpio')):
+                continue
+            if include and not (fnmatch.fnmatch(name, include)
+                                or fnmatch.fnmatch(str(f.relative_to(root)), include)):
+                continue
+            yield f
+
+
+def _grep_matcher(pattern, regex, ignore_case):
+    """Return (match_line, error); match_line(line) -> bool."""
+    if regex:
+        try:
+            compiled = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+        except re.error as exc:
+            return None, f"Error: grep: invalid regular expression {pattern!r}: {exc}"
+        return (lambda line, _m=compiled: _m.search(line) is not None), None
+    needle = pattern.lower() if ignore_case else pattern
+    return (lambda line, _n=needle, _ic=ignore_case:
+            (_n in line.lower()) if _ic else (_n in line)), None
+
+
 def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=False, interactive=False, debug=False):
     """Execute tool calls returned by AI. Returns list of tool results."""
     results = []
@@ -1070,6 +1157,55 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
                 results.append("\n".join(entries) if entries else "(empty directory)")
             except Exception as e:
                 results.append(f"Error listing directory: {e}")
+        elif tool_name == "grep":
+            pattern = tool_input.get("pattern")
+            if not pattern:
+                results.append("Error: grep: missing 'pattern'.")
+                continue
+            target = (tool_input.get("path") or ".").strip() or "."
+            search_path = resolve_path(target, workspace_dir)
+            if search_path is None or not manager._is_safe_path(search_path):
+                results.append(f"Error: {target} is outside the workspace directory.")
+                continue
+            if not search_path.exists():
+                results.append(f"Error: grep: path not found: {target}")
+                continue
+            match_line, err = _grep_matcher(pattern, bool(tool_input.get("regex")),
+                                            bool(tool_input.get("ignore_case", True)))
+            if err:
+                results.append(err)
+                continue
+            out, scanned, truncated = [], 0, False
+            for f in _grep_target_files(search_path, tool_input.get("include"), workspace):
+                if scanned >= _GREP_MAX_FILES:
+                    truncated = True
+                    break
+                try:
+                    if not f.is_file() or f.stat().st_size > _SNAPSHOT_MAX_SIZE:
+                        continue
+                    data = f.read_bytes()
+                except OSError:
+                    continue
+                if b'\x00' in data[:8192]:
+                    continue  # binary file
+                scanned += 1
+                shown = f.relative_to(workspace) if f.is_relative_to(workspace) else f
+                for lineno, line in enumerate(data.decode('utf-8', errors='replace').splitlines(), 1):
+                    if match_line(line):
+                        out.append(f"{shown}:{lineno}: {line.strip()[:_GREP_MAX_LINE_CHARS]}")
+                        if len(out) >= _GREP_MAX_MATCHES:
+                            truncated = True
+                            break
+                if truncated:
+                    break
+            if out:
+                print(f"[TOOL] grep '{pattern}': {len(out)} match(es) in {target}")
+                if truncated:
+                    out.append(f"[truncated at {len(out)} matches — narrow the pattern, path or include filter]")
+                results.append("\n".join(out))
+            else:
+                note = " (search stopped at the file limit — narrow path or include)" if truncated else "."
+                results.append(f"No matches for '{pattern}' in {target}{note}")
         elif tool_name == "web_fetch":
             url = tool_input.get("url")
             if not url:

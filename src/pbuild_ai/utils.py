@@ -80,12 +80,17 @@ def resolve_path(path_str, workspace_dir, for_write=False):
 # get more room: an edit needs the exact current text of the lines it changes.
 TOOL_RESULT_LIMIT = 2000
 READ_RESULT_LIMIT = 16000
+GREP_RESULT_LIMIT = 8000
 _READ_TOOLS = ("read_file", "read_file_from_archive")
 _EDIT_TOOLS = ("edit_file", "apply_patch", "write_file")
 
 
 def tool_result_limit(name):
-    return READ_RESULT_LIMIT if name in _READ_TOOLS else TOOL_RESULT_LIMIT
+    if name in _READ_TOOLS:
+        return READ_RESULT_LIMIT
+    if name == "grep":
+        return GREP_RESULT_LIMIT
+    return TOOL_RESULT_LIMIT
 
 
 def truncate_tool_result(name, content, debug=False):
