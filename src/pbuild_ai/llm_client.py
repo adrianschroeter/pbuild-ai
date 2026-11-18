@@ -84,13 +84,59 @@ def prune_messages(messages, keep_rounds=2):
 
 def _primary_arg(tool_name, tool_input):
     """Return the most informative argument of a tool call for log display."""
-    for key in ("script_name", "filename", "path", "url", "old_string", "content"):
+    for key in ("script_name", "filename", "pattern", "query", "path", "url",
+                "old_string", "content"):
         val = tool_input.get(key)
         if isinstance(val, str) and val.strip():
             val = val.strip().splitlines()[0]
             val = val.strip().strip('`')
             return val[:60]
     return ""
+
+
+def _parse_tool_args(raw):
+    """Accept a tool-call arguments payload as dict or JSON string and return
+    a dict — empty when it is neither or cannot be parsed."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _tool_call_label(name, args_obj=None):
+    """One-line display of a tool call: the name plus its most telling
+    arguments, e.g. 'read_file foo.spec' or
+    'grep protoc (regex, include=*.spec, in src)'."""
+    args_obj = _parse_tool_args(args_obj)
+    if not args_obj:
+        return name
+    label = name
+    arg = _primary_arg(name, args_obj)
+    if arg:
+        label = f"{name} {arg}"
+    if name == "grep":
+        flags = []
+        if args_obj.get("regex"):
+            flags.append("regex")
+        if args_obj.get("ignore_case") is False:
+            flags.append("case-sensitive")
+        if args_obj.get("include"):
+            flags.append(f"include={args_obj['include']}")
+        path = args_obj.get("path")
+        if isinstance(path, str) and path.strip() and path.strip() != ".":
+            flags.append(f"in {path.strip()}")
+        if flags:
+            label += f" ({', '.join(flags)})"
+    elif name == "search_package":
+        search_by = args_obj.get("search_by")
+        if isinstance(search_by, str) and search_by and search_by != "name":
+            label += f" (search_by={search_by})"
+    return label
 
 
 def _summarize_round_calls(merged_results):
@@ -256,9 +302,9 @@ class _StreamAggregator:
         self._line_open = True
         self._write(text)
 
-    def _echo_tool_call(self, name):
+    def _echo_tool_call(self, name, args_obj=None):
         self._end_line()
-        self._write(f"[AI] tool call: {name}\n")
+        self._write(f"[AI] tool call: {_tool_call_label(name, args_obj)}\n")
 
     # -- Ollama NDJSON -------------------------------------------------------
     def feed_ollama(self, obj):
@@ -285,7 +331,8 @@ class _StreamAggregator:
                 self._native_thinking.append(msg["thinking"])
             for tc in (msg.get("tool_calls") or []):
                 self._tool_calls.append(tc)
-                self._echo_tool_call((tc.get("function") or {}).get("name", "?"))
+                func = tc.get("function") or {}
+                self._echo_tool_call(func.get("name", "?"), func.get("arguments"))
         else:
             # /api/generate chunks keep content and thinking at the top level
             response = obj.get("response") or ""
@@ -314,7 +361,8 @@ class _StreamAggregator:
             self._echo_thinking(message.get("reasoning_content") or "")
             self._echo_content(message.get("content") or "")
             for tc in (message.get("tool_calls") or []):
-                self._echo_tool_call((tc.get("function") or {}).get("name", "?"))
+                func = tc.get("function") or {}
+                self._echo_tool_call(func.get("name", "?"), func.get("arguments"))
             return
         delta = choice.get("delta") or {}
         reasoning = delta.get("reasoning_content") or delta.get("reasoning")
@@ -336,7 +384,6 @@ class _StreamAggregator:
             func = tc.get("function") or {}
             if func.get("name"):
                 entry["name"] += func["name"]
-                self._echo_tool_call(entry["name"])
             if func.get("arguments"):
                 entry["args"].append(func["arguments"])
 
@@ -348,6 +395,12 @@ class _StreamAggregator:
             if self._complete_message is not None:
                 return {"model": self._model,
                         "choices": [{"message": self._complete_message}]}
+            # Deltas carry the tool name before the arguments JSON is
+            # complete — echo the tool calls only now, with their full
+            # arguments.
+            for i in sorted(self._oai_tc):
+                entry = self._oai_tc[i]
+                self._echo_tool_call(entry["name"], "".join(entry["args"]))
             message = {"role": "assistant"}
             content = "".join(self._oai_content)
             reasoning = "".join(self._oai_reasoning)

@@ -397,7 +397,7 @@ def build_tools_list(interactive=False):
             "type": "function",
             "function": {
                 "name": "grep",
-                "description": "Search text inside files in the workspace: one file or a whole directory tree (hidden directories, binary files and files above 1 MB are skipped). The pattern is a literal string by default; set regex=true to interpret it as a Python regular expression. Returns matching lines as 'path:lineno: text'. Use this to scan sources and specs instead of reading every file.",
+                "description": "Search text inside files in the workspace: one file or a whole directory tree (hidden directories, binary files and files above 1 MB are skipped). Tar and zip archives in the workspace, including the source tarball, are searched member by member; those hits are labelled 'archive.tar.gz!member/path:lineno:' and can be opened with read_file_from_archive. The pattern is a literal string by default; set regex=true to interpret it as a Python regular expression. Use this to scan sources, specs and tarballs instead of reading every file.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -407,7 +407,7 @@ def build_tools_list(interactive=False):
                         },
                         "path": {
                             "type": "string",
-                            "description": "File or directory to search in (relative to workspace root). Defaults to '.' (the whole workspace)."
+                            "description": "File, archive or directory to search in (relative to workspace root). Defaults to '.' (the whole workspace)."
                         },
                         "regex": {
                             "type": "boolean",
@@ -419,7 +419,7 @@ def build_tools_list(interactive=False):
                         },
                         "include": {
                             "type": "string",
-                            "description": "Optional glob to restrict which files are searched (e.g. '*.spec', '*.py', '*.rs')."
+                            "description": "Optional glob to restrict what is searched, plain files and archive members alike (e.g. '*.spec', '*.py', '*.rs', 'CMakeLists.txt')."
                         }
                     },
                     "required": ["pattern"]
@@ -797,19 +797,24 @@ def _spec_write_hints(file_path, new_text):
 _GREP_MAX_MATCHES = 100
 _GREP_MAX_LINE_CHARS = 300
 _GREP_MAX_FILES = 5000
+_GREP_MEMBER_MAX_SIZE = 512 * 1024       # per archive member
+_GREP_ARCHIVE_MAX_SIZE = 64 * 1024 * 1024  # archives on disk above this are skipped
+_GREP_TOTAL_SCAN_BYTES = 64 * 1024 * 1024  # total scan budget per call
 
 
-def _grep_target_files(root, include, workspace=None):
+def _grep_target_files(root, workspace=None):
     """Files to grep: a single file, or a directory tree with hidden
-    directories, archives and files that escape the workspace through a
-    symlink skipped. `include` is an optional glob matched against the file
-    name or the path relative to the search root. Every yielded file must
-    resolve inside `workspace` (the sandbox root) when it is given."""
+    directories and files that escape the workspace through a symlink skipped.
+    Archives are included — _grep_documents() searches their members."""
     if root.is_file():
         yield root
         return
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith('.'))
+        # Hidden dirs (.git, .osc, .pc, .pbuild) hold no project source; _build.*
+        # is the local build result dir (a root tree, same rule as the change
+        # diff in llm_client). Pointing path= at one of them still works.
+        dirnames[:] = sorted(d for d in dirnames
+                             if not d.startswith('.') and not d.startswith('_build.'))
         for name in sorted(filenames):
             f = Path(dirpath) / name
             if workspace is not None:
@@ -821,12 +826,92 @@ def _grep_target_files(root, include, workspace=None):
                         continue
                 except (OSError, ValueError):
                     continue
-            if any(name.endswith(ext) for ext in _ARCHIVE_EXTS) or name.endswith(('.obscpio', '.cpio')):
-                continue
-            if include and not (fnmatch.fnmatch(name, include)
-                                or fnmatch.fnmatch(str(f.relative_to(root)), include)):
-                continue
             yield f
+
+
+def _grep_member_ok(name, include):
+    if not include:
+        return True
+    base = name.rsplit('/', 1)[-1]
+    return fnmatch.fnmatch(base, include) or fnmatch.fnmatch(name, include)
+
+
+def _archive_member_texts(archive_path, include):
+    """Yield (member_name, data) for the file members of a tar/zip archive.
+    Members above _GREP_MEMBER_MAX_SIZE are skipped; a broken archive or
+    member ends its iteration silently."""
+    try:
+        if archive_path.name.endswith('.zip'):
+            with zipfile.ZipFile(archive_path) as zf:
+                for info in zf.infolist():
+                    if info.is_dir() or info.file_size > _GREP_MEMBER_MAX_SIZE:
+                        continue
+                    if not _grep_member_ok(info.filename, include):
+                        continue
+                    try:
+                        with zf.open(info) as fh:
+                            yield info.filename, fh.read(_GREP_MEMBER_MAX_SIZE)
+                    except (OSError, RuntimeError):
+                        continue
+        else:
+            with tarfile.open(archive_path, 'r:*') as tar:
+                for member in tar:
+                    if not member.isfile() or member.size > _GREP_MEMBER_MAX_SIZE:
+                        continue
+                    if not _grep_member_ok(member.name, include):
+                        continue
+                    try:
+                        fh = tar.extractfile(member)
+                        if fh is not None:
+                            yield member.name, fh.read(_GREP_MEMBER_MAX_SIZE)
+                    except (OSError, tarfile.TarError):
+                        continue
+    except (tarfile.TarError, zipfile.BadZipFile, zipfile.LargeZipFile,
+            EOFError, OSError):
+        return
+
+
+def _grep_documents(search_path, include, workspace, stats):
+    """Yield (label, data) text documents to grep: plain workspace files plus
+    the members of tar/zip archives — the source tarball included — labelled
+    'archive.tar.gz!member/path' so a hit can be re-read via
+    read_file_from_archive. `include` filters file names and member names.
+    `stats` tracks scanned documents/bytes and flags truncation (file count
+    and byte budget)."""
+    for f in _grep_target_files(search_path, workspace):
+        try:
+            if not f.is_file():
+                continue
+            size = f.stat().st_size
+        except OSError:
+            continue
+        rel = f.relative_to(workspace) if f.is_relative_to(workspace) else f
+        if any(f.name.endswith(ext) for ext in _ARCHIVE_EXTS):
+            if size > _GREP_ARCHIVE_MAX_SIZE:
+                continue
+            for member, data in _archive_member_texts(f, include):
+                if stats["docs"] >= _GREP_MAX_FILES or stats["bytes"] >= _GREP_TOTAL_SCAN_BYTES:
+                    stats["truncated"] = True
+                    return
+                stats["docs"] += 1
+                stats["bytes"] += len(data)
+                yield f"{rel}!{member}", data
+            continue
+        if f.name.endswith(('.obscpio', '.cpio')):
+            continue
+        if include and not (fnmatch.fnmatch(f.name, include)
+                            or fnmatch.fnmatch(str(rel), include)):
+            continue
+        if size > _SNAPSHOT_MAX_SIZE:
+            continue
+        if stats["docs"] >= _GREP_MAX_FILES or stats["bytes"] >= _GREP_TOTAL_SCAN_BYTES:
+            stats["truncated"] = True
+            return
+        stats["docs"] += 1
+        try:
+            yield str(rel), f.read_bytes()
+        except OSError:
+            continue
 
 
 def _grep_matcher(pattern, regex, ignore_case):
@@ -1175,36 +1260,27 @@ def execute_tool_calls(tool_calls, manager, workspace_dir, allow_tool_scripts=Fa
             if err:
                 results.append(err)
                 continue
-            out, scanned, truncated = [], 0, False
-            for f in _grep_target_files(search_path, tool_input.get("include"), workspace):
-                if scanned >= _GREP_MAX_FILES:
-                    truncated = True
-                    break
-                try:
-                    if not f.is_file() or f.stat().st_size > _SNAPSHOT_MAX_SIZE:
-                        continue
-                    data = f.read_bytes()
-                except OSError:
-                    continue
+            out, stats = [], {"docs": 0, "bytes": 0, "truncated": False}
+            for label, data in _grep_documents(search_path, tool_input.get("include"),
+                                               workspace, stats):
                 if b'\x00' in data[:8192]:
-                    continue  # binary file
-                scanned += 1
-                shown = f.relative_to(workspace) if f.is_relative_to(workspace) else f
+                    continue  # binary file or member
                 for lineno, line in enumerate(data.decode('utf-8', errors='replace').splitlines(), 1):
                     if match_line(line):
-                        out.append(f"{shown}:{lineno}: {line.strip()[:_GREP_MAX_LINE_CHARS]}")
+                        out.append(f"{label}:{lineno}: {line.strip()[:_GREP_MAX_LINE_CHARS]}")
                         if len(out) >= _GREP_MAX_MATCHES:
-                            truncated = True
+                            stats["truncated"] = True
                             break
-                if truncated:
+                if stats["truncated"]:
                     break
+            truncated = stats["truncated"]
             if out:
                 print(f"[TOOL] grep '{pattern}': {len(out)} match(es) in {target}")
                 if truncated:
                     out.append(f"[truncated at {len(out)} matches — narrow the pattern, path or include filter]")
                 results.append("\n".join(out))
             else:
-                note = " (search stopped at the file limit — narrow path or include)" if truncated else "."
+                note = " (search stopped at the scan limit — narrow path or include)" if truncated else "."
                 results.append(f"No matches for '{pattern}' in {target}{note}")
         elif tool_name == "web_fetch":
             url = tool_input.get("url")

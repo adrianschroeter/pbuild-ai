@@ -1,11 +1,15 @@
 """Tests for the grep tool: literal and regular-expression search inside the
-workspace sandbox, with include filter, binary/hidden skipping and caps."""
+workspace sandbox and inside tar/zip archive members, with include filter,
+binary/hidden skipping and caps."""
 
+import io
 import os
 import sys
+import tarfile
 import tempfile
 import types
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -36,7 +40,8 @@ class TestGrepTool(unittest.TestCase):
         (Path(self.ws) / ".hidden").mkdir()
         (Path(self.ws) / ".hidden" / "secret.txt").write_text(HIDDEN_SECRET)
         (Path(self.ws) / "blob.bin").write_bytes(b"needle\x00\x00binary haystack")
-        (Path(self.ws) / "data.tar.gz").write_bytes(b"\x1f\x8b\x08needle")
+        # a corrupt archive: parsing it must fail silently, never abort the scan
+        (Path(self.ws) / "broken.tar.gz").write_bytes(b"\x1f\x8b\x08needle")
 
     def _grep(self, tool_input, manager=None):
         manager = manager or MagicMock()
@@ -95,10 +100,22 @@ class TestGrepTool(unittest.TestCase):
         out = self._grep({"pattern": "from-hidden-dir"})
         self.assertTrue(out.startswith("No matches"))
 
+    def test_build_result_dirs_are_skipped_but_reachable(self):
+        build = Path(self.ws) / "_build.tumbleweed.x86_64"
+        (build / "root" / "usr").mkdir(parents=True)
+        (build / "root" / "usr" / "noisefile").write_text("rootstree-value\n")
+        # not searched when walking the workspace
+        out = self._grep({"pattern": "rootstree-value"})
+        self.assertTrue(out.startswith("No matches"))
+        # explicitly pointing at it still works
+        out = self._grep({"pattern": "rootstree-value",
+                          "path": "_build.tumbleweed.x86_64"})
+        self.assertIn("_build.tumbleweed.x86_64/root/usr/noisefile:1:", out)
+
     def test_binary_files_are_skipped(self):
         out = self._grep({"pattern": "needle"})
         self.assertNotIn("blob.bin", out)
-        self.assertNotIn("data.tar.gz", out)
+        self.assertNotIn("broken.tar.gz", out)
         self.assertTrue(out.startswith("No matches"))
 
     def test_no_matches_message(self):
@@ -173,6 +190,119 @@ class TestGrepTool(unittest.TestCase):
         out = self._grep({"pattern": "needle"})
         matched_line = next(l for l in out.splitlines() if l.startswith("long.txt:"))
         self.assertLess(len(matched_line), 320)
+
+
+def _add_tar(path, members, gzipped=True):
+    with tarfile.open(path, "w:gz" if gzipped else "w") as tar:
+        for name, data in members:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+
+class TestGrepArchives(unittest.TestCase):
+    """Tar/zip members are searchable; hits are labelled so they can be
+    re-opened with read_file_from_archive."""
+
+    def setUp(self):
+        self.ws = tempfile.mkdtemp(prefix="pai_grep_arc_")
+        (Path(self.ws) / "foo.spec").write_text("Name: foo\nSource0: foo-1.0.tar.gz\n")
+        self.tar = os.path.join(self.ws, "foo-1.0.tar.gz")
+        _add_tar(self.tar, [
+            ("foo-1.0/configure", b"#!/bin/sh\n# find protoc here\nexit 0\n"),
+            ("foo-1.0/src/main.c", b"int main(void)\n{\n    return call_protoc();\n}\n"),
+            ("foo-1.0/blob", b"\x00\x01binary member needle"),
+        ])
+        self.plain_tar = os.path.join(self.ws, "sub")
+        os.makedirs(self.plain_tar)
+        self.tar2 = os.path.join(self.plain_tar, "plain.tar")
+        _add_tar(self.tar2, [("pkg/Makefile", b"PROG = protoc\n")], gzipped=False)
+        self.zip = os.path.join(self.ws, "extra.zip")
+        with zipfile.ZipFile(self.zip, "w") as zf:
+            zf.writestr("README.md", "# Title\nprotoc is required\n")
+            zf.writestr("docs/notes.txt", "unrelated line\n")
+            zf.writestr("bin/tool", b"\x00binary zip member")
+
+    def _grep(self, tool_input):
+        return execute_tool_calls([("grep", tool_input)], MagicMock(), self.ws)[0]
+
+    def test_tar_gz_members_are_searched(self):
+        out = self._grep({"pattern": "find protoc here"})
+        self.assertIn("foo-1.0.tar.gz!foo-1.0/configure:2:", out)
+
+    def test_nested_archive_and_plain_tar(self):
+        out = self._grep({"pattern": "call_protoc"})
+        self.assertIn("foo-1.0.tar.gz!foo-1.0/src/main.c:3:", out)
+        out = self._grep({"pattern": "PROG"})
+        self.assertIn("sub/plain.tar!pkg/Makefile:1:", out)
+
+    def test_zip_members_are_searched(self):
+        out = self._grep({"pattern": "protoc is required"})
+        self.assertIn("extra.zip!README.md:2:", out)
+
+    def test_archive_matches_seen_alongside_plain_files(self):
+        out = self._grep({"pattern": "protoc"})
+        self.assertIn("foo-1.0.tar.gz!foo-1.0/configure:2:", out)
+        self.assertIn("extra.zip!README.md:2:", out)
+        self.assertIn("sub/plain.tar!pkg/Makefile:1:", out)
+        # the spec line mentions the tarball name, not "protoc"
+        self.assertNotIn("foo.spec:2:", out)
+
+    def test_path_can_point_directly_at_an_archive(self):
+        out = self._grep({"pattern": "find protoc here", "path": "foo-1.0.tar.gz"})
+        self.assertIn("foo-1.0.tar.gz!foo-1.0/configure:2:", out)
+        out = self._grep({"pattern": "PROG", "path": "sub/plain.tar"})
+        self.assertIn("sub/plain.tar!pkg/Makefile:1:", out)
+
+    def test_include_filters_members_by_name(self):
+        out = self._grep({"pattern": "protoc", "include": "*.md"})
+        self.assertIn("extra.zip!README.md:2:", out)
+        self.assertNotIn("configure", out)
+        out = self._grep({"pattern": "protoc", "include": "foo-1.0/src/*"})
+        self.assertIn("foo-1.0.tar.gz!foo-1.0/src/main.c:3:", out)
+        self.assertNotIn("README.md", out)
+
+    def test_binary_members_are_skipped(self):
+        out = self._grep({"pattern": "needle"})
+        self.assertNotIn("foo-1.0/blob", out)
+        self.assertNotIn("bin/tool", out)
+
+    def test_oversized_members_are_skipped(self):
+        big = os.path.join(self.ws, "big.tar.gz")
+        _add_tar(big, [("pkg/small.txt", b"a protoc line\n"),
+                       ("pkg/huge.txt", b"protoc " + b"x" * 4096)])
+        with patch('pbuild_ai.tools._GREP_MEMBER_MAX_SIZE', 128):
+            out = self._grep({"pattern": "protoc", "path": "big.tar.gz"})
+        self.assertIn("big.tar.gz!pkg/small.txt:1:", out)
+        self.assertNotIn("huge.txt", out)
+
+    def test_oversized_archive_is_skipped(self):
+        with patch('pbuild_ai.tools._GREP_ARCHIVE_MAX_SIZE', 16):
+            out = self._grep({"pattern": "find protoc here"})
+        self.assertTrue(out.startswith("No matches"))
+
+    def test_corrupt_archive_does_not_break_search(self):
+        (Path(self.ws) / "junk.tar.gz").write_bytes(b"\x1f\x8b\x08not-an-archive")
+        out = self._grep({"pattern": "find protoc here"})
+        self.assertIn("foo-1.0.tar.gz!foo-1.0/configure:2:", out)
+
+    def test_hit_label_can_be_read_back(self):
+        """The 'archive!member' label must be usable with read_file_from_archive."""
+        out = self._grep({"pattern": "find protoc here"})
+        label = next(l for l in out.splitlines() if "configure" in l).split(":")[0]
+        archive_path, member = label.split("!", 1)
+        content = execute_tool_calls(
+            [("read_file_from_archive", {"archive_path": archive_path, "file_path": member})],
+            MagicMock(), self.ws)[0]
+        self.assertIn("find protoc here", content)
+
+    def test_symlinked_archive_outside_workspace_is_not_read(self):
+        outside = tempfile.mkdtemp(prefix="pai_grep_arc_out_")
+        secret = os.path.join(outside, "secret.tar.gz")
+        _add_tar(secret, [("s/keys", b"password: topsecret-value\n")])
+        (Path(self.ws) / "link.tar.gz").symlink_to(secret)
+        out = self._grep({"pattern": "topsecret-value"})
+        self.assertTrue(out.startswith("No matches"))
 
 
 if __name__ == "__main__":
