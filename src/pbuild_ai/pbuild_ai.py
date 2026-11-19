@@ -514,6 +514,19 @@ def _is_prerelease(v) -> bool:
     return bool(_PRERELEASE_RE.search(str(v)))
 
 
+def _is_downgrade(candidate: str, current_version: str | None) -> bool:
+    """True when *candidate* is strictly older than the spec's current version.
+
+    Registry APIs (crates.io, PyPI, npm) can lag behind the release the spec
+    tracks, or resolve to a same-named project from a different ecosystem —
+    a version found automatically must never turn the update into a downgrade.
+    Plain equality is the "already at latest" case handled by the callers.
+    """
+    if not candidate or not current_version:
+        return False
+    return _parse_version(candidate) < _parse_version(current_version)
+
+
 def _version_satisfies(version: str, op: str | None, constraint_ver: str | None) -> bool:
     """Check if version satisfies operator + constraint_version. No constraint = satisfied."""
     if not op or not constraint_ver:
@@ -3293,6 +3306,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             _source_url = _svc_forge[0]
                     _prefetched_data = {}
                     _skip_spec = False
+                    # Set when a version API positively reports a release
+                    # older than the packaged one (stale or wrong project).
+                    _stale_api = False
 
                     def _extract_by_key(_d, _k):
                         if isinstance(_k, str):
@@ -3329,6 +3345,11 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                 if _is_prerelease(_latest):
                                     print(f"[UPDATE] Version API returned prerelease {_latest} ({_v_url}) — skipping.")
                                     _latest = None
+                                if _is_downgrade(_latest, _current_version):
+                                    print(f"[UPDATE] Version API returned {_latest} ({_v_url}) — older than current "
+                                          f"{_current_version}, never downgrade.")
+                                    _stale_api = True
+                                    _latest = None
                             if _latest:
                                 print(f"[UPDATE] Found latest version {_latest} via API for {spec.name}.")
                                 target_version = _latest
@@ -3363,6 +3384,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     if _latest and _current_version and _latest == _current_version:
                                         print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
                                         continue
+                                    elif _latest and _is_downgrade(_latest, _current_version):
+                                        print(f"[UPDATE] GitHub releases top out at {_latest}, older than current "
+                                              f"{_current_version} — never downgrade.")
+                                        _stale_api = True
                                     elif _latest:
                                         print(f"[UPDATE] Found latest version {_latest} via GitHub API for {spec.name}.")
                                         target_version = _latest
@@ -3391,6 +3416,10 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                     if _latest and _current_version and _latest == _current_version:
                                         print(f"[UPDATE] {spec.name} already at latest version {_current_version}. Skipping.")
                                         continue
+                                    elif _latest and _is_downgrade(_latest, _current_version):
+                                        print(f"[UPDATE] GitLab releases top out at {_latest}, older than current "
+                                              f"{_current_version} — never downgrade.")
+                                        _stale_api = True
                                     elif _latest:
                                         print(f"[UPDATE] Found latest version {_latest} via GitLab API for {spec.name}.")
                                         target_version = _latest
@@ -3408,6 +3437,15 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                     # NOTE: do NOT fold release notes into prefetched_context — the
                     # task prompts render {release_notes} separately. Appending them
                     # here duplicates the notes in the user turn.
+
+                    if not target_version and _stale_api and _current_version:
+                        # A registry entry older than the packaged version means it
+                        # lags upstream or names a different project — there is no
+                        # upgrade to be had from these APIs, so do not let AI
+                        # research turn the stale number into a downgrade.
+                        print(f"[UPDATE] {spec.name} is at {_current_version}; the version APIs know only older "
+                              f"releases. Nothing to update.")
+                        continue
 
                 if not target_version:
                     skill_manager.note_skill_used("changelog")
@@ -3464,6 +3502,9 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                                         print(f"[UPDATE] AI research confirms {spec.name} already at latest version {_current_version}. Skipping.")
                                         _skip_spec = True
                                         break
+                                    if _is_downgrade(_v, _current_version):
+                                        print(f"[UPDATE] AI research returned {_v}, older than current {_current_version} — never downgrade.")
+                                        continue
                                     target_version = _v
                                     # The JSON the AI fetched is the very
                                     # GitHub/GitLab data the changelog needs;
@@ -3488,8 +3529,12 @@ Apply this exact fix. Your output must be ONLY the complete raw spec file conten
                             _spec_new_version = m.group(1)
                             break
                     if _current_version and _spec_new_version and _spec_new_version != _current_version:
-                        target_version = _spec_new_version
-                        print(f"[UPDATE] Updated to version {target_version}")
+                        if _is_downgrade(_spec_new_version, _current_version):
+                            print(f"[UPDATE] Research rewrote the version to {_spec_new_version}, older than the "
+                                  f"packaged {_current_version} — not an upgrade, REVIEW REQUIRED.")
+                        else:
+                            target_version = _spec_new_version
+                            print(f"[UPDATE] Updated to version {target_version}")
                     if not target_version:
                         print("[UPDATE] Could not determine latest version.")
                         target_version = 'latest'
